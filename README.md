@@ -13,9 +13,9 @@ This whitepaper is structured to be read sequentially. Each section assumes the 
 | 0 | [Abstract](./00-abstract.md) | Draft |
 | 1 | [Introduction & Motivation](./01-introduction.md) | Draft |
 | 2 | [Design Principles](./02-design-principles.md) | Draft |
-| 3 | Cryptographic Foundation | Pending |
-| 4 | Identity & Accounts | Pending |
-| 5 | Object Model & State | Pending |
+| 3 | [Cryptographic Foundation](./03-cryptographic-foundation.md) | Draft |
+| 4 | [Identity & Accounts](./04-identity-accounts.md) | Draft |
+| 5 | [Object Model & State](./05-object-model-state.md) | Draft |
 | 6 | Execution & Virtual Machine | Pending |
 | 7 | Privacy Layer | Pending |
 | 8 | Consensus | Pending |
