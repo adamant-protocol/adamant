@@ -16,7 +16,7 @@ This whitepaper is structured to be read sequentially. Each section assumes the 
 | 3 | [Cryptographic Foundation](./03-cryptographic-foundation.md) | Draft |
 | 4 | [Identity & Accounts](./04-identity-accounts.md) | Draft |
 | 5 | [Object Model & State](./05-object-model-state.md) | Draft |
-| 6 | Execution & Virtual Machine | Pending |
+| 6 | [Execution & Virtual Machine](./06-execution-vm.md) | Draft |
 | 7 | Privacy Layer | Pending |
 | 8 | Consensus | Pending |
 | 9 | Networking & Mempool | Pending |
