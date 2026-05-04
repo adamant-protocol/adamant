@@ -13,6 +13,7 @@ sha3 = { workspace = true }
 blake3 = { workspace = true }
 ed25519-dalek = { workspace = true }
 ml-dsa = { workspace = true }
+blst = { workspace = true }
 rand_core = { workspace = true }
 subtle = { workspace = true }
 zeroize = { workspace = true }

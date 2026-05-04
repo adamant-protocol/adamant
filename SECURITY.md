@@ -51,7 +51,7 @@ justification, and the audit / deployment signal Adamant relies on.
 | `ctutils` (transitive via `ml-dsa`) | `0.4.2` (transitive pin held by `Cargo.lock`) | None observed in default configuration; the crate's focus is constant-time semantics, not performance via `unsafe`. | Constant-time primitives (`CtEq`, `Choice`) used by `ml-dsa` for secret-material comparisons. Plays the role for ML-DSA that `subtle` plays for the dalek tree; tracked separately because they are distinct crates with distinct audit histories. | RustCrypto project; widely used by the post-0.10-generation crates; the timing-safety property is the core audit signal. |
 | `module-lattice` (transitive via `ml-dsa`) | `0.2.2` (transitive pin held by `Cargo.lock`) | May use `unsafe` for performance-critical polynomial / NTT operations on supported targets. | Module-lattice algebra (Module-LWE, Module-SIS) underlying ML-DSA; the actual lattice cryptographic primitive. Tracked separately from `ml-dsa` because `ml-dsa` is the FIPS-204 spec adapter and `module-lattice` is the underlying algebra. | RustCrypto project; pre-1.0; same audit signal as `ml-dsa`. |
 | `hybrid-array` (transitive via `ml-dsa` and `module-lattice`) | `0.4.11` (transitive pin held by `Cargo.lock`) | `unsafe` for typed-length array handling — analogous to `arrayvec` for the dalek tree but used by the post-0.10-generation crates. | Provides const-generic typed arrays used pervasively inside ML-DSA's polynomial vectors and signature/key encodings. Bounded `unsafe` documented inline in the crate. | RustCrypto project; the typed-array crate that replaced `generic-array` in the post-0.10 generation; routine community review. |
-| `blst` (Supranational) | pending first-use | Required: Rust binding over the C-language `blst` library. | `blst` is the canonical high-performance BLS12-381 implementation; no pure-Rust equivalent matches its performance or audit posture. | Audited (NCC Group 2020 and subsequent); deployed in Ethereum, Filecoin, Chia. |
+| `blst` (Supranational) | `=0.3.16` (first imported by `adamant-crypto::bls` per whitepaper 3.4.3) | Required: Rust binding over the C-language `blst` library, plus inline `unsafe` for FFI. blst's own internal `unsafe` covers the BLS12-381 field arithmetic, pairing, and hash-to-curve implementations — these are why we use blst in the first place (whitepaper 3.4.3 calls it "the highest-performance audited BLS12-381 implementation in current use"). The `unsafe` is canonical "audited cryptographic library" surface per the policy in this file. | Used for BLS12-381 G1-signature / G2-public-key signatures (whitepaper 3.4.3) and aggregate verification. blst is **not** part of the RustCrypto ecosystem — different lineage, different versioning, no participation in the 0.10 / post-0.10 skew documented above. **Test-vector coverage note:** the widely-circulated BLS KAT suites (Ethereum bls12-381-tests, IRTF draft examples) target the min_pk variant; Adamant uses min_sig per whitepaper 3.4.3, so those KATs are not directly applicable. Coverage rationale recorded in `crates/adamant-crypto/test-vectors/bls/README.md`; verification rests on blst's own upstream KAT testing (which exercises both variants via shared primitives) plus the wrapper's inline self-consistency tests. | Audited (NCC Group 2020 and subsequent); deployed in Ethereum consensus, Filecoin, Chia, and other BLS-using systems. Maintained by Supranational. |
 | `chacha20poly1305` (RustCrypto) | pending first-use | None in pure-Rust mode; SIMD backends use `unsafe`. | AEAD throughput affects transport encryption and mempool envelope cost. | Widely deployed; constant-time by construction. |
 | `halo2_gadgets` (zcash) | pending first-use | May use `unsafe` for elliptic-curve and field arithmetic. | Halo 2 throughput depends on optimised EC and field operations. | Deployed in Zcash Orchard pool; primary audit signal. Full Halo 2 surface decision deferred to Phase 6. |
 | `zeroize` | `=1.8.2` (first imported by `adamant-crypto::sig_classical` for `SigningKey` zero-on-drop) | Uses compiler-fence intrinsics; explicitly documents and bounds `unsafe`. | Required for sound secret-material erasure under modern compiler optimisations. The `SigningKey` wrapper manually impls `Zeroize` and `ZeroizeOnDrop` because dalek 2.2 exposes `ZeroizeOnDrop` only (the inner type lacks a `Default` for `Zeroize`); see `sig_classical.rs` for the rationale. | Maintained by the RustCrypto project; widely deployed. |
@@ -114,6 +114,76 @@ ecosystem appears, whichever happens first. The `clippy.toml`
 rationale block carries the same trigger condition. Revisiting is a
 minor diff: drop the ten allowlist entries, run `cargo update`, and
 verify clippy stays clean.
+
+## BLS test-vector coverage
+
+The BLS12-381 wrapper has a coverage shape distinct from every other
+primitive in this workspace, and the difference is large enough to
+deserve a top-level explanation rather than only a row-level
+footnote. (Same pattern as "RustCrypto ecosystem skew" above:
+coverage and trust properties that differ from the rest of the
+codebase get clearly-labelled subsections an auditor can find on
+first read.)
+
+**What's happening.** BLS12-381 has two well-known signature
+variants. **min_pk** (G1 public key 48 B, G2 signature 96 B) is what
+Ethereum consensus, Filecoin, Chia, and the IRTF
+`draft-irtf-cfrg-bls-signature` examples use; every widely-circulated
+BLS KAT suite — `ethereum/bls12-381-tests`, the IRTF draft examples,
+Filecoin and Chia's repositories — targets it. **min_sig** (G2
+public key 96 B, G1 signature 48 B) is what the whitepaper §3.4.3
+selects for Adamant. The variants are not byte-compatible: a 48-byte
+hex string labelled "pubkey" in an Eth2 vector encodes a G1 point,
+which for us is a Signature, not a PublicKey. Cross-applying the
+external KATs with relabelling would not exercise our wrapper's
+actual sign/verify codepaths because the message + DST framing
+differs between variants.
+
+**Why we accepted it.** The variant choice is architectural. Per
+whitepaper §3.4.3, "Signatures are smaller (48 bytes), which matters
+at consensus scale; public keys are larger but registered once per
+validator." Signatures are exchanged on every consensus vote;
+public keys are written once at validator registration. min_sig
+optimises the bandwidth-critical artifact. Switching to min_pk for
+testability would invert a deliberate spec choice for the sake of
+KAT availability.
+
+**What we rely on instead.** Three layers, in order of independence:
+
+1. **Upstream `blst` is itself tested against IRTF and Ethereum
+   vectors at the algorithm level.** blst implements both variants
+   via shared primitives — the same group ops, pairing, and
+   hash-to-curve back min_pk and min_sig. blst's IRTF/Eth2 KAT
+   suite (which exercises min_pk directly) therefore validates the
+   maths that backs our min_sig path. blst's audit history is
+   recorded in the row above; the upstream tests are part of that
+   audit signal.
+2. **22 inline self-consistency tests** in `bls.rs::tests` covering
+   the API surface and the four aggregation cases whitepaper §3.4.3
+   names (same-message aggregate, multi-message aggregate-verify,
+   tampering of one signature in an aggregate, tampering of the
+   aggregate signature bytes after the fact).
+3. **DST sourcing is asserted at compile time** (the DST is taken
+   from the centralised `crate::domain` registry, never inlined)
+   and **verified at test time** against the byte string in
+   whitepaper §3.4.3 verbatim.
+
+**Operational implication.** An auditor reviewing the BLS wrapper
+should look at **blst's upstream test suite** for primitive-level
+coverage, not at external min_pk KAT suites. The
+`crates/adamant-crypto/test-vectors/bls/` directory is intentionally
+sparse — it contains a README explaining why, not committed KAT
+files. This differs from `test-vectors/sha3/`, `test-vectors/ed25519/`,
+and `test-vectors/ml-dsa/`, which all carry NIST or RFC vectors
+verifying our wrappers directly.
+
+**Revisit signal.** When a min_sig BLS KAT suite appears upstream
+— Filecoin and Chia occasionally ship variant-specific tests, and
+the IRTF draft may grow them — drop it into
+`crates/adamant-crypto/test-vectors/bls/` and update this subsection
+to point at the new coverage. Re-evaluate before mainnet regardless;
+absence of variant-specific KATs at mainnet would be a known
+limitation worth flagging in audit prep.
 
 ## Update process
 

@@ -85,7 +85,11 @@ ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["zer
 ml-dsa = { version = "=0.1.0-rc.9", default-features = false, features = ["rand_core", "alloc", "zeroize"] }
 
 # BLS12-381 signatures, pairing, and threshold encryption (whitepaper 3.4.3, 3.6).
-blst = "0.3"
+# blst: pinned to exact patch version. Default features (none) are
+# what we want — blst's inline assembly for BLS12-381 is unconditional,
+# not feature-gated. `portable` would disable native-CPU optimisations;
+# we revisit before mainnet only if cross-compilation issues surface.
+blst = "=0.3.16"
 
 # Symmetric AEAD (whitepaper 3.5)
 chacha20poly1305 = { version = "0.10", default-features = false }
