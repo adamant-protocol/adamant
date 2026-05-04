@@ -12,6 +12,7 @@ publish.workspace = true
 sha3 = { workspace = true }
 blake3 = { workspace = true }
 ed25519-dalek = { workspace = true }
+ml-dsa = { workspace = true }
 rand_core = { workspace = true }
 subtle = { workspace = true }
 zeroize = { workspace = true }
@@ -23,6 +24,12 @@ proptest = { workspace = true }
 # `getrandom` enables `rand_core::OsRng` for the Ed25519 generate-test.
 # Production code passes its own CSPRNG; this feature is dev-only.
 rand_core = { workspace = true, features = ["getrandom"] }
+# getrandom 0.4 supplies `SysRng` and re-exports `rand_core` (matching
+# the rand_core 0.10 ecosystem that ml-dsa depends on); used by the
+# ML-DSA generate-test. Distinct from the `rand_core` 0.6 entry above;
+# the two coexist because the RustCrypto ecosystem mid-migrates between
+# trait-version generations (see SECURITY.md "RustCrypto ecosystem skew").
+getrandom = { version = "0.4", features = ["std", "sys_rng"] }
 
 [lints]
 workspace = true

@@ -4,21 +4,78 @@
 # does not express live here. Currently this file sets exactly one
 # entry: an allowlist for `clippy::multiple_crate_versions`.
 #
-# The allowlist is not a free pass — every entry must have documented
-# rationale (below) and remain narrow. The lint stays watching for
-# every other crate.
+# The allowlist is not a free pass — every entry has documented
+# rationale below, with an explicit revisit signal. The lint stays
+# watching for every other crate.
 #
-# === Allowlist rationale ===
+# === Allowlist rationale: cpufeatures ===
 #
-# - cpufeatures: a runtime CPU-feature-detection helper, not a
-#   cryptographic primitive. Both 0.2.x and 0.3.x detect features via
-#   the same CPUID-based mechanism; the 0.2 → 0.3 break is API-shape
-#   only, not runtime-semantics. The duplicate is forced by upstream
-#   constraint mismatch: `sha3 =0.10.9` pulls `keccak 0.1.6`, which
-#   constrains `cpufeatures = "^0.2"`; `blake3 =1.8.5` uses
-#   `cpufeatures = "^0.3"`. Resolves automatically once sha3 or keccak
-#   widens its constraint; otherwise revisitable via `[patch]` before
-#   mainnet. Tracked in CONTRIBUTING.md "Verifications on record".
+# `cpufeatures` is a runtime CPU-feature-detection helper, not a
+# cryptographic primitive. Both 0.2.x and 0.3.x detect features via
+# the same CPUID-based mechanism; the 0.2 → 0.3 break is API-shape
+# only, not runtime-semantics. The duplicate is forced by upstream
+# constraint mismatch: `sha3 =0.10.9` pulls `keccak 0.1.6`, which
+# constrains `cpufeatures = "^0.2"`; `blake3 =1.8.5` uses
+# `cpufeatures = "^0.3"`.
+#
+# **Revisit signal:** remove the `cpufeatures` entry when `sha3`'s
+# transitive `keccak` widens its `cpufeatures` constraint to admit
+# `^0.3` (or when bumping `sha3` brings in a `keccak` that does).
+# Tracked in CONTRIBUTING.md "Verifications on record".
+#
+# === Allowlist rationale: RustCrypto ecosystem skew ===
+#
+# The ten entries below all share a single root cause. The RustCrypto
+# project is mid-migration between trait-version generations: most of
+# its crates exist in two parallel lines, the older "0.10" line (e.g.,
+# `digest 0.10`, `signature 2.2`, `sha3 0.10`) and the newer
+# "post-0.10" line (`digest 0.11`, `signature 3.0`, `sha3 0.11`,
+# etc.). Adamant needs both `ed25519-dalek =2.2.0` (still on the older
+# line as of crates.io snapshot) and `ml-dsa =0.1.0-rc.9` (on the
+# newer line, FIPS 204 final), so both lines link into the runtime.
+#
+# Operational implications:
+#   - Two SHA3 / Keccak implementations (`sha3 =0.10.9` + `keccak
+#     0.1.6` for the Ed25519 path; `sha3 0.11.0` + `keccak 0.2.0` for
+#     the ML-DSA path) link into the same binary. They produce
+#     algorithmically identical outputs (both implement FIPS 202),
+#     but the audit surface is doubled.
+#   - Two `digest`, `signature`, and supporting trait crates live in
+#     parallel. Each path uses its own; they do not interact.
+#   - Larger binary size and longer compile times. Functional
+#     correctness is unaffected.
+#
+# Entries:
+#   block-buffer  : 0.10.4 (sha3 0.10 path) vs 0.12.0 (ml-dsa path)
+#   const-oid     : 0.9.6  vs 0.10.2 (PKCS#8 / DER infrastructure)
+#   crypto-common : 0.1.7  vs 0.2.1
+#   der           : 0.7.10 vs 0.8.0
+#   digest        : 0.10.7 vs 0.11.3
+#   keccak        : 0.1.6  vs 0.2.0
+#   pkcs8         : 0.10.2 vs 0.11.0
+#   sha3          : 0.10.9 vs 0.11.0
+#   signature     : 2.2.0  vs 3.0.0
+#   spki          : 0.7.3  vs 0.8.0
+#
+# **Revisit signal (single, applies to all ten):** remove these
+# entries when `ed25519-dalek` upgrades to the post-0.10 RustCrypto
+# ecosystem (specifically: when it depends on `signature` 3.x,
+# `digest` 0.11.x, etc.) OR when an alternative ML-DSA crate
+# targeting the 0.10 ecosystem appears, whichever happens first.
+# Tracked in CONTRIBUTING.md "Verifications on record" and in
+# SECURITY.md "RustCrypto ecosystem skew".
+
 allowed-duplicate-crates = [
     "cpufeatures",
+    # RustCrypto 0.10 / post-0.10 generation skew (see rationale above):
+    "block-buffer",
+    "const-oid",
+    "crypto-common",
+    "der",
+    "digest",
+    "keccak",
+    "pkcs8",
+    "sha3",
+    "signature",
+    "spki",
 ]

@@ -47,7 +47,10 @@ justification, and the audit / deployment signal Adamant relies on.
 | `fiat-crypto` (transitive via `curve25519-dalek`) | `0.2.9` (transitive pin held by `Cargo.lock`) | Primarily safe; some `unsafe` for SIMD/intrinsic field operations on supported targets. | Field arithmetic over the `curve25519` base field, **formally verified** by extraction from Coq proofs. The unique audit signal is mathematical correctness from machine-checked proofs rather than human review. | Generated from formally verified Coq specifications; algorithmic correctness is a theorem, not a test result. Maintained as part of the broader fiat-crypto verified-cryptography project. |
 | `sha2` (RustCrypto, transitive via `ed25519-dalek`) | `0.10.9` (transitive pin held by `Cargo.lock`) | None in pure-Rust default mode; SIMD backends (SHA-NI on x86, ARMv8 SHA crypto extensions) use `unsafe`. | Implements SHA-512, which Ed25519 uses **internally** per RFC 8032. Tracked separately from `sha3` because (a) it's a different primitive and (b) the protocol's own hashing uses SHA3-256 — SHA-512 is here only because the Ed25519 specification demands it (whitepaper 3.4.1). | RustCrypto project; the SHA-512 algorithm itself is FIPS 180-4 standardised; routine community review. |
 | `subtle` (dalek-cryptography, transitive via `ed25519-dalek` and used directly) | `=2.6.1` (now pinned in workspace deps) | Uses `core::hint::black_box` and volatile semantics to defeat compiler timing-leak optimisations. Bounded `unsafe` documented inline in the crate. | Provides constant-time primitives (`Choice`, `ConstantTimeEq`, `ConditionallySelectable`) used by every dalek operation and by our wrapper for `SigningKey::ct_eq`. The whole point of the crate is timing-safety; treated as a cryptographic primitive on its own. | Maintained by the dalek-cryptography project; widely deployed across Rust crypto crates. |
-| `ml-dsa` (RustCrypto) | pending first-use | May use `unsafe` for performance-critical polynomial / NTT operations. | ML-DSA polynomial arithmetic benefits from constant-time SIMD where the platform supports it. | RustCrypto project; cryptanalysis on ML-DSA itself (FIPS 204) is extensive; implementation audit ongoing. |
+| `ml-dsa` (RustCrypto) | `=0.1.0-rc.9` (first imported by `adamant-crypto::sig_pq` per whitepaper 3.4.2) | None in dalek-style direct usage; transitive surface is documented under the per-transitive rows below (`ctutils`, `module-lattice`, `hybrid-array`) and under "RustCrypto ecosystem skew" for the dual-version situation with `sha3` / `keccak`. | FIPS 204 final-compliant ML-DSA implementation (algorithm choice fixed in whitepaper 3.4.2). Provides deterministic signing for ML-DSA-65 and the `SigningKey` / `VerifyingKey` / `Signature` types we wrap. | RustCrypto project; cryptanalysis on ML-DSA itself (FIPS 204) is extensive; this crate is pre-1.0 (release-candidate) — implementation audit is ongoing upstream. **Test-vector coverage note:** ML-DSA-65 has 5 NIST ACVP keyGen vectors + 1 ACVP sigVer vector verifying the production API; expanded sigVer coverage would require either an API extension to take a context parameter (deferred until a use case lands) or further ACVP vectors that fit the empty-context deterministic case (none currently available — the upstream `internalProjection.json` for sigGen contains exactly one such case for ML-DSA-65). |
+| `ctutils` (transitive via `ml-dsa`) | `0.4.2` (transitive pin held by `Cargo.lock`) | None observed in default configuration; the crate's focus is constant-time semantics, not performance via `unsafe`. | Constant-time primitives (`CtEq`, `Choice`) used by `ml-dsa` for secret-material comparisons. Plays the role for ML-DSA that `subtle` plays for the dalek tree; tracked separately because they are distinct crates with distinct audit histories. | RustCrypto project; widely used by the post-0.10-generation crates; the timing-safety property is the core audit signal. |
+| `module-lattice` (transitive via `ml-dsa`) | `0.2.2` (transitive pin held by `Cargo.lock`) | May use `unsafe` for performance-critical polynomial / NTT operations on supported targets. | Module-lattice algebra (Module-LWE, Module-SIS) underlying ML-DSA; the actual lattice cryptographic primitive. Tracked separately from `ml-dsa` because `ml-dsa` is the FIPS-204 spec adapter and `module-lattice` is the underlying algebra. | RustCrypto project; pre-1.0; same audit signal as `ml-dsa`. |
+| `hybrid-array` (transitive via `ml-dsa` and `module-lattice`) | `0.4.11` (transitive pin held by `Cargo.lock`) | `unsafe` for typed-length array handling — analogous to `arrayvec` for the dalek tree but used by the post-0.10-generation crates. | Provides const-generic typed arrays used pervasively inside ML-DSA's polynomial vectors and signature/key encodings. Bounded `unsafe` documented inline in the crate. | RustCrypto project; the typed-array crate that replaced `generic-array` in the post-0.10 generation; routine community review. |
 | `blst` (Supranational) | pending first-use | Required: Rust binding over the C-language `blst` library. | `blst` is the canonical high-performance BLS12-381 implementation; no pure-Rust equivalent matches its performance or audit posture. | Audited (NCC Group 2020 and subsequent); deployed in Ethereum, Filecoin, Chia. |
 | `chacha20poly1305` (RustCrypto) | pending first-use | None in pure-Rust mode; SIMD backends use `unsafe`. | AEAD throughput affects transport encryption and mempool envelope cost. | Widely deployed; constant-time by construction. |
 | `halo2_gadgets` (zcash) | pending first-use | May use `unsafe` for elliptic-curve and field arithmetic. | Halo 2 throughput depends on optimised EC and field operations. | Deployed in Zcash Orchard pool; primary audit signal. Full Halo 2 surface decision deferred to Phase 6. |
@@ -57,6 +60,60 @@ justification, and the audit / deployment signal Adamant relies on.
 `pending first-use` means the dependency is declared in
 `[workspace.dependencies]` but not yet imported by any module; the version
 pin is finalised in the commit that imports it.
+
+## RustCrypto ecosystem skew
+
+The Adamant cryptographic dependency tree currently spans two
+generations of the RustCrypto ecosystem. Most RustCrypto crates exist
+in two parallel lines: the older "0.10 generation" (`digest 0.10`,
+`signature 2.x`, `sha3 0.10`, `keccak 0.1`, etc.) and the newer
+"post-0.10 generation" (`digest 0.11`, `signature 3.0`, `sha3 0.11`,
+`keccak 0.2`, etc.). The break between the two generations is at the
+trait level — every crate that depends on `digest` had to choose one
+side.
+
+Adamant needs both:
+
+- `ed25519-dalek =2.2.0` (current crates.io release) — depends on the
+  0.10-generation traits.
+- `ml-dsa =0.1.0-rc.9` (the FIPS-204-compliant ML-DSA implementation
+  per whitepaper 3.4.2) — depends on the post-0.10 generation.
+
+Both link into the runtime, so both generations of the trait crates
+and many of their downstream impls live in the binary side by side.
+The version pairs allowlisted in `clippy.toml` against
+`clippy::multiple_crate_versions` with the shared rationale below
+are: `block-buffer`, `const-oid`, `crypto-common`, `der`, `digest`,
+`keccak`, `pkcs8`, `sha3`, `signature`, `spki`.
+
+**Operational implications.** Two SHA3 / Keccak implementations link
+into the same binary (`sha3 =0.10.9` + `keccak 0.1.6` for the Ed25519
+path; `sha3 0.11.0` + `keccak 0.2.0` for the ML-DSA path). They
+produce algorithmically identical outputs — both implement FIPS 202
+correctly — but the audit surface is doubled: a hypothetical bug in
+one version would not be caught by an audit of the other. Larger
+binary size and longer compile times are the further consequences.
+There is no functional difference between the two paths from a
+correctness standpoint.
+
+**Why we accepted this.** Phase 1 ships Ed25519 and ML-DSA as
+first-class signature schemes (whitepaper 3.4). The alternatives
+were (a) a non-RustCrypto Ed25519 implementation (sacrificing
+the dalek audit posture and constant-time discipline), or (b) a
+pre-FIPS-204 ML-DSA crate (sacrificing FIPS 204 compliance and the
+post-quantum-from-genesis commitment in whitepaper 3.4.2). Neither
+is acceptable. The skew is the cost of being early adopters of
+post-quantum signatures while the underlying ecosystem mid-migrates.
+
+**Revisit signal (single, applies to all ten allowlisted version
+pairs).** Remove the relevant `clippy.toml` allowlist entries when
+`ed25519-dalek` upgrades to the post-0.10 RustCrypto ecosystem
+(specifically: when it depends on `signature` 3.x, `digest` 0.11.x,
+etc.) OR when an alternative ML-DSA crate targeting the 0.10
+ecosystem appears, whichever happens first. The `clippy.toml`
+rationale block carries the same trigger condition. Revisiting is a
+minor diff: drop the ten allowlist entries, run `cargo update`, and
+verify clippy stays clean.
 
 ## Update process
 

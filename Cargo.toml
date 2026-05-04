@@ -75,9 +75,14 @@ halo2_gadgets = { version = "0.3", default-features = false }
 # skipped here; we revisit performance flags before mainnet.
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["zeroize", "rand_core", "std"] }
 
-# Post-quantum signatures (whitepaper 3.4.2). Pre-1.0; pin tightly and
-# revisit before each upgrade.
-ml-dsa = "0.0.4"
+# Post-quantum signatures (whitepaper 3.4.2). Pre-1.0; pin to the exact
+# release-candidate version and revisit before each upgrade.
+# Features:
+#  - "rand_core" (default) — gates `MlDsa65::key_gen(rng)`.
+#  - "alloc"     (default) — required by the crate's encode/decode paths.
+#  - "zeroize"   (opt-in)  — derives ZeroizeOnDrop on signing keys.
+# `pkcs8` is intentionally skipped — we serialise via raw bytes, not PKCS#8.
+ml-dsa = { version = "=0.1.0-rc.9", default-features = false, features = ["rand_core", "alloc", "zeroize"] }
 
 # BLS12-381 signatures, pairing, and threshold encryption (whitepaper 3.4.3, 3.6).
 blst = "0.3"

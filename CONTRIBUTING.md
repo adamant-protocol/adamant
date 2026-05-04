@@ -116,6 +116,36 @@ The same pattern applies to every randomness-consuming primitive in
 the workspace — Ed25519 today, ML-DSA next, BLS later. Lock the rule
 down once; do not re-derive it per primitive.
 
+### Spec-first verification
+
+When implementation surfaces a question that contradicts or appears
+to contradict the whitepaper, stop and verify against authoritative
+sources before proceeding. Two confirmed instances during Phase 1:
+
+- **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
+  original "fixed-length domain tag" text admitted prefix collisions
+  with variable-length tags; resolved by spec revision pinning the
+  BIP-340 construction (commit 62bfe89).
+- **ML-DSA-65 signature size** (whitepaper 3.4.2) — the original
+  3293-byte figure was the CRYSTALS-Dilithium round 3 number,
+  superseded by the FIPS 204 final 3309-byte figure; resolved by
+  spec revision (commit 30bf5ac).
+
+The pattern is: the cost of pausing to verify is hours; the cost of
+shipping wrong constants compounds after genesis, when the protocol
+cannot be patched. Implementers who hit a question against the
+whitepaper should stop, document the question, and surface it for
+spec review before continuing.
+
+### Whitepaper commits are Ryan's
+
+Whitepaper revisions are committed exclusively by Ryan. Claude Code
+never commits whitepaper changes, including when the on-disk diff
+matches a spec change Ryan has approved in conversation. The audit
+trail for constitutional changes is shorter when Ryan's hand is on
+every commit, and the marginal cost of one round-trip is acceptable
+to preserve that property.
+
 ## Pre-publication checks
 
 Audits to run before publishing any crate from this workspace.
