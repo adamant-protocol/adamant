@@ -54,7 +54,39 @@ The protocol's primary hash function is SHA3-256 for fixed-output hashing and SH
 
 **Parameters.** SHA3-256 produces 256-bit output, providing 128-bit collision resistance and 256-bit preimage resistance. SHAKE-256 produces output of arbitrary length with the same security level.
 
-**Domain separation.** All uses of SHA3-256 within the protocol `MUST` use domain separation. The protocol prepends a fixed-length domain tag to every hash input. Domain tags are specified per-use throughout this document. This prevents an attacker from constructing a value that hashes identically in two different contexts. Domain tags use the format `b"ADAMANT-v1-<context>"` where `<context>` identifies the specific use.
+**Domain separation.** All uses of SHA3-256 and SHAKE-256 within the protocol `MUST` use domain separation. The protocol uses the **BIP-340 tagged-hash construction** (Bitcoin Improvement Proposal 340, deployed in Bitcoin Taproot, November 2021), adapted to SHA3:
+
+```
+tagged_hash_sha3(tag, input)   = SHA3-256( SHA3-256(tag) || SHA3-256(tag) || input )
+tagged_shake(tag, input, len)  = SHAKE-256( SHA3-256(tag) || SHA3-256(tag) || input, len )
+```
+
+where `tag` is a domain identifier of the form `b"ADAMANT-v1-<context>"` and `input` is the data being hashed. The tag prefix is **always** `SHA3-256(tag)`, regardless of whether the body uses SHA3-256 or SHAKE-256. This uniformity means each registered tag has exactly one canonical 32-byte prefix, computed once and cached, usable across both hash variants.
+
+Naive concatenation (`tag || input`) is insufficient because it admits prefix collisions: with variable-length tags, a tag like `ADAMANT-v1-block` followed by input `_hash` || X produces the same byte string as tag `ADAMANT-v1-block_hash` followed by input X, causing the hash function to produce identical outputs for what should be domain-separated operations. The BIP-340 construction eliminates this by binding the tag through a fixed-size hash commitment.
+
+The construction has the following properties:
+
+- **Collision-resistant across tags.** Finding two distinct tags `t1 ≠ t2` and inputs `i1`, `i2` such that `tagged_hash_sha3(t1, i1) == tagged_hash_sha3(t2, i2)` requires finding a SHA3-256 collision. The protocol's domain separation inherits the security of SHA3-256 directly.
+- **Length-agnostic for tags.** Tags may be any byte string; no length cap is imposed and no length field is encoded.
+- **Production-validated.** The doubled-tag-prefix construction has been deployed at production scale in Bitcoin since 2021 and is the de facto standard for hash-based domain separation in modern cryptographic protocols.
+- **Negligible runtime cost.** The cached `SHA3-256(tag)` is computed once per registered tag and reused. Each domain-separated hash costs one additional 64-byte absorb relative to a tag-less hash — invisible at any throughput the protocol targets.
+
+All tags are specified in the centralised registry maintained by the reference implementation (`crates/adamant-crypto/src/domain.rs`). Tags have the format `b"ADAMANT-v1-<context>"` where `<context>` identifies the specific use. Adding, removing, or renaming a tag is a consensus rule change and follows the procedure in section 3.10.
+
+**Worked example:**
+
+```
+tag    = b"ADAMANT-v1-object-id"
+input  = creation_tx_hash || creator_address || creation_index
+
+prefix = SHA3-256(tag)       // 32 bytes; fixed for this tag, computed once
+
+tagged_hash_sha3(tag, input)
+  = SHA3-256( prefix || prefix || creation_tx_hash || creator_address || creation_index )
+```
+
+This construction is `MUST`-required for any SHA3-256 or SHAKE-256 use that is consensus-critical. Non-consensus-critical hashing (for example, peer-to-peer message integrity checks where collisions across contexts are not security-relevant) `MAY` use plain SHA3 or SHAKE without the tagged-hash wrapper, though the centralised registry pattern is `RECOMMENDED` even there for consistency.
 
 **Library.** The reference implementation uses the `sha3` crate from RustCrypto, which provides constant-time implementations and is widely audited.
 
