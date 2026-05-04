@@ -47,7 +47,9 @@ module_name_repetitions = "allow"
 # with its `unsafe` surface and audit signal.
 [workspace.dependencies]
 # Hashing (whitepaper 3.3)
-sha3 = { version = "0.10", default-features = false }
+# sha3 pinned to exact patch version: this dependency carries every
+# consensus-critical hash. Bumps go through SECURITY.md review.
+sha3 = { version = "=0.10.9", default-features = false }
 blake3 = { version = "1.5", default-features = false }
 # Poseidon for use inside Halo 2 circuits (whitepaper 3.3.3, 3.7.1).
 halo2_gadgets = { version = "0.3", default-features = false }

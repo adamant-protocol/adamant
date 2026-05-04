@@ -1,0 +1,60 @@
+# Adamant tagged-SHA3-256 known-answer vectors.
+#
+# Source: internally generated. Each `Output` is the result of applying
+# the BIP-340 tagged-hash construction (whitepaper section 3.3.1):
+#
+#   prefix = SHA3-256(Tag)
+#   Output = SHA3-256( prefix || prefix || Input )
+#
+# These vectors verify the composition end-to-end. The underlying
+# SHA3-256 primitive is independently verified against NIST CAVP /
+# FIPS 202 vectors in `../sha3/sha3_256_kats.txt`. Together, the two
+# files cover the chain: NIST → primitive correctness; this file →
+# composition correctness.
+#
+# The vector parser tolerates blank lines and `#` comments.
+#
+# Tested by: crates/adamant-crypto/src/hash.rs
+#            ::tests::tagged_sha3_256_internal_regression
+#
+# Regenerating: `cargo test --package adamant-crypto
+#                regenerate_internal_tagged_vectors -- --ignored --nocapture`
+# (the regenerator's source-of-truth implementation is a direct
+# `sha3`-crate computation independent of the wrappers under test).
+#
+# Format: blocks separated by blank lines
+#   Description = <human-readable label>
+#   Tag         = <tag bytes in hex>
+#   Tag-ASCII   = <tag rendered as ASCII; for human reading only,
+#                  ignored by parser>
+#   Input       = <input bytes in hex; empty value means empty input>
+#   Output      = <expected 32-byte output in hex>
+
+# Whitepaper 3.3.1 worked example. Tag and construction shape match the
+# whitepaper exactly. Input is the concatenation of:
+#   creation_tx_hash    = bytes 0x00..0x1f       (32 bytes, increasing)
+#   creator_address     = bytes 0x20..0x3f       (32 bytes, increasing)
+#   creation_index      = u64 big-endian, value 1 (8 bytes)
+Description = whitepaper 3.3.1 worked example (object-id)
+Tag = 4144414d414e542d76312d6f626a6563742d6964
+Tag-ASCII = ADAMANT-v1-object-id
+Input = 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0000000000000001
+Output = 822a4b021de0094061e11331a31dca9dbd0677b4a2b15f51cf20737339b7ca40
+
+Description = empty input with TAG_A
+Tag = 4144414d414e542d76312d746573742d7461672d61
+Tag-ASCII = ADAMANT-v1-test-tag-a
+Input =
+Output = 705a79da1a9d06c9760949d576d4125f15c09b954dc7d4f6b36858d7f2550f4c
+
+Description = "hello" with TAG_A
+Tag = 4144414d414e542d76312d746573742d7461672d61
+Tag-ASCII = ADAMANT-v1-test-tag-a
+Input = 68656c6c6f
+Output = 4a8b9606cd39c09f88c484e38681f65ff417f1b5d16fac571f8d0b55ce8c5edb
+
+Description = "hello" with TAG_B (same input, different tag — must differ from previous)
+Tag = 4144414d414e542d76312d746573742d7461672d62
+Tag-ASCII = ADAMANT-v1-test-tag-b
+Input = 68656c6c6f
+Output = 1b28ad563a3d14cac970a3856010ae9f8503584fa1c7c8bd0100a9a606ee7bd1

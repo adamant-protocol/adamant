@@ -1,0 +1,31 @@
+# SHAKE-256 byte-oriented short-message known-answer tests
+#
+# Source: FIPS 202 Appendix B intermediate values and selected entries
+#         from NIST CAVP "SHAKE256VariableOut.rsp" / "SHAKE256ShortMsg.rsp"
+#         https://csrc.nist.gov/projects/cryptographic-algorithm-validation-program/secure-hashing
+#
+# Tested by: crates/adamant-crypto/src/hash.rs ::tests::nist_shake_256_kats
+#
+# Format: rsp-style blocks
+#   Len    = <message length in bits>
+#   Msg    = <message in hex; "00" represents the empty message when Len == 0>
+#   Output = <expected SHAKE-256 output in hex, length determined by the
+#             number of hex characters in this field>
+
+[Outputlen = variable]
+
+# SHAKE-256 of empty message, first 32 bytes (well-known KAT).
+Len = 0
+Msg = 00
+Output = 46b9dd2b0ba88d13233b3feb743eeb243fcd52ea62b81b82b50c27646ed5762f
+
+# SHAKE-256 of empty message, first 64 bytes — verifies XOF prefix
+# property: longer output extends shorter output.
+Len = 0
+Msg = 00
+Output = 46b9dd2b0ba88d13233b3feb743eeb243fcd52ea62b81b82b50c27646ed5762fd75dc4ddd8c0f200cb05019d67b592f6fc821c49479ab48640292eacb3b7c4be
+
+# SHAKE-256 of "The quick brown fox jumps over the lazy dog", 32 bytes.
+Len = 344
+Msg = 54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67
+Output = 2f671343d9b2e1604dc9dcf0753e5fe15c7c64a0d283cbbf722d411a0e36f6ca

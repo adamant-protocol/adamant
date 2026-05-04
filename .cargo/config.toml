@@ -1,0 +1,23 @@
+# Workspace cargo configuration.
+#
+# === Windows Application Control / corporate endpoint policy workaround ===
+#
+# On Windows machines running Windows Defender Application Control (WDAC),
+# AppLocker, or a comparable corporate endpoint policy, executing test
+# binaries from the default `target/` directory may be blocked with:
+#
+#     An Application Control policy has blocked this file. (os error 4551)
+#
+# The build itself succeeds; only the resulting unsigned executable can't
+# run from inside the workspace tree. Pointing cargo's build artifacts at
+# a directory the policy permits to execute resolves it. Typical choices:
+# `%TEMP%`, `%LOCALAPPDATA%`, or a developer-specific allowlisted folder.
+#
+# To enable the workaround on your machine: uncomment the two lines below
+# and replace the placeholder with an absolute path your policy permits.
+# This setting is per-developer; do not commit a hardcoded path.
+#
+# [build]
+# target-dir = "<absolute path your machine permits to execute binaries>"
+#
+# See CONTRIBUTING.md "Build environment" for symptom details.

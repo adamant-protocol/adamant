@@ -1,0 +1,46 @@
+# Adamant tagged-SHAKE-256 known-answer vectors.
+#
+# Source: internally generated. Each `Output` is the result of applying
+# the BIP-340 tagged-hash construction (whitepaper section 3.3.1) with
+# SHAKE-256 as the outer absorption:
+#
+#   prefix = SHA3-256(Tag)
+#   Output = SHAKE-256( prefix || prefix || Input, len(Output) )
+#
+# The output length is determined by the number of hex characters in
+# the `Output` field of each block (squeezed to that exact length).
+#
+# These vectors verify the composition end-to-end. The underlying
+# SHAKE-256 primitive is independently verified against NIST CAVP /
+# FIPS 202 vectors in `../shake256/shake_256_kats.txt`.
+#
+# Tested by: crates/adamant-crypto/src/hash.rs
+#            ::tests::tagged_shake_256_internal_regression
+#
+# Regenerating: `cargo test --package adamant-crypto
+#                regenerate_internal_tagged_vectors -- --ignored --nocapture`
+#
+# Format: blocks separated by blank lines
+#   Description = <human-readable label>
+#   Tag         = <tag bytes in hex>
+#   Tag-ASCII   = <tag rendered as ASCII; for human reading only>
+#   Input       = <input bytes in hex; empty value means empty input>
+#   Output      = <expected output in hex; length determined by hex char count>
+
+Description = whitepaper 3.3.1 worked-example tag, 32-byte output
+Tag = 4144414d414e542d76312d6f626a6563742d6964
+Tag-ASCII = ADAMANT-v1-object-id
+Input = 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0000000000000001
+Output = 451c72e5417e5c3edc586b02c6e5ad60695af97900395eaedaa32f01beb8751f
+
+Description = whitepaper 3.3.1 worked-example tag, 64-byte output (verifies XOF prefix property)
+Tag = 4144414d414e542d76312d6f626a6563742d6964
+Tag-ASCII = ADAMANT-v1-object-id
+Input = 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0000000000000001
+Output = 451c72e5417e5c3edc586b02c6e5ad60695af97900395eaedaa32f01beb8751fe99b83e523e5d7ac47293e41448a48c485d30dee53c653883a61b066b998aec5
+
+Description = empty input with TAG_A, 16-byte output
+Tag = 4144414d414e542d76312d746573742d7461672d61
+Tag-ASCII = ADAMANT-v1-test-tag-a
+Input =
+Output = 771b99e4b15c7df5873da2eb3707e7a8

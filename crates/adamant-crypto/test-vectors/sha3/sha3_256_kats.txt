@@ -1,0 +1,35 @@
+# SHA3-256 byte-oriented short-message known-answer tests
+#
+# Source: FIPS 202 Appendix B.2 worked examples and selected entries
+#         from NIST CAVP "SHA3-256ShortMsg.rsp"
+#         https://csrc.nist.gov/projects/cryptographic-algorithm-validation-program/secure-hashing
+#
+# Tested by: crates/adamant-crypto/src/hash.rs ::tests::nist_sha3_256_kats
+#
+# Format: NIST CAVP .rsp blocks
+#   Len = <message length in bits>
+#   Msg = <message in hex; "00" represents the empty message when Len == 0>
+#   MD  = <expected SHA3-256 digest in hex, 64 hex chars / 32 bytes>
+
+[L = 32]
+
+# Empty message (FIPS 202 Appendix B.2; well-known KAT).
+Len = 0
+Msg = 00
+MD = a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a
+
+# "abc" (FIPS 202 Appendix B.2 worked example).
+Len = 24
+Msg = 616263
+MD = 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
+
+# "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+# (NIST CAVP / FIPS 180-2 message-digest test vector adapted to SHA3-256).
+Len = 448
+Msg = 6162636462636465636465666465666765666768666768696768696a68696a6b696a6b6c6a6b6c6d6b6c6d6e6c6d6e6f6d6e6f706e6f7071
+MD = 41c0dba2a9d6240849100376a8235e2c82e1b9998a999e21db32dd97496d3376
+
+# "The quick brown fox jumps over the lazy dog" (well-known cross-suite vector).
+Len = 344
+Msg = 54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67
+MD = 69070dda01975c8c120c3aada1b282394e7f032fa9cf32f4cb2259a0897dfc04
