@@ -92,7 +92,11 @@ ml-dsa = { version = "=0.1.0-rc.9", default-features = false, features = ["rand_
 blst = "=0.3.16"
 
 # Symmetric AEAD (whitepaper 3.5)
-chacha20poly1305 = { version = "0.10", default-features = false }
+# chacha20poly1305: pinned to exact patch version. Resolved on the
+# RustCrypto 0.10 generation (transitives align with ed25519-dalek's
+# tree; no new ecosystem-skew allowlist entries needed). zeroize
+# feature wires Key zeroize-on-drop through the upstream crate.
+chacha20poly1305 = { version = "=0.10.1", default-features = false, features = ["alloc"] }
 
 # Memory hygiene and constant-time helpers
 zeroize = { version = "=1.8.2", features = ["derive"] }
