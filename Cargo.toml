@@ -66,7 +66,14 @@ blake3 = "=1.8.5"
 halo2_gadgets = { version = "0.3", default-features = false }
 
 # Classical signatures (whitepaper 3.4.1)
-ed25519-dalek = { version = "2.1", default-features = false, features = ["zeroize"] }
+# ed25519-dalek: pinned exactly.
+# Features:
+#  - "zeroize"   — SigningKey impls Zeroize / ZeroizeOnDrop.
+#  - "rand_core" — gates SigningKey::generate(rng) (dalek 2.2 split).
+#  - "std"       — needed by the zeroize derive on dalek's SigningKey.
+# `fast` (a curve25519-dalek precomputed-tables flag) is intentionally
+# skipped here; we revisit performance flags before mainnet.
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["zeroize", "rand_core", "std"] }
 
 # Post-quantum signatures (whitepaper 3.4.2). Pre-1.0; pin tightly and
 # revisit before each upgrade.
@@ -79,8 +86,10 @@ blst = "0.3"
 chacha20poly1305 = { version = "0.10", default-features = false }
 
 # Memory hygiene and constant-time helpers
-zeroize = { version = "1.8", features = ["derive"] }
-subtle = "2.5"
+zeroize = { version = "=1.8.2", features = ["derive"] }
+subtle = "=2.6.1"
+# rand_core: workspace-level default has only the trait surface enabled.
+# Per-crate dev-deps enable `getrandom` when an OS RNG is needed in tests.
 rand_core = { version = "0.6", default-features = false }
 
 # Testing

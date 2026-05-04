@@ -88,6 +88,34 @@ code.
   policy-rationale of this lint. See `clippy.toml` for the full
   rationale and revisit conditions.
 
+## Cryptographic discipline
+
+### RNG injection: production receives, tests construct
+
+Production crypto code that needs randomness MUST receive its RNG from
+the caller, parameterised over the `rand_core::CryptoRngCore` trait.
+The workspace declares `rand_core = { version = "0.6", default-features
+= false }` — trait surface only, no concrete RNG implementations.
+
+Tests that need an actual OS RNG construct `rand_core::OsRng` via the
+`getrandom` feature, declared in the `[dev-dependencies]` table of the
+crate that needs it:
+
+```toml
+[dev-dependencies]
+rand_core = { workspace = true, features = ["getrandom"] }
+```
+
+`getrandom` has platform-specific behaviour (different syscall trees on
+Linux, macOS, Windows, iOS, WASM, embedded) that we do not want baked
+into the production crypto path. Callers of these crates will pick a
+CSPRNG appropriate to their deployment environment; the wrapper crates
+stay neutral.
+
+The same pattern applies to every randomness-consuming primitive in
+the workspace — Ed25519 today, ML-DSA next, BLS later. Lock the rule
+down once; do not re-derive it per primitive.
+
 ## Pre-publication checks
 
 Audits to run before publishing any crate from this workspace.

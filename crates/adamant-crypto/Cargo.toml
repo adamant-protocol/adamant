@@ -11,11 +11,18 @@ publish.workspace = true
 [dependencies]
 sha3 = { workspace = true }
 blake3 = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand_core = { workspace = true }
+subtle = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }
 hex-literal = { workspace = true }
 proptest = { workspace = true }
+# `getrandom` enables `rand_core::OsRng` for the Ed25519 generate-test.
+# Production code passes its own CSPRNG; this feature is dev-only.
+rand_core = { workspace = true, features = ["getrandom"] }
 
 [lints]
 workspace = true
