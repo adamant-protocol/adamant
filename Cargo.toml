@@ -37,6 +37,13 @@ pedantic = { level = "warn", priority = -1 }
 # versions, missing license fields) that matter for a crypto-heavy
 # workspace where the dependency surface is part of the audit posture.
 cargo = { level = "warn", priority = -1 }
+# `multiple_crate_versions` is allow-by-default *within* the cargo group,
+# so promoting `cargo` to warn does not promote it. Pinned to warn
+# explicitly because a crypto codebase cannot tolerate ambiguity about
+# which version of a primitive crate is in scope. Verified to fire on a
+# constructed runtime-path duplicate; see CONTRIBUTING.md "Linting
+# discipline".
+multiple_crate_versions = "warn"
 # Pragmatic allow: crates are named adamant-*; types named e.g. `CryptoError`
 # inside `adamant-crypto` would otherwise trip the lint structurally.
 module_name_repetitions = "allow"
