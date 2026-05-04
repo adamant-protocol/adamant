@@ -16,7 +16,12 @@
 //! construction with a registered [`DomainTag`]. Non-consensus-critical
 //! paths (peer-to-peer message integrity, content-addressed storage of
 //! historical chain data, etc.) MAY use the plain variants
-//! ([`sha3_256_plain`], [`shake_256_plain`]).
+//! ([`sha3_256_plain`], [`shake_256_plain`], [`blake3`]).
+//!
+//! [`blake3`] is *only* for non-consensus paths. Per whitepaper 3.3.2,
+//! BLAKE3 MUST NOT be used for transaction identifiers, state
+//! commitments, signature inputs, or consensus-critical hashes. Those
+//! uses require SHA3-256.
 
 use sha3::digest::{ExtendableOutput, XofReader};
 use sha3::{Digest, Sha3_256, Shake256};
@@ -133,6 +138,34 @@ pub fn shake_256_plain(input: &[u8], output: &mut [u8]) {
     reader.read(output);
 }
 
+/// BLAKE3 hash, per whitepaper section 3.3.2. Output is 256 bits
+/// (32 bytes).
+///
+/// **Non-consensus-critical use only.** Per whitepaper section 3.3.2:
+///
+/// > BLAKE3 `MUST NOT` be used for any of the following: transaction
+/// > identifiers, state commitments, signature inputs, consensus-critical
+/// > hashes. These uses require SHA3-256 to maintain protocol-wide
+/// > hash-function uniformity. BLAKE3 is exclusively for non-consensus-
+/// > critical performance paths.
+///
+/// Intended uses are peer-to-peer message integrity checks, streaming
+/// hashes during block propagation, and content-addressed storage of
+/// historical chain data — paths where collisions across contexts are
+/// not security-relevant and the SHA3 throughput would be a bottleneck.
+/// For any hash whose collision could affect consensus (or which you
+/// are unsure about), use [`sha3_256_tagged`] instead.
+///
+/// The function exposes only fixed 256-bit output. The whitepaper
+/// specifies that "the protocol uses 256-bit output throughout"
+/// (whitepaper 3.3.2), so BLAKE3's extensible-output mode is not part
+/// of the surface; if a use case ever requires variable-length output,
+/// it gets added deliberately under the same non-consensus discipline.
+#[must_use]
+pub fn blake3(input: &[u8]) -> [u8; 32] {
+    *::blake3::hash(input).as_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +234,83 @@ mod tests {
                 hex::encode(actual),
             );
         }
+    }
+
+    /// Constructs the BLAKE3 reference test-vector input pattern: a
+    /// stream of `len` bytes where `byte[i] = i % 251`.
+    fn blake3_pattern_input(len: usize) -> Vec<u8> {
+        #[allow(clippy::cast_possible_truncation)] // i % 251 ∈ 0..251 fits in u8.
+        (0..len).map(|i| (i % 251) as u8).collect()
+    }
+
+    #[test]
+    fn blake3_kats() {
+        let content = include_str!("../test-vectors/blake3/blake3_kats.txt");
+        // The KAT file uses a parameterised format (`Len` plus `MD`);
+        // reconstruct the input pattern from each `Len`. We parse with
+        // the rsp helper but treat `Msg = 00` as a no-op when `Len > 0`,
+        // since the file does not embed the input bytes.
+        let mut current_len: Option<usize> = None;
+        let mut count = 0usize;
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let key = key.trim();
+            let value = value.trim();
+            match key {
+                "Len" => {
+                    current_len = value.parse().ok();
+                }
+                "MD" => {
+                    let len = current_len
+                        .take()
+                        .expect("Len must precede MD in BLAKE3 KAT file");
+                    let expected = hex::decode(value).expect("valid hex in MD");
+                    assert_eq!(expected.len(), 32, "BLAKE3 KAT MD must be 32 bytes");
+                    let input = blake3_pattern_input(len);
+                    let actual = blake3(&input);
+                    assert_eq!(
+                        hex::encode(actual),
+                        hex::encode(&expected),
+                        "BLAKE3 KAT (Len = {len})",
+                    );
+                    count += 1;
+                }
+                _ => {}
+            }
+        }
+        assert!(count > 0, "no BLAKE3 KATs parsed from blake3_kats.txt");
+    }
+
+    #[test]
+    fn blake3_deterministic() {
+        let input = b"the quick brown fox jumps over the lazy dog";
+        let a = blake3(input);
+        let b = blake3(input);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn blake3_differs_by_input() {
+        let a = blake3(b"input one");
+        let b = blake3(b"input two");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn blake3_empty_input_is_well_known() {
+        // Echoes the upstream `Len = 0` KAT — covers the empty-input
+        // edge case directly without parsing the KAT file.
+        let actual = blake3(b"");
+        let expected =
+            hex::decode("af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262")
+                .expect("valid hex");
+        assert_eq!(actual.as_slice(), expected.as_slice());
     }
 
     #[test]
@@ -676,6 +786,15 @@ mod tests {
             let a = sha3_256_tagged(&test_tags::TAG_A, &input);
             let b = sha3_256_tagged(&test_tags::TAG_B, &input);
             prop_assert_ne!(a, b);
+        }
+
+        #[test]
+        fn prop_blake3_deterministic(
+            input in prop::collection::vec(any::<u8>(), 0..2048)
+        ) {
+            let a = blake3(&input);
+            let b = blake3(&input);
+            prop_assert_eq!(a, b);
         }
     }
 }

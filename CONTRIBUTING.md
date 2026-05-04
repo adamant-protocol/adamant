@@ -80,6 +80,14 @@ code.
   version uniqueness — but it means a `cargo tree --duplicates`
   finding does not necessarily imply a lint fire.
 
+  **Known allowlist:** `cpufeatures` is allowlisted in `clippy.toml`
+  because the addition of `blake3 =1.8.5` (whitepaper 3.3.2) forced a
+  real runtime-path duplicate against `sha3 =0.10.9`'s transitive
+  `keccak 0.1.6` chain. `cpufeatures` is a CPU-feature-detection
+  helper, not a cryptographic primitive — out of scope for the
+  policy-rationale of this lint. See `clippy.toml` for the full
+  rationale and revisit conditions.
+
 ## Pre-publication checks
 
 Audits to run before publishing any crate from this workspace.

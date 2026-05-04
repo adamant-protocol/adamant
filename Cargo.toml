@@ -57,7 +57,11 @@ module_name_repetitions = "allow"
 # sha3 pinned to exact patch version: this dependency carries every
 # consensus-critical hash. Bumps go through SECURITY.md review.
 sha3 = { version = "=0.10.9", default-features = false }
-blake3 = { version = "1.5", default-features = false }
+# blake3: pinned to exact patch version on first use. SIMD backends are
+# integral to BLAKE3's performance rationale (whitepaper 3.3.2) so default
+# features are kept; the runtime CPU-feature dispatch is documented in
+# SECURITY.md as carrying upstream `unsafe`.
+blake3 = "=1.8.5"
 # Poseidon for use inside Halo 2 circuits (whitepaper 3.3.3, 3.7.1).
 halo2_gadgets = { version = "0.3", default-features = false }
 

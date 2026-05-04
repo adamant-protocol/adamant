@@ -1,0 +1,24 @@
+# Workspace-level clippy configuration.
+#
+# Per-lint settings that the `[workspace.lints]` table in `Cargo.toml`
+# does not express live here. Currently this file sets exactly one
+# entry: an allowlist for `clippy::multiple_crate_versions`.
+#
+# The allowlist is not a free pass — every entry must have documented
+# rationale (below) and remain narrow. The lint stays watching for
+# every other crate.
+#
+# === Allowlist rationale ===
+#
+# - cpufeatures: a runtime CPU-feature-detection helper, not a
+#   cryptographic primitive. Both 0.2.x and 0.3.x detect features via
+#   the same CPUID-based mechanism; the 0.2 → 0.3 break is API-shape
+#   only, not runtime-semantics. The duplicate is forced by upstream
+#   constraint mismatch: `sha3 =0.10.9` pulls `keccak 0.1.6`, which
+#   constrains `cpufeatures = "^0.2"`; `blake3 =1.8.5` uses
+#   `cpufeatures = "^0.3"`. Resolves automatically once sha3 or keccak
+#   widens its constraint; otherwise revisitable via `[patch]` before
+#   mainnet. Tracked in CONTRIBUTING.md "Verifications on record".
+allowed-duplicate-crates = [
+    "cpufeatures",
+]

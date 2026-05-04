@@ -1,0 +1,41 @@
+# BLAKE3 known-answer tests
+#
+# Source: BLAKE3 reference test_vectors.json, maintained by the BLAKE3
+# team alongside the algorithm specification:
+#   https://github.com/BLAKE3-team/BLAKE3/blob/master/test_vectors/test_vectors.json
+#
+# Tested by: crates/adamant-crypto/src/hash.rs ::tests::blake3_kats
+#
+# Each upstream test case specifies:
+#   - input_len:  the input is `len` bytes, where `byte[i] = i % 251`
+#                 (a deterministic, length-only-parameterised stream).
+#   - hash:       the BLAKE3 output, shown by the upstream file as a
+#                 long extensible-output prefix; for our 256-bit-only
+#                 surface (whitepaper 3.3.2) we take the first 32 bytes.
+#
+# The `Len = 0` case has no input bytes; subsequent cases have
+# `Len`-many bytes of the pattern. The 64-byte case verifies single-
+# chunk behaviour (BLAKE3 chunks at 1024 bytes); the 1024-byte case
+# verifies the chunk boundary; the 8192-byte case verifies multi-
+# chunk parallelism.
+#
+# Format:
+#   Len = <input length in bytes>
+#   MD  = <first 32 bytes of expected BLAKE3 hash, in hex>
+
+[L = 32]
+
+Len = 0
+MD = af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
+
+Len = 1
+MD = 2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213
+
+Len = 64
+MD = 4eed7141ea4a5cd4b788606bd23f46e212af9cacebacdc7d1f4c6dc7f2511b98
+
+Len = 1024
+MD = 42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7
+
+Len = 8192
+MD = aae792484c8efe4f19e2ca7d371d8c467ffb10748d8a5a1ae579948f718a2a63
