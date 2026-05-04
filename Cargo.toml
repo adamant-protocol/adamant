@@ -1,0 +1,76 @@
+# Adamant — Layer 1 blockchain protocol reference implementation.
+# See CLAUDE.md and /whitepaper for context.
+#
+# MSRV policy:
+# - Pre-v1.0: track latest stable Rust. The toolchain is pinned in
+#   rust-toolchain.toml for reproducibility. Bumps are deliberate and land
+#   in dedicated commits ("Bump Rust toolchain to <version>") with a brief
+#   rationale. MSRV is not yet a public commitment.
+# - At v1.0 (genesis-ready): MSRV is set explicitly and becomes part of
+#   the release contract. Subsequent bumps are treated with the same
+#   discipline as any other consensus-adjacent rule change.
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/adamant-crypto",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/adamant-protocol/adamant"
+authors = ["Adamant contributors"]
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# `cargo` group catches dependency-graph issues (duplicate deps, wildcard
+# versions, missing license fields) that matter for a crypto-heavy
+# workspace where the dependency surface is part of the audit posture.
+cargo = { level = "warn", priority = -1 }
+# Pragmatic allow: crates are named adamant-*; types named e.g. `CryptoError`
+# inside `adamant-crypto` would otherwise trip the lint structurally.
+module_name_repetitions = "allow"
+
+# Planned cryptographic dependencies, per whitepaper section 3. Versions are
+# pinned best-effort at scaffold time and verified at first use; first-use
+# commits adjust if upstream has moved. Each entry is mirrored in SECURITY.md
+# with its `unsafe` surface and audit signal.
+[workspace.dependencies]
+# Hashing (whitepaper 3.3)
+sha3 = { version = "0.10", default-features = false }
+blake3 = { version = "1.5", default-features = false }
+# Poseidon for use inside Halo 2 circuits (whitepaper 3.3.3, 3.7.1).
+halo2_gadgets = { version = "0.3", default-features = false }
+
+# Classical signatures (whitepaper 3.4.1)
+ed25519-dalek = { version = "2.1", default-features = false, features = ["zeroize"] }
+
+# Post-quantum signatures (whitepaper 3.4.2). Pre-1.0; pin tightly and
+# revisit before each upgrade.
+ml-dsa = "0.0.4"
+
+# BLS12-381 signatures, pairing, and threshold encryption (whitepaper 3.4.3, 3.6).
+blst = "0.3"
+
+# Symmetric AEAD (whitepaper 3.5)
+chacha20poly1305 = { version = "0.10", default-features = false }
+
+# Memory hygiene and constant-time helpers
+zeroize = { version = "1.8", features = ["derive"] }
+subtle = "2.5"
+rand_core = { version = "0.6", default-features = false }
+
+# Testing
+proptest = "1.5"
+hex = "0.4"
+hex-literal = "0.4"

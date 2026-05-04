@@ -1,0 +1,16 @@
+[package]
+name = "adamant-crypto"
+description = "Cryptographic primitive wrappers for the Adamant protocol. Implements whitepaper section 3."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+# Dependencies are added per-primitive as each module's implementation lands.
+# The full intended set is declared in the workspace Cargo.toml's
+# [workspace.dependencies] with pinned versions, mirrored by SECURITY.md.
+
+[lints]
+workspace = true

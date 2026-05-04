@@ -1,0 +1,11 @@
+# Pin the Rust toolchain for reproducibility. Cryptographic code benefits
+# from version-stable miscompilation guarantees; we do not float on stable.
+#
+# Bump policy: latest stable, in a dedicated commit titled
+# "Bump Rust toolchain to <version>" with a brief rationale. See the MSRV
+# policy comment at the top of the workspace Cargo.toml.
+
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
