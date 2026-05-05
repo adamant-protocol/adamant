@@ -64,6 +64,49 @@
 # targeting the 0.10 ecosystem appears, whichever happens first.
 # Tracked in CONTRIBUTING.md "Verifications on record" and in
 # SECURITY.md "RustCrypto ecosystem skew".
+#
+# === Allowlist rationale: Sui-Move ecosystem skew ===
+#
+# Vendoring Sui-Move's `move-binary-format` and `move-core-types` at
+# `mainnet-v1.66.2` (whitepaper §6.2.1.1, see vendor/README.md and
+# SECURITY.md "Vendored upstream surface") brings in ten further
+# multi-version duplicates. Sui's tree pins generic crates at
+# specific versions chosen to match Sui's mainnet ecosystem; ours
+# may pin them at different versions chosen for our own tree. The
+# duplicates are forced by upstream constraint mismatch: resolving
+# them in either direction would require modifying the vendored
+# upstream code (forbidden per vendor/README.md "Modifications") or
+# downgrading our own pins (which would lose features we rely on).
+#
+# Operational implications:
+#   - None of the duplicated crates are cryptographic primitives or
+#     consensus-critical infrastructure. They are generic utilities
+#     (allocators, RNGs, helpers) whose behaviour at the API
+#     surfaces consumed by either side does not vary across
+#     versions in ways that affect correctness.
+#   - Larger binary size and longer compile times. Functional
+#     correctness is unaffected.
+#
+# Entries:
+#   getrandom    : 0.2.17 / 0.3.4 / 0.4.2 (Sui's `move-core-types`
+#                  vs our existing tree vs deeper transitive)
+#   hashbrown    : 0.12.3 / 0.15.5 / 0.17.0 (likewise)
+#   indexmap     : 1.9.3 / 2.14.0
+#   r-efi        : 5.3.0 / 6.0.0 (transitive of getrandom)
+#   rand         : 0.8.6 / 0.9.4
+#   rand_chacha  : 0.3.1 / 0.9.0
+#   rand_core    : 0.6.4 / 0.9.5 / 0.10.1
+#   schemars     : 0.9.0 / 1.2.1 (JSON Schema; Sui dev-dep tree)
+#   syn          : 1.0.109 / 2.0.117 (Sui's `move-proc-macros`
+#                  pins syn 2 directly; rest of Sui's tree pins 1)
+#   wit-bindgen  : 0.51.0 / 0.57.1 (transitive of getrandom)
+#
+# **Revisit signal (single, applies to all ten):** remove these
+# entries when bumping the vendored Sui release tag brings the
+# duplicates into alignment with our tree, or when our own deps
+# move to versions that match Sui's pins. Tracked in CONTRIBUTING.md
+# "Verifications on record" and in SECURITY.md "Vendored upstream
+# surface".
 
 allowed-duplicate-crates = [
     "cpufeatures",
@@ -78,4 +121,16 @@ allowed-duplicate-crates = [
     "sha3",
     "signature",
     "spki",
+    # Sui-Move ecosystem skew from vendoring `move-binary-format` and
+    # `move-core-types` at `mainnet-v1.66.2` (see rationale above):
+    "getrandom",
+    "hashbrown",
+    "indexmap",
+    "r-efi",
+    "rand",
+    "rand_chacha",
+    "rand_core",
+    "schemars",
+    "syn",
+    "wit-bindgen",
 ]

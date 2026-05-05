@@ -11,6 +11,12 @@ publish.workspace = true
 [dependencies]
 adamant-crypto = { path = "../adamant-crypto" }
 adamant-types = { path = "../adamant-types" }
+# Vendored Sui-Move bytecode crate per whitepaper §6.2.1.1; provides
+# the inherited `Bytecode` enum and `FunctionHandleIndex` operand
+# type that `BytecodeInstruction::Inherited` and the AdamantBytecode
+# extension variants compose with per §6.2.1.4. See vendor/README.md
+# and SECURITY.md "Vendored upstream surface".
+move-binary-format = { workspace = true }
 serde = { workspace = true }
 serde-big-array = { workspace = true }
 bcs = { workspace = true }
