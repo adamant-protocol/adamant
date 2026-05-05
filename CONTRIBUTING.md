@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Eight confirmed instances during Phases
+sources before proceeding. Nine confirmed instances during Phases
 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -228,6 +228,25 @@ sources before proceeding. Eight confirmed instances during Phases
   appendix). §6.1.3 also corrected: the forward-reference now
   points at §6.2.1, and the bytecode architecture is explicit as
   stack-based (commit 5489d09).
+- **CircuitId resolution path** (whitepaper 6.2.1.4) — the Phase 5
+  AdamantBytecode extension enum proposal surfaced that §6.2.1.4
+  referenced "the module's circuit-reference pool" as the operand
+  source for `GenerateProof` and `VerifyProof`, but §6.2.1.2's
+  `CompiledModule` layout (which inherits Sui-Move's pool list
+  unchanged) does not include such a pool. Without resolution,
+  defining the bytecode-layer `CircuitId` would have required
+  either inventing a circuit pool inside §6.2.1.2 (a leaky
+  abstraction since circuits are §7-territory) or shipping
+  `CircuitId` with under-specified resolution semantics that the
+  privacy-layer work would later have to reconcile. Resolved by
+  spec amendment adding a "CircuitId resolution" paragraph to
+  §6.2.1.4 deferring the pool's location and structure to §7
+  (chain-wide registry vs per-module pool to be decided in §7),
+  while pinning that the bytecode-layer `CircuitId` is an opaque
+  u16. This applies the encoding/construction split established
+  in §6.0.7 to bytecode operands: encoding pinned now, semantic
+  construction deferred to the section that defines the role
+  (commit 0d3a957).
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
