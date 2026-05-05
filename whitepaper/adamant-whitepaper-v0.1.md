@@ -1689,6 +1689,15 @@ Adamant inherits this encoding unchanged for the Sui-Move base set. Adamant-spec
 
 The bytecode stream itself is not BCS-encoded — it is Move's native binary format, opaque to BCS at the protocol layer. BCS canonicality (section 5.1.8) applies to the protocol's consensus types (Transaction, Object, etc.); the bytecode stored inside a Module object is consensus-critical only insofar as the *bytes* are stored and hashed faithfully, not insofar as those bytes follow BCS rules.
 
+**Per-extension operand encodings.** The 17 Adamant-specific extensions per section 6.2.1.4 use the following operand layouts within the framing above:
+
+- `InvokeShielded(FunctionHandleIndex)` and `InvokeTransparent(FunctionHandleIndex)` — operand encoded as ULEB128, matching Sui-Move's `FunctionHandleIndex` encoding for inherited `Call` and `CallGeneric`.
+- `GenerateProof(CircuitId)` and `VerifyProof(CircuitId)` — operand encoded as ULEB128. `CircuitId` is treated as an index per section 6.2.1.4's "an index into the module's circuit-reference pool" framing, matching Sui-Move's encoding pattern for other indices (function-handle, constant-pool, struct-handle, etc.).
+- `ChargeGas(GasDimension)` and `RemainingGas(GasDimension)` — operand encoded as a single byte variant tag in declaration order: `Computation = 0x00`, `Storage = 0x01`, `Rent = 0x02`, `Bandwidth = 0x03`, `ProofVerification = 0x04`, `ProofGeneration = 0x05`. This matches the variant-tag pattern established in section 6.0.7's `Value` enum encoding.
+- The 11 zero-operand extensions (`ReleaseSubViewKey`, `KzgCommit`, `KzgVerify`, `RecursiveVerify`, `Sha3_256`, `Blake3`, `Ed25519Verify`, `MlDsaVerify65`, `MlDsaVerify87`, `BlsVerify`, `OutOfGas`) carry no operand bytes after the opcode byte.
+
+These encodings are genesis-fixed; changing any of them is a hard fork.
+
 #### 6.2.1.6 Validator (bytecode verification)
 
 Before a module is deployed, its bytecode must pass validation. The validator is a static analyser that runs over the module and rejects modules that violate any required property. Deployment is denied for invalid modules; a module that is accepted is guaranteed by the consensus layer to have the validated properties.
