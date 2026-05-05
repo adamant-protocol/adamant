@@ -1,0 +1,3195 @@
+# 0. Abstract
+
+Adamant is a Layer 1 blockchain protocol designed to serve users who require properties that no existing programmable chain delivers in combination: privacy by default, high transaction throughput, sub-second finality, post-quantum cryptographic security, phone-verifiable correctness, and credibly neutral governance with no foundation, no premine, no admin keys, and no upgrade authority after genesis.
+
+The protocol combines a directed-acyclic-graph (DAG) consensus mechanism, an object-based parallel execution model, threshold-encrypted transaction propagation, recursive zero-knowledge proofs of state validity, and a fixed constitutional rule set established at genesis. Every transaction is shielded by default, with users retaining the ability to selectively disclose specific information through cryptographically verifiable view keys. Smart contracts declare their mutability rules — `IMMUTABLE`, `OWNER_UPGRADEABLE`, `VOTE_UPGRADEABLE`, `UPGRADEABLE_UNTIL_FROZEN`, or a custom rule — at deployment, and these declarations are themselves immutable and visible to users before interaction.
+
+The chain rejects on-chain governance by design. The protocol's consensus rules, virtual machine, token issuance schedule, and validity logic are fixed at genesis and cannot be modified by any party, including the original implementers. Changes require socially-coordinated forks in which every node operator individually opts into new client software — the same model that has kept Bitcoin's protocol stable for over fifteen years, here applied to a programmable execution environment.
+
+Adamant targets a sustained throughput of at least 200,000 transactions per second on a single shard, a finality latency of approximately 500 milliseconds for transactions not requiring consensus on shared state, and a per-transaction fee floor on the order of $0.0001 USD-equivalent at design throughput. Fee accounting is multi-dimensional, separating the costs of state storage, computation, and proof verification rather than collapsing them into a single gas number. Fees are paid in the native token (working name ADM) and burned via an EIP-1559-style mechanism, producing deflationary token economics under network usage.
+
+The protocol uses standard, peer-reviewed cryptographic primitives — Ed25519 and ML-DSA (CRYSTALS-Dilithium, FIPS 204) for signatures, BLS12-381 for signature aggregation, SHA-3 for hashing, and the Halo 2 proving system for zero-knowledge proofs. No novel cryptography is introduced. The protocol's contribution is the systems-level synthesis of these primitives into a coherent architecture meeting the property set described above.
+
+This document specifies the Adamant protocol in full. Section 1 motivates the design through gap analysis of the existing landscape. Section 2 establishes the design principles that constrain all subsequent decisions. Sections 3 through 9 specify the technical architecture from cryptographic primitives through networking. Section 10 specifies the economic and incentive model. Section 11 specifies the genesis state and constitutional commitments. Section 12 discusses open problems and the scope of future work.
+
+The reference implementation is being developed in Rust and is available under the Apache 2.0 license at [github.com/adamant-protocol](https://github.com/adamant-protocol). This whitepaper and the implementation evolve together; specification changes are tracked in this document's version history and reflected in the corresponding code releases.
+
+
+# 1. Introduction & Motivation
+
+## 1.1 The state of the art (2026)
+
+Public blockchains have matured along several distinct axes since the Bitcoin whitepaper was published in 2008. Each axis has produced exemplary systems, and each has produced trade-offs that the broader ecosystem has implicitly accepted as inherent. This section reviews the current frontier on each axis and identifies the gap that Adamant is designed to fill.
+
+### 1.1.1 Throughput and finality
+
+The throughput frontier has moved from Bitcoin's 7 transactions per second to current production systems handling hundreds of thousands of transactions per second with sub-second finality. The Mysticeti consensus protocol, peer-reviewed at NDSS 2025 and deployed in the Sui blockchain, demonstrates a wide-area-network commit latency of approximately 500 milliseconds at sustained throughput exceeding 200,000 transactions per second on a single shard. Solana, through proof-of-history and parallel execution, has demonstrated similar throughput with different latency characteristics. Monad, Aptos, and Sei have shown that optimistic concurrency control via Block-STM-style algorithms can deliver order-of-magnitude improvements over the Ethereum Virtual Machine's strictly-sequential execution model.
+
+These throughput gains do not come for free. Higher throughput typically requires higher hardware requirements for validators, which centralises participation; tighter coupling between consensus and execution, which reduces architectural flexibility; and in some cases optimistic models that require complex re-execution logic when transactions conflict.
+
+### 1.1.2 Privacy
+
+Privacy on public blockchains has progressed from Bitcoin's pseudonymous transparency to chains where transaction privacy is the default. Monero's ring signatures and stealth addresses, deployed since 2014, offer privacy for simple value transfers but limited programmability. Zcash's zero-knowledge proofs offer optional shielded transactions with strong cryptographic guarantees but a transparent default and limited smart-contract support. Aleo extends this model to private programmability with the Leo programming language but operates at modest throughput on the order of single-digit transactions per second.
+
+The most significant recent development is Aztec Network, which entered mainnet on November 20, 2025 as the first Ethereum Layer 2 with general programmable privacy through the Noir domain-specific language. Aztec demonstrates that complex private smart contracts — including private DeFi primitives — are viable. As an Ethereum Layer 2, Aztec inherits Ethereum's settlement guarantees but is constrained by its proving costs (multi-second client-side proof generation for typical operations) and its dependence on Ethereum's evolving rollup framework.
+
+No production Layer 1 blockchain combines high-throughput consensus with privacy by default. This is a structural gap, not an incidental one: privacy chains have been built without contemporary consensus, and high-throughput chains have been built without privacy.
+
+### 1.1.3 Maximal extractable value (MEV) and censorship resistance
+
+The transparency of public mempools has produced an industry of value extraction estimated at over $1.8 billion on Ethereum alone since 2020, primarily through front-running and sandwich attacks against decentralized exchange users. Mitigation efforts have followed two paths: out-of-protocol services such as MEV Blocker and Flashbots, which depend on trusted relays; and in-protocol cryptographic solutions such as the Shutter Network's threshold-encrypted mempool, deployed on Gnosis Chain.
+
+Threshold encryption is a promising approach: transactions are encrypted by users and decryptable only by a quorum of "keypers" after ordering is committed, eliminating the visibility on which extraction depends. However, current deployments add significant latency. Shutter transactions on Gnosis Chain average approximately three minutes to inclusion due to keyper coordination overhead — acceptable for some use cases, prohibitive for most.
+
+Censorship resistance suffers from a related class of problems. Where validators or sequencers can observe transaction contents before ordering, they can selectively exclude transactions based on origin, destination, or content. Most chains delegate this resistance to validator-set decentralisation rather than addressing it cryptographically.
+
+### 1.1.4 Stateless verification and accessibility
+
+The Ethereum Foundation's "Verge" roadmap targets a chain that can be verified by stateless clients carrying only cryptographic witnesses, enabled by Verkle trees and EIP-4444-style history expiry. As of July 2025, partial history expiry has begun rolling out across Ethereum execution clients. Mina Protocol, by contrast, has demonstrated since 2021 that recursive zero-knowledge proofs can compress the entire chain history into a constant-size proof verifiable on consumer devices, including smartphones.
+
+The trade-off has been throughput: Mina prioritises succinctness over transaction volume. The combination of recursive verification *and* high throughput has not been demonstrated in a production system.
+
+### 1.1.5 Account abstraction
+
+Native account abstraction — where every account is a smart contract with programmable validation logic — is an established pattern on newer Layer 1 and Layer 2 chains including zkSync Era, StarkNet, and Aptos. Ethereum's ERC-4337, deployed in March 2023, achieves similar functionality through an out-of-protocol bundler architecture, with Ethereum's EIP-7702 (Pectra upgrade, May 2025) providing a hybrid path. Native implementations are simpler, more efficient, and treat all transactions uniformly, but require account abstraction to be designed into the chain at genesis rather than added later.
+
+### 1.1.6 Post-quantum cryptography
+
+The National Institute of Standards and Technology finalised post-quantum signature standards in August 2024: ML-DSA (FIPS 204, formerly CRYSTALS-Dilithium), SLH-DSA (FIPS 205, formerly SPHINCS+), and the forthcoming FN-DSA (FIPS 206, formerly Falcon). Recent benchmarks demonstrate that ML-DSA verification at security level 5 takes approximately 0.14 milliseconds on ARM-based laptops, compared to 0.88 milliseconds for ECDSA — meaning post-quantum signatures are not merely *acceptable* in performance terms but *superior* at the security levels relevant to long-term consensus security.
+
+Despite this, no major chain has launched with post-quantum signatures as a default option. Polkadot has published a migration roadmap; Solana has run a Dilithium testnet with Project Eleven as of December 2025; both will require eventual hard forks to migrate user account keys. The cost of retrofitting post-quantum cryptography onto a deployed chain is significant; the cost of including it from genesis is negligible.
+
+### 1.1.7 Credible neutrality
+
+Bitcoin and Monero stand alone as programmable-money systems with credibly neutral governance. Both have no foundation that controls protocol direction, no on-chain governance mechanism that can be captured, and no admin keys. Protocol changes require social consensus expressed through node operators voluntarily upgrading client software. This property — that no party, including the original creators, can unilaterally modify the protocol — is what allows users to commit large amounts of value to these systems with confidence that the rules will not change adversarially.
+
+Every chain that has launched with a foundation, treasury, or on-chain governance system has, by construction, sacrificed this property. Even chains with strong technical merits (Ethereum, Solana, Sui, Aptos) have foundations that, while behaving responsibly to date, retain the *capability* to coordinate protocol changes that users may not want. This capability is permanent once established. Once a chain has a foundation, it cannot be removed — the chain's history is bound to the foundation's existence.
+
+A chain that wishes to be credibly neutral must commit to it at genesis. There is no path from "centrally-stewarded" to "credibly neutral" once the chain is running.
+
+## 1.2 The gap
+
+Each property described above is, in isolation, well understood and demonstrated in production:
+
+| Property | Best demonstrated by | Year |
+|----------|----------------------|------|
+| 200k+ TPS, sub-second finality | Mysticeti / Sui | 2024 |
+| Programmable privacy | Aztec | 2025 |
+| Encrypted mempool (in production) | Shutter / Gnosis | 2024 |
+| Phone-verifiable chain | Mina | 2021 |
+| Native account abstraction | zkSync Era, StarkNet, Aptos | 2022–2024 |
+| Post-quantum signatures | NIST standardisation | 2024 |
+| Credible neutrality | Bitcoin, Monero | 2009, 2014 |
+
+No single chain in the present landscape combines more than three of these properties. The chains that combine *credible neutrality* with anything else (Bitcoin, Monero) lack programmability and high throughput. The chains that combine *programmable privacy* with anything else (Aztec, Aleo) lack the throughput tier and the credibly neutral governance. The high-throughput chains (Sui, Solana, Aptos, Monad) have neither default privacy nor credibly neutral governance.
+
+This is the gap Adamant is designed to fill. The protocol's contribution is not the invention of new cryptographic primitives — those are taken from peer-reviewed literature unchanged — but the systems-level synthesis of these properties into a single coherent architecture, with credible neutrality enforced at genesis and the technical architecture chosen to be compatible with that neutrality.
+
+## 1.3 The thesis
+
+Adamant exists for users and applications that require properties no other chain currently provides. The design assumption is that such users and applications exist and that their number is growing. They include:
+
+- **Individuals in jurisdictions with restrictive financial controls.** Privacy-by-default with selective disclosure allows compliance with legitimate legal requirements (tax filing, audit cooperation) without the wholesale exposure of financial history that transparent chains require.
+
+- **Decentralised exchange users facing systematic value extraction.** Threshold-encrypted mempools eliminate the structural conditions that enable front-running and sandwich attacks, returning to users the value currently extracted by sophisticated arbitrageurs.
+
+- **Long-lived contractual arrangements.** Wills, trusts, escrows, and inheritance arrangements that must outlive their creators by decades require a chain whose rules cannot be modified by future political pressure on a foundation.
+
+- **Sovereign-grade applications.** Voting systems, identity registries, and public-record applications where the absence of an off switch is the central security property.
+
+- **Treasury-grade asset custody.** Institutions and individuals holding significant assets on-chain face a class of risks specific to chains with foundations: foundation capture, foundation insolvency, foundation legal action, and foundation-coordinated upgrades that change asset behavior. Adamant eliminates these risks by construction.
+
+- **Stablecoin payments at consumer scale.** The combination of sub-second finality, sub-cent fees, and default privacy enables stablecoin payments to behave like contemporary digital payment networks while preserving the properties that make them useful — global accessibility, censorship resistance, and self-custody.
+
+This is not a "world computer" pitch. Adamant does not aim to host every application, displace every blockchain, or serve every user. The design optimises for users who need credible neutrality, privacy, speed, and verifiability *together*; users who do not need all of these are well served by existing chains and need not migrate.
+
+## 1.4 What this whitepaper is and is not
+
+This document specifies the Adamant protocol in detail sufficient to implement it. It is a technical reference, not a marketing document; claims that cannot be substantiated technically have been removed from this draft and will not be added in subsequent revisions.
+
+It does not include:
+
+- Token price predictions or projections
+- Roadmap commitments beyond the protocol specification itself
+- Comparisons to specific competing chains beyond the analytical context required to motivate design decisions
+- Endorsements of specific applications, validator services, wallets, or third-party software
+
+It does include:
+
+- Normative protocol requirements (sections 3–11)
+- Justifications for non-obvious design decisions
+- Identification of open problems and known limitations
+- The genesis state and constitutional commitments that define the chain's permanent properties (section 11)
+
+Subsequent sections assume familiarity with elementary blockchain concepts (transactions, validators, consensus, state). Specialist concepts (DAG consensus, zero-knowledge proofs, threshold encryption, post-quantum signatures) are introduced when first used.
+
+The protocol specified here is intended to be implemented exactly once: at genesis. After genesis, the specification is frozen. Section 11 makes this commitment formally.
+
+
+# 2. Design Principles
+
+This section establishes the principles that constrain every subsequent design decision in this document. These principles are not aspirational; they are normative. Where a technical choice in later sections must be made between alternatives, the alternative more consistent with the principles below `MUST` be chosen, even at the cost of performance, convenience, or developer experience.
+
+These principles are also the basis on which proposed changes to this specification will be evaluated. A proposal that improves throughput at the cost of credible neutrality will be rejected. A proposal that improves developer ergonomics at the cost of privacy by default will be rejected. The principles take precedence over their consequences.
+
+There are seven principles. They are listed in priority order: where two principles conflict, the higher principle prevails.
+
+## 2.1 Principle I: Credible neutrality
+
+**The protocol `MUST NOT` admit any party with the unilateral capability to alter its operation.**
+
+Concretely, this principle requires:
+
+1. **No on-chain governance.** The protocol `MUST NOT` include any mechanism by which any quorum of token holders, validators, or other participants can alter consensus rules, the virtual machine, the issuance schedule, the validity logic, or any other consensus-critical parameter.
+
+2. **No foundation, treasury, or admin keys.** No key, multisig, or signing authority `MAY` exist with the capability to modify protocol behavior, freeze state, censor transactions, or unilaterally upgrade clients.
+
+3. **No premine or founder allocation.** The genesis state `MUST NOT` allocate the native token to the original implementers, contributors, advisors, investors, or any party associated with the protocol's creation. Token issuance begins at genesis through mechanisms specified in section 10.
+
+4. **Forks require individual opt-in.** Changes to consensus rules require the publication of new client software which node operators `MUST` individually choose to run. There is no mechanism by which a node automatically upgrades, no upgrade key controlled by any party, and no on-chain coordination of upgrades.
+
+5. **No protected contracts or precompiles favouring the implementers.** All contracts, addresses, and accounts on the chain are subject to identical rules. The protocol `MUST NOT` include precompiled contracts, system contracts, or built-in addresses that grant special privileges to any party.
+
+The intent of this principle is the property colloquially expressed as "the chain has no master." Its precise meaning is: any participant in the protocol can verify, at any time, that no other participant possesses asymmetric capability to alter the protocol's operation.
+
+This principle is the most important in this document. It is the property that distinguishes Adamant from the chains it shares technical features with. Every other principle is subordinate to it.
+
+### 2.1.1 Discussion
+
+This principle is uncomfortable. It commits the protocol to permanent rules that cannot be changed if circumstances reveal them to be suboptimal. It eliminates the safety net that on-chain governance provides for emergency response. It places the entire burden of "getting it right" on the genesis specification.
+
+These are real costs. The protocol accepts them because the alternative — retaining the *capability* to change protocol rules — is itself the property that this principle exists to prevent. A capability cannot be conditionally exercised; it can only be present or absent. A foundation that promises never to use its emergency powers is, with respect to the credible-neutrality property, indistinguishable from a foundation that uses them every week. Users protecting against worst-case adversaries must assume the capability will be exercised.
+
+The historical evidence supports this principle. Bitcoin's protocol has remained substantively unchanged for over fifteen years, and the changes that have occurred (SegWit, Taproot) have required years of social consensus expressed through individual node-operator opt-in. This stability has been the foundation of Bitcoin's role as a settlement layer. The chains that have permitted easy protocol modification (most of them) have produced histories of contested upgrades, foundation-driven changes that some users opposed, and ongoing governance overhead. The trade-off is clear and Adamant chooses Bitcoin's side of it.
+
+## 2.2 Principle II: Privacy by default
+
+**Transactions on the protocol `MUST` be private by default. Users `MUST` retain the ability to selectively disclose specific information to specific parties through cryptographically verifiable means.**
+
+Concretely:
+
+1. **Default shielded execution.** The default transaction format on the protocol `MUST` conceal the sender, the recipient, the amount, and the contract execution details from observers other than the parties to the transaction.
+
+2. **Selective disclosure.** Users `MUST` be able to generate verifiable proofs that disclose specific facts about their transactions or balances (for example, "I sent at least X to address Y between dates D1 and D2") without disclosing other facts.
+
+3. **No backdoor decryption.** The protocol `MUST NOT` include any mechanism by which any party — including governments, the original implementers, or quorums of validators — can decrypt private transaction data without the cooperation of the transacting parties.
+
+4. **Optional transparency.** Users `MAY` opt their transactions into transparent execution where the use case requires it (for example, public charitable donations, public bounties, or transparency-required regulatory contexts). Transparency is a per-transaction choice, not a chain-wide default.
+
+5. **View keys.** The account model `MUST` support delegated view keys allowing third parties (auditors, accountants, regulators with legitimate authority) to observe a user's transaction history without granting spending authority.
+
+### 2.2.1 Discussion
+
+Privacy by default is the principle most likely to attract regulatory hostility, and the protocol does not attempt to disguise this. The justification is that the alternative — transparent-by-default with optional privacy — produces a worse outcome for both legitimate privacy and legitimate regulation. When privacy is opt-in, using the privacy feature itself becomes evidence of suspicious behavior; legitimate users avoid it for reputational reasons; the only users left in the privacy pool are those for whom privacy is essential, which makes that pool a prime target for regulatory pressure. When privacy is the default, no such inference can be drawn from the use of privacy features, and the cryptographic anonymity set comprises the entire chain rather than a self-selected subset.
+
+The selective disclosure mechanism is the protocol's answer to the regulatory question. Users can prove compliance with specific obligations (income reporting, sanctions screening, anti-money-laundering due diligence) without exposing unrelated transaction history. This is a stronger compliance posture than transparent chains offer, which expose all transaction history to all observers indefinitely.
+
+## 2.3 Principle III: Verifiability without trust
+
+**Any participant `MUST` be able to verify the correctness of the protocol's operation using only consumer-grade hardware, without trusting any third party.**
+
+Concretely:
+
+1. **Phone-verifiable verification.** A modern smartphone `MUST` be capable of verifying the entire chain history's validity in time bounded by a small constant, regardless of the chain's age or transaction count.
+
+2. **No light-client trust assumptions.** Verification `MUST NOT` require trusting a node, a committee, or a federation. Verification is cryptographic, not statistical.
+
+3. **Recursive proofs.** The protocol `MUST` produce a recursive zero-knowledge proof attesting to the validity of all transactions and state transitions from genesis to the current head. This proof is the canonical verification artifact.
+
+4. **Open verification.** Verification software `MUST` be free, open-source, and runnable without permission. Users do not need to register, identify themselves, or pay to verify the chain.
+
+### 2.3.1 Discussion
+
+This principle exists because the value of credible neutrality is realised only when individual users can verify it. A chain that is technically neutral but practically requires trusting a hosted node is, from the user's perspective, a chain that requires trust in the node operator. The combination of credible neutrality (Principle I) and unverifiable operation in practice (the historical norm) has been one of the central usability failures of the blockchain ecosystem.
+
+Recursive zero-knowledge proofs, demonstrated in production by Mina Protocol since 2021, make this principle achievable in 2026 in a way that was not possible at Bitcoin's launch. The protocol takes advantage of this technological maturity to make verifiability a first-class property rather than an aspiration.
+
+## 2.4 Principle IV: Performance sufficient for use
+
+**The protocol `MUST` provide throughput, latency, and cost properties consistent with practical use as a payment network and smart-contract platform.**
+
+Concretely:
+
+1. **Throughput target.** The protocol `MUST` sustain at least 200,000 transactions per second on a single shard at the design target hardware specification (specified in section 8).
+
+2. **Finality target.** The protocol `MUST` provide finality for transactions that do not require shared-state consensus (simple transfers, owned-object operations) within approximately 500 milliseconds at design throughput.
+
+3. **Cost target.** The base fee for a simple transfer at design throughput `MUST` be on the order of $0.0001 USD-equivalent or less, computed at the fee model specified in section 10.
+
+4. **Phone-friendly proving.** Where users generate zero-knowledge proofs locally, proof generation `MUST` complete in time tolerable for interactive use on consumer mobile hardware (target: 10 seconds or less for typical operations).
+
+### 2.4.1 Discussion
+
+This principle is fourth in priority because it is subordinate to neutrality, privacy, and verifiability. The protocol declines performance gains that would require concessions on those properties. However, performance is not an aesthetic preference; it is the difference between a protocol used in production and a protocol used in research papers. The targets above are calibrated to the threshold below which usability suffers materially.
+
+The 200,000 TPS target derives from the demonstrated throughput of Mysticeti consensus in production. The 500ms finality target derives from the same source. The $0.0001 cost target derives from the observation that fees significantly above this level discourage routine micropayments and limit the protocol's usefulness for payment applications.
+
+The protocol does not commit to higher targets (millions of TPS, single-millisecond finality, zero fees). These targets either require unproven engineering, centralised operation, or both. The protocol's performance commitments are intended to be deliverable rather than aspirational.
+
+## 2.5 Principle V: Mutability is a property of objects, not the chain
+
+**The chain's consensus rules `MUST` be immutable. Objects living on the chain `MAY` declare their own mutability rules at creation, and those declarations `MUST` themselves be immutable and visible to users before interaction.**
+
+Concretely:
+
+1. **Chain-level immutability.** Consensus rules, the virtual machine, validity logic, and the issuance schedule `MUST NOT` be modifiable by any on-chain mechanism after genesis.
+
+2. **Object-level mutability declarations.** Smart contracts and other on-chain objects `MUST` declare a mutability policy at creation. The policy is itself immutable: a contract created with `IMMUTABLE` mutability `MUST NOT` ever become mutable, and a contract created with a particular upgrade mechanism `MUST NOT` ever change to a different upgrade mechanism.
+
+3. **Standard mutability policies.** The protocol `MUST` provide and document standard mutability policies including at minimum:
+   - `IMMUTABLE` — the contract is permanently fixed
+   - `OWNER_UPGRADEABLE` — a designated owner key may upgrade
+   - `VOTE_UPGRADEABLE` — token holders of a specified token may vote on upgrades subject to specified thresholds
+   - `UPGRADEABLE_UNTIL_FROZEN` — the contract is upgradeable until the owner calls a freeze operation, after which it is permanently `IMMUTABLE`
+   - `CUSTOM` — the contract specifies its own upgrade logic at deployment
+
+4. **User-visible declarations.** The mutability policy of any contract `MUST` be queryable by any user before interaction. Wallets and clients `SHOULD` display the mutability policy prominently.
+
+5. **No proxy-pattern hiding.** The protocol `MUST NOT` permit upgradeability mechanisms that conceal themselves from users. A contract whose code can be replaced through any mechanism `MUST` be tagged as upgradeable in the user-visible declaration.
+
+### 2.5.1 Discussion
+
+This principle resolves the apparent tension between the immutability of credible neutrality and the practical need for some application-level evolution. The chain itself does not change; what lives on the chain may, but only on terms its creator declared and its users accepted at the time of interaction.
+
+The status quo on existing smart-contract chains is a footgun. Proxy patterns allow contract code to be replaced under the user's feet without explicit warning, and the practice has produced repeated incidents in which users believed they were interacting with immutable code that was, in fact, controlled by an upgrade key. Adamant's mutability declarations make this property explicit and visible, allowing users to make informed decisions about which contracts they trust and on what terms.
+
+## 2.6 Principle VI: Standard primitives, novel synthesis
+
+**The protocol `MUST` use standard, peer-reviewed cryptographic primitives. The protocol `MUST NOT` introduce novel cryptographic constructions.**
+
+Concretely:
+
+1. **Standard primitives only.** Hash functions, signature schemes, encryption schemes, zero-knowledge proof systems, and other cryptographic building blocks `MUST` be drawn from peer-reviewed literature with substantial implementation history.
+
+2. **Specific primitives.** The protocol uses Ed25519 and ML-DSA (FIPS 204) for signatures, BLS12-381 for signature aggregation, SHA-3 for hashing, Halo 2 for zero-knowledge proofs, and standard threshold encryption constructions for the encrypted mempool. These are specified in detail in section 3.
+
+3. **No "rolled" cryptography.** The protocol's reference implementation `MUST NOT` include hand-rolled implementations of cryptographic primitives. It uses well-maintained, audited libraries (`dalek` ecosystem, `arkworks`, `blst`, `ml_dsa`) and contributes upstream where improvements are required.
+
+4. **Innovation at the systems layer.** The protocol's contribution is the synthesis of these primitives into a coherent architecture. New properties emerge from the combination, not from new primitives.
+
+### 2.6.1 Discussion
+
+This principle is intended to forestall a common failure mode. The history of cryptocurrency includes a substantial subset of projects whose authors, persuaded that their problem domain required novel cryptography, produced novel cryptography that turned out to be insecure. Where the protocol's value depends on cryptographic correctness — and Adamant's value depends on it absolutely — the appropriate posture is conservative.
+
+This does not constrain the protocol's ambition. The properties Adamant aims to deliver are achievable with existing primitives; what has been missing is the engineering effort to combine them. That engineering is the protocol's contribution.
+
+## 2.7 Principle VII: Permissionless participation
+
+**Participation in the protocol `MUST NOT` require permission from any party.**
+
+Concretely:
+
+1. **Permissionless validation.** Anyone meeting the published technical requirements `MUST` be able to operate a validator without obtaining permission from any existing participant.
+
+2. **Permissionless transaction submission.** Anyone `MUST` be able to submit transactions without registering, identifying themselves, or obtaining permission.
+
+3. **Permissionless development.** Anyone `MUST` be able to deploy contracts and applications without obtaining permission. Contracts are not subject to whitelisting, audit-gating, or other permission gates at the protocol level. (Higher-layer applications may impose their own access controls.)
+
+4. **Permissionless verification.** Anyone `MUST` be able to verify the chain's operation without obtaining permission. Verification software is open-source and runnable without registration.
+
+5. **No identity requirements.** The protocol `MUST NOT` require, store, or rely on real-world identity information for any of its operations. Compliance with identity-related regulation is the responsibility of higher-layer applications.
+
+### 2.7.1 Discussion
+
+Permissionless participation is the operational complement to credible neutrality (Principle I). A chain whose protocol cannot be modified but whose validator set is permissioned is not credibly neutral; the permission-grantor retains effective control. This principle ensures that the absence of an on-chain governance mechanism (Principle I) is not undermined by an off-chain permission gate.
+
+## 2.8 The principles in conflict
+
+These principles will, at points, conflict. When they do, they resolve in priority order:
+
+1. Credible neutrality (Principle I) takes precedence over all others.
+2. Privacy by default (Principle II) takes precedence over Principles III–VII.
+3. Verifiability (Principle III) takes precedence over Principles IV–VII.
+4. Performance (Principle IV) takes precedence over Principles V–VII.
+5. Mutability-as-property (Principle V) takes precedence over Principles VI–VII.
+6. Standard primitives (Principle VI) takes precedence over Principle VII.
+
+In practice, the principles harmonise in the design that follows. This priority order is provided to resolve cases where reasonable people might disagree, including future cases that this document's authors have not anticipated.
+
+## 2.9 What these principles exclude
+
+For clarity, these principles exclude the following from the protocol:
+
+- Any form of on-chain governance, including parameter governance for "non-critical" values
+- Any treasury, foundation account, or community fund existing at the protocol level
+- Any "ecosystem support" allocation in the genesis state
+- Any kill-switch, circuit breaker, or pause mechanism, regardless of which party would operate it
+- Any ability for the original implementers to claim rewards beyond their participation in genesis distribution mechanisms specified in section 10
+- Any KYC, AML, or identity-verification requirements at the protocol layer
+- Any precompiles, system contracts, or built-in addresses that grant privileged behavior to specific parties
+
+These exclusions are normative. A future revision of this whitepaper that proposes to add any of the above features would, by definition, be specifying a different protocol — not a revised Adamant.
+
+The remainder of this document specifies how a protocol meeting these principles is constructed.
+
+
+# 3. Cryptographic Foundation
+
+This section specifies every cryptographic primitive used by the Adamant protocol. It is the foundation on which all other sections depend: the consensus mechanism, the privacy layer, the encrypted mempool, the identity system, and the recursive verification all rest on the primitives specified here.
+
+The protocol's guiding principle for cryptography is stated in Principle VI of section 2: standard primitives, novel synthesis. This section operationalises that principle. Every primitive is drawn from peer-reviewed literature with substantial implementation history. No primitive is novel to Adamant. Where multiple peer-reviewed alternatives exist, the rationale for the chosen primitive is explicit and the alternatives are documented.
+
+This section is normative. The reference implementation `MUST` use the primitives, parameters, and libraries specified here. Substitution requires a formal specification revision under the procedure described in section 12.
+
+## 3.1 Threat model
+
+The protocol's cryptographic design assumes the following adversary capabilities:
+
+1. **Classical computational adversary.** An adversary with computational resources up to but not exceeding those plausibly available to a well-resourced nation-state through approximately 2040, on classical computing hardware. The protocol targets at least 128-bit classical security across all primitives.
+
+2. **Network adversary.** An adversary that can observe, modify, delay, drop, and inject network traffic at any point in the public internet. The protocol assumes no confidentiality or integrity from the underlying network and provides both at the cryptographic layer.
+
+3. **Quantum adversary (long-term).** An adversary with a sufficiently large fault-tolerant quantum computer to execute Shor's algorithm against elliptic-curve and integer-factorisation problems. The protocol assumes such an adversary may exist at some point during the operational lifetime of the chain (potentially within 10–25 years of genesis) and provides a migration path to post-quantum primitives that does not require a hard fork.
+
+4. **Compromised validators (Byzantine).** Up to one-third of validators by stake may be Byzantine — actively malicious, colluding, or compromised — without violating safety guarantees. This is the standard assumption for Byzantine-fault-tolerant consensus and is enforced at the consensus layer (section 8); cryptographic primitives are required to remain secure under arbitrary validator behaviour.
+
+5. **Compromised user devices.** The protocol assumes that user devices may be compromised. Primitives that protect users (signing, encryption) `SHOULD` be amenable to use within hardware security modules, secure enclaves, and hardware wallets where available, but the protocol does not depend on hardware security for its core safety properties.
+
+The protocol does **not** defend against:
+
+- An adversary with sufficient quantum computing resources to break ML-DSA, ML-KEM, or other lattice-based primitives at the parameters specified in this section. Such an adversary would constitute a fundamental break of post-quantum cryptography, the consequences of which would extend beyond any individual blockchain.
+- An adversary capable of compromising more than one-third of validators by stake. Adamant's safety guarantees are conditioned on this threshold; an adversary above this threshold can violate safety regardless of cryptographic correctness.
+- An adversary with physical access to a user's device and unencrypted secret material. The protocol assumes users protect their secret keys; key management is the user's responsibility.
+
+## 3.2 Cryptographic primitives summary
+
+The protocol uses five categories of cryptographic primitives, summarised here and specified in detail in subsequent subsections.
+
+| Category | Primitive | Standard / source | Use |
+|----------|-----------|-------------------|-----|
+| Hash function | SHA3-256, SHAKE-256 | FIPS 202 | All chain hashing, transaction identifiers, Merkle trees |
+| Hash to curve | BLAKE3 (auxiliary), Poseidon (zk circuits) | BLAKE3 spec; Grassi et al. 2020 | Auxiliary hashing, zk-friendly hashing inside circuits |
+| Classical signature | Ed25519 | RFC 8032 | User signatures, validator signatures (classical layer) |
+| Post-quantum signature | ML-DSA (CRYSTALS-Dilithium) | FIPS 204 | User signatures, validator signatures (PQ layer) |
+| Aggregate signature | BLS12-381 (BLS signatures) | IRTF CFRG draft, BLS12-381 curve | Validator vote aggregation |
+| Symmetric encryption | ChaCha20-Poly1305 | RFC 8439 | Transport encryption, mempool envelope |
+| Threshold encryption | Boneh-Lynn-Shacham threshold scheme on BLS12-381 | Boneh, Boyen, Shacham 2004; subsequent work | Encrypted mempool |
+| Zero-knowledge proofs | Halo 2 (PLONKish, no trusted setup) | Bowe, Grigg, Hopwood 2019 | Shielded execution, recursive verification |
+| Vector commitments | KZG commitments on BLS12-381 | Kate, Zaverucha, Goldberg 2010 | State commitments, proof aggregation |
+
+Each primitive is justified and parameterised below.
+
+## 3.3 Hash functions
+
+### 3.3.1 Primary hash: SHA3-256 and SHAKE-256
+
+The protocol's primary hash function is SHA3-256 for fixed-output hashing and SHAKE-256 for extensible-output hashing, both as standardised in FIPS 202.
+
+**Rationale.** SHA3 is a Keccak-derived hash function selected by NIST through an open competition (2007–2012) and standardised in 2015. It has a fundamentally different internal construction from the SHA-2 family (sponge construction vs. Merkle–Damgård), providing diversity against the unlikely event of a structural attack on SHA-2. It has no known attacks reducing security below the 128-bit collision-resistance level at the SHA3-256 parameter. Hardware acceleration is increasingly available (ARM v8.4-A includes SHA3 instructions; x86-64 implementations via SSE/AVX achieve >1 GB/s throughput on modern processors).
+
+**Parameters.** SHA3-256 produces 256-bit output, providing 128-bit collision resistance and 256-bit preimage resistance. SHAKE-256 produces output of arbitrary length with the same security level.
+
+**Domain separation.** All uses of SHA3-256 and SHAKE-256 within the protocol `MUST` use domain separation. The protocol uses the **BIP-340 tagged-hash construction** (Bitcoin Improvement Proposal 340, deployed in Bitcoin Taproot, November 2021), adapted to SHA3:
+
+```
+tagged_hash_sha3(tag, input)   = SHA3-256( SHA3-256(tag) || SHA3-256(tag) || input )
+tagged_shake(tag, input, len)  = SHAKE-256( SHA3-256(tag) || SHA3-256(tag) || input, len )
+```
+
+where `tag` is a domain identifier of the form `b"ADAMANT-v1-<context>"` and `input` is the data being hashed. The tag prefix is **always** `SHA3-256(tag)`, regardless of whether the body uses SHA3-256 or SHAKE-256. This uniformity means each registered tag has exactly one canonical 32-byte prefix, computed once and cached, usable across both hash variants.
+
+Naive concatenation (`tag || input`) is insufficient because it admits prefix collisions: with variable-length tags, a tag like `ADAMANT-v1-block` followed by input `_hash` || X produces the same byte string as tag `ADAMANT-v1-block_hash` followed by input X, causing the hash function to produce identical outputs for what should be domain-separated operations. The BIP-340 construction eliminates this by binding the tag through a fixed-size hash commitment.
+
+The construction has the following properties:
+
+- **Collision-resistant across tags.** Finding two distinct tags `t1 ≠ t2` and inputs `i1`, `i2` such that `tagged_hash_sha3(t1, i1) == tagged_hash_sha3(t2, i2)` requires finding a SHA3-256 collision. The protocol's domain separation inherits the security of SHA3-256 directly.
+- **Length-agnostic for tags.** Tags may be any byte string; no length cap is imposed and no length field is encoded.
+- **Production-validated.** The doubled-tag-prefix construction has been deployed at production scale in Bitcoin since 2021 and is the de facto standard for hash-based domain separation in modern cryptographic protocols.
+- **Negligible runtime cost.** The cached `SHA3-256(tag)` is computed once per registered tag and reused. Each domain-separated hash costs one additional 64-byte absorb relative to a tag-less hash — invisible at any throughput the protocol targets.
+
+All tags are specified in the centralised registry maintained by the reference implementation (`crates/adamant-crypto/src/domain.rs`). Tags have the format `b"ADAMANT-v1-<context>"` where `<context>` identifies the specific use. Adding, removing, or renaming a tag is a consensus rule change and follows the procedure in section 3.10.
+
+**Worked example:**
+
+```
+tag    = b"ADAMANT-v1-object-id"
+input  = creation_tx_hash || creator_address || creation_index
+
+prefix = SHA3-256(tag)       // 32 bytes; fixed for this tag, computed once
+
+tagged_hash_sha3(tag, input)
+  = SHA3-256( prefix || prefix || creation_tx_hash || creator_address || creation_index )
+```
+
+This construction is `MUST`-required for any SHA3-256 or SHAKE-256 use that is consensus-critical. Non-consensus-critical hashing (for example, peer-to-peer message integrity checks where collisions across contexts are not security-relevant) `MAY` use plain SHA3 or SHAKE without the tagged-hash wrapper, though the centralised registry pattern is `RECOMMENDED` even there for consistency.
+
+**Library.** The reference implementation uses the `sha3` crate from RustCrypto, which provides constant-time implementations and is widely audited.
+
+### 3.3.2 Auxiliary hash: BLAKE3
+
+BLAKE3 is used as an auxiliary hash function for performance-sensitive paths where collision-resistance security at 128 bits suffices and where SHA3 would be a measurable bottleneck.
+
+**Rationale.** BLAKE3, published in 2020, is built on the Bao tree-hashing construction over a Merkle-tree-friendly internal compression function. It is significantly faster than SHA3 in software (typically 5–10x on commodity hardware) and is naturally parallelisable. Specific uses include: peer-to-peer message integrity checks where the message is large and the security context permits a faster primitive; streaming hashes during block propagation; and content-addressed storage of historical chain data.
+
+**Parameters.** BLAKE3 produces 256-bit output by default, with extensible-output mode for arbitrary lengths. The protocol uses 256-bit output throughout.
+
+**Constraint.** BLAKE3 `MUST NOT` be used for any of the following: transaction identifiers, state commitments, signature inputs, consensus-critical hashes. These uses require SHA3-256 to maintain protocol-wide hash-function uniformity. BLAKE3 is exclusively for non-consensus-critical performance paths.
+
+**Library.** The reference implementation uses the `blake3` crate.
+
+### 3.3.3 zk-friendly hash: Poseidon
+
+Inside zero-knowledge circuits, the protocol uses the Poseidon hash function. Poseidon is designed for efficient evaluation in arithmetic circuits over large prime fields, where SHA3 and BLAKE3 are prohibitively expensive (a single SHA3 invocation requires hundreds of thousands of constraints in a SNARK circuit; a single Poseidon invocation requires hundreds).
+
+**Rationale.** Poseidon was designed by Grassi, Khovratovich, Rechberger, Roy, and Schofnegger (2020) specifically for zk-friendly hashing. It has been adopted by Filecoin, Mina, and Aztec, providing extensive deployment evidence. Cryptanalytic effort against Poseidon has been substantial, with no attacks reducing security below the 128-bit level at the parameters used.
+
+**Parameters.** The protocol uses Poseidon with the following parameters: prime field of order equal to the BLS12-381 scalar field (255 bits), state width of 3 field elements (rate 2, capacity 1), 8 full rounds and 57 partial rounds. These parameters provide approximately 128-bit security against differential and algebraic attacks.
+
+**Constraint.** Poseidon is used only inside zk circuits. It `MUST NOT` be used for general protocol hashing outside circuits. Hashes that cross the circuit/non-circuit boundary use both Poseidon (inside the circuit) and SHA3-256 (outside), with the circuit proving consistency between the two representations.
+
+**Library.** The reference implementation uses the Poseidon implementation from `halo2_gadgets` (zcash variant).
+
+## 3.4 Signature schemes
+
+The protocol supports two signature schemes for user and validator signatures: Ed25519 (classical) and ML-DSA (post-quantum). Both are first-class. Accounts may use either or both, as specified in section 4.
+
+### 3.4.1 Classical signatures: Ed25519
+
+Ed25519 is the protocol's classical signature scheme. It is specified in RFC 8032 and is the most widely deployed elliptic-curve signature scheme in modern cryptographic systems.
+
+**Rationale.** Ed25519 provides 128-bit classical security, has no patent encumbrance, supports deterministic signing (eliminating the catastrophic key-recovery vulnerability that affects ECDSA when the per-signature randomness is reused or biased), and is implementable in fully constant time. Every major modern operating system, secure element, and HSM supports it. Performance is excellent: signing and verification both take well under one millisecond on commodity hardware.
+
+**Parameters.** As specified in RFC 8032: the Edwards curve `edwards25519`, hash function SHA-512 internally (a deliberate choice in the original Ed25519 design that is independent of the protocol's preference for SHA3 elsewhere), 256-bit private keys, 32-byte public keys, 64-byte signatures.
+
+**Note on hash choice.** Ed25519 internally uses SHA-512 as part of its specification; this is a fixed property of the scheme and not a protocol choice. The protocol does not modify Ed25519's internal hash. Protocol-level hashing of Ed25519 keys and signatures (for example, computing a hash commitment to a public key) uses SHA3-256.
+
+**Library.** The reference implementation uses `ed25519-dalek` from the `dalek-cryptography` ecosystem, which provides constant-time, audited, no-`unsafe` implementations.
+
+### 3.4.2 Post-quantum signatures: ML-DSA
+
+ML-DSA (Module-Lattice-Based Digital Signature Algorithm) is the protocol's post-quantum signature scheme. It is standardised in FIPS 204, finalised in August 2024 by NIST. It is the lattice-based scheme formerly known as CRYSTALS-Dilithium.
+
+**Rationale.** ML-DSA is one of three post-quantum signature schemes selected by NIST through a multi-year open competition (2017–2022). It provides security under standard lattice problem assumptions (Module Learning With Errors, Module Short Integer Solution) and has been the subject of extensive cryptanalysis without significant security degradation. Recent benchmarks (October 2025, arXiv 2510.09271) demonstrate that ML-DSA verification at security level 5 is approximately 0.14 milliseconds on ARM-based laptops — faster than ECDSA at 0.88 milliseconds. ML-DSA is therefore not a performance compromise; at the security levels relevant to long-term consensus, it is a performance improvement.
+
+**Parameters.** The protocol uses **ML-DSA-65** (security level 3, equivalent to AES-192 or SHA-384 collision resistance), providing 192-bit classical security and approximately 128-bit security against quantum attack. Public keys are 1952 bytes; signatures are 3309 bytes. This is significantly larger than Ed25519 but acceptable for the protocol's per-transaction and per-vote cost budget.
+
+The signature size reflects FIPS 204 (final, August 2024). The CRYSTALS-Dilithium round 3 NIST PQC submission specified 3293-byte signatures for the equivalent parameter set; the standardisation process expanded the encoding by 16 bytes for the final standard. References to the round-3 size (3293 bytes) in pre-2024 literature are obsolete; the protocol uses the FIPS 204 final size throughout.
+
+**Why level 3 and not level 2 or level 5.** Level 2 (ML-DSA-44) provides 128-bit classical security, marginal in long-lived systems. Level 5 (ML-DSA-87) provides 256-bit classical security at significantly higher signature size (4627 bytes per FIPS 204 final) and computational cost. Level 3 is the appropriate balance for a chain whose lifetime is intended to be measured in decades.
+
+**Account flexibility.** Section 4 specifies an account model in which an individual account may declare itself to use Ed25519 only, ML-DSA only, or both (with both required for transactions, providing belt-and-braces security). Validators `MUST` support all three account types from genesis.
+
+**Library.** The reference implementation uses the `ml_dsa` crate from the RustCrypto project, which is the FIPS-204-compliant ML-DSA implementation. As ML-DSA implementations mature, the protocol may revise its choice of library; the algorithm choice (ML-DSA-65) is fixed.
+
+### 3.4.3 Aggregate signatures: BLS on BLS12-381
+
+The protocol uses BLS signatures on the BLS12-381 elliptic curve for validator vote aggregation in the consensus mechanism. BLS signatures support efficient aggregation: the signatures of N validators on the same message can be combined into a single signature whose verification cost is approximately constant in N.
+
+**Rationale.** BLS aggregate signatures are essential for efficient DAG-based consensus at high validator counts. Without aggregation, each consensus vertex would carry hundreds of individual signatures, exhausting block bandwidth before useful payload. BLS allows a single aggregate signature to attest to validator votes at minimal marginal cost.
+
+**Parameters.** BLS12-381 is the Barreto-Lynn-Scott curve at the 12-degree-extension construction with the specific embedding `x = -0xd201000000010000`, providing approximately 128-bit security in the optimal-Ate pairing. This curve is the de facto standard for BLS-based blockchain applications, used by Ethereum (consensus signatures), Filecoin, Zcash (Sapling), and others. Public keys are 48 bytes (G1) or 96 bytes (G2); signatures are 96 bytes (G2) or 48 bytes (G1).
+
+The protocol uses the **G1 signature, G2 public key** variant. Signatures are smaller (48 bytes), which matters at consensus scale; public keys are larger but registered once per validator.
+
+**Domain separation.** BLS signatures use the standardised hash-to-curve operation specified in IRTF draft `draft-irtf-cfrg-hash-to-curve` with domain tag `BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_ADAMANT_v1`. Domain separation prevents signature replay across protocols and across versions of the protocol.
+
+**Quantum vulnerability.** BLS signatures, like all elliptic-curve schemes, are vulnerable to a future quantum adversary running Shor's algorithm. The protocol mitigates this by reserving BLS aggregation strictly for short-lived consensus messages: validator votes are valid only within a single epoch (specified in section 8) and are pruned after the epoch closes. A quantum adversary that breaks BLS in 2040 cannot retroactively forge consensus votes from 2030, because no one is verifying those votes any more — they have been finalised by recursive zk proofs (section 7) that do not depend on the original BLS signatures. Long-term security is provided by the ML-DSA layer; BLS provides efficiency for short-term consensus messaging.
+
+**Library.** The reference implementation uses the `blst` library from Supranational, which is the highest-performance audited BLS12-381 implementation in current use. The Rust binding is `blst-rs`.
+
+## 3.5 Symmetric encryption
+
+The protocol uses ChaCha20-Poly1305 (RFC 8439) for all symmetric authenticated encryption, including transport encryption between nodes, encrypted-mempool transaction envelopes (in conjunction with threshold key derivation, section 3.6), and encrypted user data within accounts (section 4).
+
+**Rationale.** ChaCha20-Poly1305 is an authenticated encryption with associated data (AEAD) scheme combining the ChaCha20 stream cipher (Bernstein, 2008) with the Poly1305 message authentication code (Bernstein, 2005). It is constant-time by construction (no S-box lookups, no timing-variable branches), software-efficient on platforms without AES-NI hardware acceleration (which includes most ARM mobile devices and many embedded systems), and has been deployed at internet scale through TLS 1.3, WireGuard, and SSH.
+
+The alternative, AES-256-GCM, is faster on platforms with hardware AES acceleration but slower on those without; it is also more difficult to implement in constant time without hardware support. The protocol prioritises portable performance and constant-time guarantees over peak performance on the fastest server CPUs.
+
+**Parameters.** ChaCha20-Poly1305 with 256-bit keys, 96-bit nonces, 128-bit authentication tags. Nonce-uniqueness is enforced by deriving nonces deterministically from a counter that `MUST NOT` be reused with the same key. Implementation details for nonce derivation are specified per-use in subsequent sections.
+
+**Library.** The reference implementation uses the `chacha20poly1305` crate from RustCrypto.
+
+## 3.6 Threshold encryption
+
+The encrypted mempool (section 9) uses threshold encryption built on BLS12-381. Transactions are encrypted by users such that decryption requires cooperation of a threshold of validators serving as keypers. The construction is a hashed-ElGamal threshold key encapsulation mechanism (KEM) on BLS12-381, in the Boneh-Franklin / Baek-Zheng lineage, combined with Shamir secret sharing of the master secret. The same construction is deployed in production by Shutter Network on Gnosis Chain.
+
+**High-level operation.** The validator set holds a shared master secret distributed via a distributed key generation (DKG) protocol at the start of each epoch. A user encrypts a transaction with respect to a public identifier (specifically, the consensus epoch number plus a salt). To decrypt, a threshold of validators contribute decryption shares; the shares are combined to recover a symmetric key, which is then used to decrypt the transaction's AEAD-encrypted payload. No single validator, no minority of validators, and no observer can decrypt before the threshold is reached.
+
+**Parameters.** The threshold is set at two-thirds of validators by stake, matching the consensus safety threshold. Decryption is integrated into consensus: the act of committing a consensus vertex containing an encrypted transaction simultaneously triggers the decryption-share contribution. This integration is what allows Adamant's encrypted mempool to operate at sub-second latency, in contrast to externally-coordinated systems such as Shutter Network on Gnosis Chain (current latency approximately three minutes).
+
+### 3.6.1 Cryptographic construction
+
+The protocol uses a **hashed-ElGamal threshold KEM** on BLS12-381 with the following structure.
+
+**Group orientation.** Master public key in G₂ (96 bytes compressed); decryption shares in G₁ (48 bytes compressed). This matches the BLS signature orientation in section 3.4.3 (G₁ signatures, G₂ public keys) and reuses the same hash-to-curve operation on G₁.
+
+**Domain separation.** Threshold encryption uses its own hash-to-curve domain tag, distinct from BLS signatures:
+
+```
+BLS_TE_BLS12381G1_XMD:SHA-256_SSWU_RO_ADAMANT_v1
+```
+
+This domain separation is essential to the security of the construction. A decryption share is computationally identical to a BLS signature on the same identity under the same key share — the structural identity is what makes the construction efficient and verifiable. Without domain separation, a signature produced under a validator's signing key could be used as a decryption share, opening cross-protocol forgery attacks. The TE-specific DST cryptographically separates the two operations: a value valid as a signature under the BLS DST is computationally unrelated to a value valid as a decryption share under the TE DST.
+
+**Algorithm specification.**
+
+Let `r` denote the BLS12-381 scalar field order, `g₁`, `g₂` the canonical generators of G₁ and G₂, `e: G₁ × G₂ → G_T` the optimal-Ate pairing, and `H_TE: {0,1}* → G₁` the hash-to-curve operation with the TE domain tag above.
+
+**Setup** (output of DKG specified in section 8; for testing the cryptographic primitive in isolation, a trusted-dealer Shamir secret sharing produces the same outputs).
+
+- Master secret `s ∈ Z_r` (held collectively, never reconstructed)
+- Master public key `MPK = g₂^s ∈ G₂`
+- Validator shares `s_i ∈ Z_r` via Shamir secret sharing over `Z_r`, threshold `t`
+- Public share verification keys `PK_i = g₂^{s_i} ∈ G₂` (published; allow verification of decryption shares)
+
+**Encapsulate(MPK, identity, randomness) → (header, key)**:
+
+1. `Q = H_TE(identity) ∈ G₁`
+2. Sample `ρ ← Z_r` from the supplied randomness
+3. `U = g₂^ρ ∈ G₂`  (the ciphertext header, transmitted alongside the AEAD ciphertext)
+4. `K = KDF(e(Q, MPK)^ρ, U, identity)` — 32-byte symmetric key
+5. Return `(U, K)`
+
+**DecryptionShare(s_i, identity) → D_i ∈ G₁**:
+
+`D_i = s_i · H_TE(identity)`
+
+This is structurally identical to a BLS signature under the TE DST. Validators compute and broadcast `D_i` as part of consensus.
+
+**VerifyDecryptionShare(PK_i, identity, D_i) → bool**:
+
+`e(D_i, g₂) ≟ e(H_TE(identity), PK_i)`
+
+Validators discard malformed shares before combination. This check is consensus-critical: a single malformed share fed into Lagrange interpolation produces an incorrect combined value that decrypts to garbage.
+
+**Combine({(i, D_i) : i ∈ S}) → D ∈ G₁**, where `|S| ≥ t`:
+
+`D = Σ_{i ∈ S} λ_i(0) · D_i ∈ G₁`
+
+where `λ_i(0)` is the Lagrange coefficient at `x=0` for index `i` over the set `S`, computed in `Z_r`. The result satisfies `D = s · H_TE(identity)` by the algebraic property of Shamir reconstruction in the exponent.
+
+**Decapsulate(D, header U, identity) → key**:
+
+`K = KDF(e(D, U), U, identity)`
+
+Correctness follows from bilinearity: `e(D, U) = e(s·Q, g₂^ρ) = e(Q, g₂)^{s·ρ} = e(Q, g₂^s)^ρ = e(Q, MPK)^ρ`, matching the value the encapsulator computed.
+
+**Key derivation function (KDF).** The KDF uses tagged-SHAKE-256 per the BIP-340 tagged-hash construction in section 3.3.1, with a dedicated registry tag:
+
+```
+ADAMANT-v1-threshold-kdf
+```
+
+Input absorbed: `serialise(GT_value) || serialise(U) || identity`. Output squeezed: 32 bytes. The 32-byte output is used directly as a ChaCha20-Poly1305 key (section 3.5) to encrypt and authenticate the transaction payload.
+
+The choice of GT-value serialisation follows the standard compressed encoding for BLS12-381 GT elements (576 bytes). The choice of U serialisation is the compressed G₂ encoding (96 bytes). Identity is the consensus epoch number (8 bytes, big-endian) concatenated with a per-transaction salt (32 bytes).
+
+### 3.6.2 Distributed key generation
+
+At each epoch boundary, validators run a Pedersen-style DKG to establish the new master public key and individual key shares. The DKG protocol itself is specified in section 8 alongside consensus. The specification of DKG primitives (commitment, verification) is built on KZG commitments (section 3.7.2) over BLS12-381. Phase 1 of the reference implementation provides a trusted-dealer Shamir splitter for testing the cryptographic primitive in isolation; this splitter is explicitly marked as test-only and is replaced by the production DKG when consensus is implemented.
+
+### 3.6.3 Quantum vulnerability
+
+Threshold encryption based on BLS12-381 is vulnerable to a quantum adversary, in the same way as BLS signatures. The protocol accepts this for the same reason: encrypted mempool envelopes are short-lived. A transaction is encrypted, ordered, and decrypted within a single epoch. After the epoch closes, the transaction is in the chain (in either shielded or transparent form) and the ephemeral encryption is no longer security-relevant. A quantum adversary in 2040 cannot retroactively decrypt transactions from 2030 in any meaningful sense — those transactions are already public knowledge or already finalised in zero-knowledge proofs that do not depend on the original encryption.
+
+### 3.6.4 Long-term threshold encryption
+
+If, at some future point, post-quantum threshold encryption schemes mature into production-ready form, they may be adopted via specification revision under the procedure in section 12. The protocol does not attempt to anticipate which scheme that will be.
+
+## 3.7 Zero-knowledge proofs
+
+The protocol's privacy layer (section 7) and recursive verification (section 8) use zero-knowledge succinct non-interactive arguments of knowledge (zk-SNARKs). Two specific systems are used: **Halo 2** for general-purpose proving with no trusted setup, and **KZG commitments** as a building block for vector commitments and for state commitments inside the consensus layer.
+
+### 3.7.1 General-purpose proving: Halo 2
+
+Halo 2 is a zk-SNARK proving system using the PLONK arithmetisation (Plonkish) over the Pasta curves (Pallas and Vesta), with a polynomial commitment scheme based on the inner product argument (IPA). It does not require a trusted setup ceremony.
+
+**Rationale.** Trusted setups are a structural compromise: they introduce a step in the protocol's lifecycle during which a particular set of participants holds toxic waste whose disclosure would compromise the system. Halo 2's transparent setup eliminates this. The cost is somewhat larger proof sizes and longer verification times than equivalent KZG-based systems with trusted setup. The protocol accepts this cost in exchange for the elimination of the trusted-setup compromise, which is consistent with Principle I (credible neutrality): a trusted setup is a residual centralising assumption.
+
+**Parameters.** Halo 2 is parameterised by the underlying curve and the circuit's row/column structure. The protocol uses the Pasta curves (Pallas as the primary curve, Vesta for recursion) at standard parameters. Specific circuit dimensions are specified per-use throughout the privacy and verification sections.
+
+**Recursive proof composition.** Halo 2's design supports efficient recursive proof composition through the Pasta cycle: a Pallas-curve proof can be verified in a Vesta-curve circuit and vice versa. This is the foundation of Adamant's phone-verifiable property: the entire chain history is compressed into a single recursive proof verifiable on consumer hardware.
+
+**Library.** The reference implementation uses the Halo 2 implementation maintained by the Zcash project (not the original Electric Coin Company implementation, which was deprecated; the maintained fork lives under `halo2`). This implementation is in production in Zcash's Orchard pool and is the most heavily-deployed Halo 2 implementation in existence.
+
+### 3.7.2 Vector and polynomial commitments: KZG
+
+KZG commitments (Kate, Zaverucha, Goldberg 2010) are used inside the consensus layer for state commitments and for certain operations within the encrypted mempool. KZG commitments require a trusted setup: a set of values `[g, g^τ, g^{τ^2}, …, g^{τ^n}]` for a secret `τ` that must be irrecoverably destroyed.
+
+**Justification of trusted setup.** This is the only place in the protocol where a trusted setup is used, and the use case is narrow: KZG commitments are used for fixed-size vector commitments where Halo 2's transparent commitment scheme would be unacceptably large. The trusted setup is exposed only to the size of vectors used inside consensus operations (specifically, validator-set-size vectors), not to general-purpose proving.
+
+**Mitigation: Powers of Tau.** The protocol uses the Ethereum KZG Powers of Tau ceremony output, which had over 140,000 participants between January and July 2023. The security of this setup requires that at least one participant honestly destroyed their contribution; the very large number of participants means that the assumption is violated only if every single participant was simultaneously colluding, which is implausible. The protocol's reuse of this existing ceremony output, rather than running a new one, is deliberate: it transfers all of the cryptographic confidence accumulated by Ethereum's ceremony to Adamant at no marginal cost.
+
+**Parameters.** The protocol uses KZG commitments on BLS12-381, with a trusted setup of size 2^16 (sufficient for validator sets up to approximately 65,000, well above any plausible operational set size). The specific Powers of Tau output used is documented in section 11 (genesis specification).
+
+**Library.** The reference implementation uses the KZG implementation from the `arkworks` ecosystem.
+
+## 3.8 Randomness
+
+The protocol requires randomness in several contexts, each with different properties.
+
+**Per-signature randomness.** Ed25519 is deterministic (signatures derive their randomness from the message and key, eliminating the per-signature randomness requirement). ML-DSA is also deterministic in its standard mode. The protocol uses deterministic signing throughout, eliminating any dependency on the quality of per-signature randomness sources.
+
+**Cryptographic key generation.** Users generating new keys `MUST` use a cryptographically secure random number generator (CSPRNG). The protocol does not specify the user's CSPRNG; this is a property of the user's operating system and wallet software. Reference wallet implementations use `getrandom` on Unix and `BCryptGenRandom` on Windows.
+
+**Consensus randomness.** The consensus protocol (section 8) requires randomness for sequencer selection and for deterministic transaction ordering within DAG vertices. This randomness is derived from a verifiable random function (VRF) bound to validator BLS keys, with output committed in each consensus vertex and verifiable by all participants. The VRF construction is specified in section 8.
+
+**Threshold-encrypted nonces.** The encrypted mempool requires per-transaction nonces that are unpredictable to adversaries. These are derived deterministically from the user's signing key and a transaction-specific identifier, ensuring that each nonce is unique without requiring access to a runtime randomness source.
+
+## 3.9 Library and implementation discipline
+
+The reference implementation `MUST` adhere to the following discipline regarding cryptographic libraries:
+
+1. **No hand-rolled cryptography.** The reference implementation `MUST NOT` include hand-rolled implementations of any cryptographic primitive specified in this section. Where a Rust library is named in a subsection above, that library or an equivalent audited library is the only acceptable implementation source.
+
+2. **Constant-time implementation required.** All cryptographic operations on secret material `MUST` be implemented in constant time. The named libraries (`ed25519-dalek`, `ml_dsa`, `blst`, `chacha20poly1305`) are constant-time by design. New library choices `MUST` preserve this property.
+
+3. **No `unsafe` in cryptographic code.** Rust's `unsafe` keyword permits the bypass of memory-safety guarantees. Cryptographic libraries used by the reference implementation `SHOULD` minimise their use of `unsafe` and `MUST` document and justify any uses. The named libraries either avoid `unsafe` entirely or restrict it to well-audited, performance-critical sections.
+
+4. **Audit history required.** Cryptographic libraries `MUST` have a documented audit history before adoption. New libraries proposed for inclusion `MUST` undergo audit prior to deployment in genesis.
+
+5. **Upstream contribution.** Where the reference implementation requires improvements to upstream cryptographic libraries (performance, additional functionality, bug fixes), contributions `MUST` be offered upstream rather than maintained as forks.
+
+## 3.10 Migration and revision
+
+The cryptographic primitives specified in this section are part of the protocol's consensus rules. Their modification falls under Principle I (credible neutrality): no on-chain mechanism can alter them. Migration to new primitives requires the publication of a new client implementation that node operators individually adopt, in the same manner as any other consensus rule change.
+
+**Anticipated migrations.** The protocol anticipates two categories of cryptographic migration during its operational lifetime:
+
+1. **Algorithmic improvements.** New zero-knowledge proving systems (post-Halo 2), new lattice-based signature schemes (post-ML-DSA), and new threshold encryption schemes are likely to mature into production-ready form during the chain's lifetime. These migrations, if they occur, will be additive: new primitives are introduced alongside existing ones, accounts and applications can elect to use them, and existing primitives are deprecated only after extensive transition periods.
+
+2. **Quantum-induced migrations.** If a quantum adversary materialises before the protocol's BLS-based consensus signatures have been deprecated in favour of post-quantum alternatives, the protocol's safety would be at risk. The protocol's response is the migration path described in section 11: validator signing material can be rotated to ML-DSA-only at the validator's discretion, and consensus signatures can be migrated to a post-quantum aggregation scheme when one matures. The exact mechanism is specified in section 8.
+
+The protocol does not attempt to specify in advance the exact form these migrations will take. The principle is that migrations occur via the same mechanism as any consensus change: through the ordinary process of client release and individual operator opt-in, on a timescale long enough that no party can force a migration on the rest of the network.
+
+## 3.11 What this section does not specify
+
+For clarity, the following are deliberately not specified in this section and are deferred to later sections:
+
+- The exact use of each primitive in transaction structure: deferred to section 5 (Object Model & State).
+- The construction of zero-knowledge circuits for shielded execution: deferred to section 7 (Privacy Layer).
+- The integration of threshold encryption into the mempool and consensus: deferred to sections 8 (Consensus) and 9 (Networking & Mempool).
+- The recursive proof structure attesting to chain validity: deferred to section 8 (Consensus).
+- The genesis state, including the specific Powers of Tau parameters: deferred to section 11 (Genesis & Constitution).
+
+This section establishes the primitives. Subsequent sections specify how they are composed.
+
+
+# 4. Identity & Accounts
+
+This section specifies how identity is represented on Adamant: how accounts are constructed, how keys authorise transactions, how users delegate visibility through view keys, and how recovery from key loss is handled. The design follows directly from the principles in section 2: privacy by default (II), permissionless participation (VII), and the cryptographic primitives in section 3.
+
+The protocol's account model is uncompromisingly modern: **every account is a smart account from genesis**. There is no distinction between "externally-owned accounts" and "contract accounts" as found in Ethereum. There is no special category of account with privileged validation logic. There is no account type that requires migration to access account-abstraction features. Account abstraction is not a feature layered on top of the base protocol; it is the only model the base protocol supports.
+
+This is the model used by zkSync Era, StarkNet, and Aptos, and it is the only sensible model for a chain designed in 2026. ERC-4337-style add-on architectures exist on Ethereum because Ethereum's account model was fixed in 2015 and cannot be changed without breaking compatibility. Adamant has no such constraint and uses the cleaner design.
+
+## 4.1 What an account is
+
+An Adamant account is an on-chain object (objects are specified in section 5) with the following minimum properties:
+
+1. **An address.** A 32-byte identifier derived deterministically from the account's initial public key material at creation time. Addresses are stable: an account's address never changes, even if its keys are rotated.
+
+2. **Authentication state.** The set of cryptographic public keys, validation rules, and other authentication parameters the account uses to determine whether a given transaction is authorised.
+
+3. **Validation logic.** The function that, given a candidate transaction and the account's authentication state, returns either *valid* or *invalid*. This logic is expressed in the protocol's smart-contract language (section 6) and is invoked for every transaction submitted under this account's authority.
+
+4. **Mutability declaration.** The account's mutability policy, declared at creation, governing whether and how the validation logic and authentication state may change. Mutability is one of the standard policies described in section 2.5 (`IMMUTABLE`, `OWNER_UPGRADEABLE`, etc.).
+
+5. **State.** Any account-specific data the account needs to maintain. By default this includes a transaction nonce counter (to prevent replay) and a sequence of any objects the account holds. Accounts may declare additional state at creation.
+
+6. **View key set (optional).** A set of view keys that allow specified third parties to observe the account's transaction history without granting transaction-authorisation power. Specified in detail in section 4.4.
+
+This list is the minimum. Accounts may declare additional fields at creation, subject to the validation rules of the smart-contract language.
+
+## 4.2 Account creation
+
+Accounts are created on Adamant by submitting an account-creation transaction. The transaction specifies:
+
+- The initial authentication state (public key(s), validation rules)
+- The validation logic (the smart-contract code that determines authorisation)
+- The mutability declaration
+- Any initial state values
+- An optional human-readable label (no on-chain semantics; for wallet display only)
+
+The address of the new account is computed as `SHA3-256(domain_tag || creation_tx_hash || creator_address || index)` where `index` is a per-creator counter ensuring uniqueness. Accounts are not created at "well-known" addresses; there is no equivalent of Ethereum's `CREATE2` predictable address mechanism, because the protocol's privacy model makes pre-funding of unfunded addresses unnecessary.
+
+**No account creation gating.** Account creation is permissionless. The cost of creating an account is paid in the standard fee mechanism (section 10). There is no minimum balance, no whitelist, and no creator-specific privileges.
+
+**No precompiled accounts.** The protocol contains no built-in accounts with privileged behaviour. There is no equivalent of Ethereum's precompiled contracts (`0x1` through `0x9`) or system contracts. Every account on the chain is created through the same mechanism described above. This is required by Principle I.
+
+## 4.3 Authentication
+
+When a transaction is submitted under an account's authority, the protocol invokes the account's validation logic with the transaction's contents as input. The validation logic returns *valid* or *invalid*. *Valid* causes the transaction to be admitted to the mempool and processed; *invalid* causes it to be rejected before any state change.
+
+The validation logic is arbitrary smart-contract code, subject only to the resource limits described in section 6. This is the substance of "smart accounts": validation is *programmable*. Standard validation patterns supported by reference implementations include:
+
+### 4.3.1 Single-signature validation
+
+The simplest pattern: the account holds a single Ed25519 or ML-DSA public key, and a transaction is valid if and only if it carries a signature from the corresponding secret key over the transaction's canonical encoding.
+
+This pattern is the default for new user accounts created by reference wallets. It approximates the user experience of legacy externally-owned accounts on other chains while remaining smart-account-native.
+
+### 4.3.2 Dual-signature validation (classical + post-quantum)
+
+The protocol's recommended pattern for accounts intending to hold significant value over long timescales: the account holds both an Ed25519 key and an ML-DSA key, and a transaction is valid only if it carries valid signatures from both.
+
+This pattern provides defence in depth. An adversary capable of compromising Ed25519 (for example, a future quantum adversary) cannot forge transactions because they would also need to compromise ML-DSA. An adversary capable of compromising ML-DSA (for example, an unforeseen lattice attack) cannot forge transactions because they would also need to compromise Ed25519. The account is secure unless *both* schemes are simultaneously broken.
+
+The cost is that signing requires both keys to be available, and the signature itself is larger (Ed25519 is 64 bytes, ML-DSA-65 is 3293 bytes). For long-term storage of value, this is an acceptable trade-off.
+
+### 4.3.3 Threshold-signature validation
+
+The account holds N public keys and a threshold k. A transaction is valid if at least k of the N keys have signed it. This is the standard multi-signature pattern, expressed natively in the smart-account model rather than requiring a separate multisig contract.
+
+Common configurations: 2-of-3 (a typical personal multi-device setup), 3-of-5 (a typical institutional setup), m-of-n where the keys are held by a board of trustees.
+
+### 4.3.4 Time-locked validation
+
+The account's validation logic may incorporate time-based constraints. Examples:
+
+- **Spending limits.** A transaction transferring more than X tokens within a Y-second window requires additional signatures.
+- **Cooling periods.** Certain operations require a delay between submission and execution, during which they may be cancelled.
+- **Beneficiary access.** Specific keys gain transaction authority only after the account has been inactive for a specified period (a dead-man's-switch pattern, useful for inheritance arrangements).
+
+### 4.3.5 Session keys
+
+A session key is a secondary key authorised to submit a restricted class of transactions on behalf of the account, typically time-bounded and scope-restricted. Example: an account's primary key (held offline) authorises a session key to make transactions of value less than X with a specific application contract for the next 24 hours. The application can then operate without prompting the user for signatures every transaction, while the user retains protection against runaway authority.
+
+Session keys are a natural use of the smart-account model: the validation logic specifies that signatures from the session key are accepted only when the transaction matches the session key's restrictions. This is the same pattern used by StarkNet's session keys (deployed in production for game applications such as Cartridge's Flippy Flop, October 2024) and by various account-abstraction systems on Ethereum.
+
+### 4.3.6 Custom validation
+
+The above patterns are illustrative, not exhaustive. The validation logic can implement any logic expressible in the smart-contract language: passkey signatures (WebAuthn), threshold-encrypted shares, social-recovery rules, biometric-gated transactions (via attested device signatures), and arbitrary combinations thereof. The protocol does not prescribe what validation looks like; it provides the framework within which any validation policy can be expressed.
+
+## 4.4 View keys and selective disclosure
+
+Adamant transactions are private by default (Principle II). The account holder, by default, is the only party who can observe their account's transaction history in clear form. This is the protocol's security baseline.
+
+But many legitimate use cases require selective disclosure: a user proving their tax obligations to a government, a business proving its solvency to an auditor, an exchange proving its reserve composition to its customers. The view-key mechanism enables these use cases without compromising default privacy.
+
+### 4.4.1 What a view key is
+
+A view key is a cryptographic key that grants the holder the ability to *observe* an account's transactions in clear form, but not to *authorise* new transactions. It is a one-way trapdoor: a user can derive view-key access from their full account access, but a view-key holder cannot derive transaction-authorisation access from a view key.
+
+Concretely: a user account holds a master seed. The master seed deterministically generates two distinct keypairs: the *spending key*, which is used in transaction validation, and the *viewing key*, which is used to decrypt the user's own transactions on the chain. The spending key cannot be derived from the viewing key. The user can disclose the viewing key (or sub-keys derived from it) to any third party without granting them spending power.
+
+This construction follows the design used in Zcash since Sapling (2018) and refined in subsequent shielded-pool protocols. It is a well-understood pattern with substantial deployment evidence.
+
+### 4.4.2 Sub-view-keys for granular disclosure
+
+The viewing key is hierarchically structured. A user can derive sub-keys that grant visibility into restricted subsets of their transactions. Examples:
+
+- **Time-bounded view key.** Visibility into transactions occurring between dates D1 and D2 only, useful for annual tax filings without exposing other periods.
+- **Counterparty-bounded view key.** Visibility into transactions involving a specific counterparty only, useful for proving a specific commercial relationship without exposing unrelated activity.
+- **Amount-bounded view key.** Visibility into transactions exceeding a specified amount only, useful for high-value-transaction reporting requirements.
+
+Sub-view-key derivation is specified cryptographically by section 7 (Privacy Layer); from the user's perspective, wallets expose this as "create an audit key for [specific use]" with the relevant parameters.
+
+### 4.4.3 View keys are not surveillance
+
+The protocol's view-key mechanism is fundamentally different from surveillance-friendly architectures (such as backdoor decryption, key escrow, or "lawful access" mechanisms). The differences:
+
+1. **User-controlled disclosure.** Only the account holder can issue a view key. The protocol contains no mechanism by which any other party — not validators, not the original implementers, not governments — can compel decryption against the user's will.
+
+2. **Granular and revocable.** The user controls the scope of disclosure (which transactions, over which period) and can stop deriving new sub-keys at any time. Already-issued sub-keys reveal only the data they were authorised to reveal; they cannot be retroactively expanded.
+
+3. **No technical means of compulsion.** The protocol does not include any mechanism for a third party to demand a view key cryptographically. A user who refuses to disclose simply does not disclose; the protocol provides no means of override.
+
+The view-key mechanism is therefore a tool for the user, available when the user chooses to use it, not an infrastructure for compelled disclosure.
+
+## 4.5 Key rotation
+
+A user `MUST` be able to rotate the keys associated with their account without changing the account's address or losing access to their state.
+
+**Mechanism.** Key rotation is performed by submitting a transaction signed under the account's *current* validation logic that updates the authentication state to a new set of keys. The transaction has the same structure as any other transaction; the only difference is its target (the account's own authentication state) and its effect (replacing keys).
+
+**Constraints by mutability declaration.** Whether key rotation is permitted at all, and under what conditions, depends on the account's mutability declaration (section 2.5):
+
+- `IMMUTABLE` accounts: rotation is forbidden. The account's keys are fixed at creation.
+- `OWNER_UPGRADEABLE` accounts: rotation requires a signature from the designated owner key.
+- `VOTE_UPGRADEABLE` accounts: rotation requires a vote from the designated token holders meeting the specified threshold.
+- `UPGRADEABLE_UNTIL_FROZEN` accounts: rotation is permitted until the account is frozen, then forbidden.
+- `CUSTOM` accounts: rotation follows the rules declared at account creation.
+
+**Rotation is not migration.** Rotating keys is distinct from migrating to a different account. Rotation preserves the account's address, state, holdings, view keys, and transaction history. The account is the same account; only the keys that authorise it have changed.
+
+**Why rotation matters.** Long-lived accounts will need to rotate keys for many reasons: routine key hygiene, response to suspected compromise, transition to post-quantum keys as cryptographic best practice evolves, transition between hardware-wallet generations, and changes in the user's threat model. The protocol makes this a first-class operation rather than requiring users to migrate to a new account.
+
+## 4.6 Recovery
+
+Key loss — losing the ability to sign transactions because the secret key has been lost, destroyed, or rendered inaccessible — is the single most common failure mode in cryptocurrency. The protocol does not solve this problem at the cryptographic layer; it provides building blocks that allow users to construct recovery solutions appropriate to their threat model.
+
+### 4.6.1 The protocol provides no built-in recovery
+
+There is no protocol-level mechanism by which a lost key can be replaced without authority from the existing account. There is no foundation that can issue replacement keys. There are no validators with the authority to override an account. The protocol's commitment to credible neutrality (Principle I) precludes any such mechanism.
+
+A user who creates an `IMMUTABLE` single-signature account and loses the key has lost the account. The protocol does not provide a fallback. This is a property of the security model, not an oversight.
+
+### 4.6.2 What the protocol enables
+
+The smart-account model enables users to construct recovery mechanisms appropriate to their needs. The most common patterns:
+
+**Social recovery.** The account is configured such that a quorum of designated "guardians" — friends, family members, multiple devices — can collectively rotate the account's keys, even without the original key. Each guardian holds a key that, in isolation, has no power; only when k of n guardians cooperate can a new authorisation key be installed. This is the model used by Argent (deployed since 2018) and the Ethereum Foundation has explicitly endorsed it as the recommended recovery pattern. The protocol supports this natively through the smart-account validation model.
+
+**Time-locked recovery.** The account is configured such that a recovery key gains the ability to rotate the account's keys, but only after a delay (e.g. seven days) during which the account holder can cancel the recovery using their primary key. An adversary who steals the recovery key cannot use it immediately; the legitimate holder has a window to detect and abort. This is a useful pattern when the recovery key is held by an institution (a law firm, a digital-estate service) whose attack surface is non-zero.
+
+**Multi-device redundancy.** The account is configured as a 2-of-3 threshold with keys held on three distinct devices (phone, laptop, hardware wallet). Loss of any one device does not compromise the account; loss of two simultaneously is required.
+
+**Inheritance arrangements.** The account is configured such that, after a specified period of inactivity (no signed transactions for, say, twelve months), beneficiary keys gain transaction authority. The account holder can defeat this by signing any transaction during the inactivity period. This is a dead-man's-switch pattern useful for digital inheritance.
+
+**Hardware-secured recovery.** Recovery keys are held in hardware security modules, secure elements, or third-party custodial services. The protocol does not specify the hardware; it specifies that the validation logic can incorporate signatures from hardware-attested keys.
+
+The protocol's role is to provide the framework. The user's role is to choose a configuration appropriate to their needs and to communicate with their guardians, beneficiaries, or service providers about the implications.
+
+### 4.6.3 Wallet defaults
+
+Reference wallets `SHOULD` strongly default new user accounts to a recovery-enabled configuration. The exact default is wallet-specific, but the principle is that a user creating their first account `SHOULD NOT` be defaulted to an `IMMUTABLE` single-signature configuration without explicit informed consent. The risk of catastrophic loss to inexperienced users is too high to justify defaults that leave them no recovery path.
+
+A recommended default for new user accounts is: `OWNER_UPGRADEABLE` with social recovery, requiring 2-of-3 guardians (one of which may be the user's own backup device, two of which are external). This default provides reasonable protection against routine key loss while preserving full user control.
+
+## 4.7 Privacy of accounts
+
+By default, account addresses are not directly observable from transaction data. The transaction format (specified in section 5) does not include cleartext sender or recipient addresses; instead, it references shielded notes whose ownership is verifiable only by the parties holding the relevant view keys.
+
+This means that account-level analysis ("how many transactions has this address sent?") is not possible from the chain alone, by design. An observer can see *that* transactions occurred (the encrypted envelope and the proof that it is well-formed) but not *which addresses* were involved.
+
+**Optional transparency.** A user may submit a transaction in transparent form, exposing sender, recipient, and amount in cleartext. This is useful for specific applications: public charitable donations, public bounty payments, transparent governance votes (when those occur off-protocol, as Adamant has no on-chain governance), and similar contexts. Transparency is a per-transaction choice, not a chain-wide default, and not a property of the account itself.
+
+**Account discoverability.** Because addresses are not exposed by default, accounts are *not* easily discoverable from chain data. This is the inverse of the assumption built into chains where every transaction exposes its participants. The implication for user-experience: an account "exists" as soon as it is created, but it is not visible to third parties unless the holder discloses its address (typically via off-chain channels: paste an address into a chat, scan a QR code, share via a payment-request URI).
+
+Reference wallets handle address sharing through the standard mechanisms used by privacy chains: stealth addresses, shareable payment requests, or QR-encoded one-time identifiers. Section 7 specifies the cryptographic basis for stealth addresses; section 4 establishes only that account addresses are not assumed to be public.
+
+## 4.8 Worked example: a typical user account
+
+To make the foregoing concrete, here is the configuration of a typical personal account created by a reference wallet for a new user:
+
+- **Mutability:** `OWNER_UPGRADEABLE`
+- **Authentication:** dual-signature (Ed25519 + ML-DSA), with the keys derived from the user's recovery seed phrase
+- **Recovery:** social recovery configured with three guardians, requiring two to authorise a key rotation
+- **View keys:** generated and stored locally; not yet shared with any third party
+- **Session keys:** none initially; added per-application as the user grants permissions
+- **Spending limits:** $10,000 USD-equivalent per 24-hour period without additional signatures (configurable)
+- **Transaction privacy:** shielded by default; transparency available per-transaction
+
+This configuration trades some complexity (the user needs three guardians) for a substantial improvement in security relative to a legacy single-key account. It supports key rotation without migration, recovery from key loss without protocol-level intervention, and audit cooperation through view-key derivation as needed. It is post-quantum-secure (via the ML-DSA component) and compatible with the encrypted-mempool architecture.
+
+Reference wallets `SHOULD` make this configuration achievable in approximately the same number of user actions as creating a legacy single-key account elsewhere. The complexity is the wallet's responsibility, not the user's.
+
+## 4.9 Account-level fees and gas
+
+This section briefly anticipates section 10 (Economics & Incentives). Account-related operations — creation, key rotation, validation logic invocation — are subject to the protocol's fee mechanism. The fee for account creation is paid by the creator. Validation logic invocation (which occurs for every transaction the account submits) is paid by whichever party the validation logic specifies as fee-payer; this enables sponsored transactions, where an application or paymaster pays fees on behalf of the user.
+
+Section 10 specifies fee structure in detail. The note here is that the smart-account model permits fee abstraction natively: the question of "who pays" is part of the validation logic, not a separate concept.
+
+
+# 5. Object Model & State
+
+This section specifies how Adamant represents data on the chain. It is the longest technical section in the whitepaper because the object model touches every other component: it determines what transactions can do, what the virtual machine operates on, what the consensus mechanism orders, what the privacy layer shields, and what the recursive verification proves.
+
+The protocol's data model is **object-based**. The chain's state is a collection of independent objects, each owned by an account or shared between accounts according to declared rules, each carrying its own validation logic and mutability declaration. This is the model used by Sui (Move objects), with significant divergences specific to Adamant's privacy and credible-neutrality requirements.
+
+The object model deliberately rejects three alternatives:
+
+1. **The account-balance model** (Ethereum, Solana, Cosmos). State is a flat key-value mapping from account addresses to balances and contract storage. Every transaction touches global mutable state. This model is the easiest to reason about but the hardest to parallelise, and it requires every validator to process every transaction to know any state.
+
+2. **The pure UTXO model** (Bitcoin, Cardano). State is a set of unspent transaction outputs; transactions consume some and produce others. Highly parallelisable but limited in expressiveness; smart-contract programmability requires substantial workarounds.
+
+3. **The actor model** (TON, Internet Computer). State is partitioned into independent actors that communicate by asynchronous message-passing. Highly parallelisable but introduces a difficult programming model and requires reasoning about message ordering across actors.
+
+The object model preserves the parallelism of UTXOs, the expressiveness of accounts, and the modularity of actors. It is the modern consensus among new Layer 1 designs (Sui, Aptos with Move, the various Move-derivative chains) for good reason: it is what works.
+
+## 5.1 What an object is
+
+An Adamant object is a typed, addressed, ownership-tracked piece of state. Every object has the following fields:
+
+```
+Object {
+    id:            ObjectId,        // 32-byte unique identifier
+    type_id:       TypeId,          // identifier of the object's type definition
+    owner:         Ownership,       // who can mutate this object
+    mutability:    Mutability,      // how the object's code/rules can change
+    contents:      Bytes,           // type-specific serialized data
+    version:       u64,             // monotonic version counter
+    metadata:      ObjectMetadata,  // protocol-managed bookkeeping
+}
+```
+
+Each field is specified below.
+
+### 5.1.1 ObjectId
+
+The object's unique identifier on the chain. 32 bytes, computed as `SHA3-256(domain_tag || creation_tx_hash || creator_address || creation_index)`. Once assigned, an `ObjectId` never changes. Object identifiers are stable across the object's lifetime: an object that exists at version 1 has the same `ObjectId` at version 1,000,000.
+
+This is in contrast to UTXO models, where each "version" of a piece of state has a distinct identifier. Stable identifiers make programs easier to write (a contract holds a reference to a specific object across many transactions) and make the privacy model simpler (one anonymity set per long-lived object, rather than a fresh anonymity set per output).
+
+### 5.1.2 TypeId
+
+The identifier of the object's type. Object types are themselves on-chain objects (specifically, instances of the `Type` meta-type, registered through the type-registration mechanism in section 6). The `TypeId` references the type definition that specifies:
+
+- The schema of the object's `contents` field (what fields it has, what their layouts are)
+- The set of operations valid on objects of this type (the object's "methods" in object-oriented terminology)
+- Invariants the protocol enforces on every state transition involving objects of this type
+- Default mutability rules for objects of this type at creation (which the creator may override per-object)
+
+A `TypeId` is itself a 32-byte hash of the type's canonical definition. Two distinct type definitions with identical canonical encodings produce the same `TypeId`; this is intentional and supports content-addressed type registration.
+
+### 5.1.3 Ownership
+
+The protocol supports four ownership modes:
+
+- **`Address(addr)`**: the object is owned by a single account. Only transactions authorised under that account's validation logic may mutate the object. This is the default for user-held assets such as token balances, NFT-like unique items, and personal data.
+
+- **`Shared`**: the object has no single owner; any transaction may mutate it, subject to the object's own validation rules. Shared objects are the basis for all multi-party applications: decentralised exchanges, lending pools, governance contracts, registries. Mutations of shared objects require consensus (section 8) because two transactions touching the same shared object may conflict.
+
+- **`Immutable`**: the object can never be mutated after creation. Useful for published documents, code modules, type definitions, and other objects intended to be permanent reference material. Immutable ownership is distinct from `IMMUTABLE` mutability declarations (section 5.3): an immutable-owned object cannot be mutated by anyone, while an `IMMUTABLE`-mutability object cannot have its *rules* changed but can still have its `contents` mutated according to those rules.
+
+- **`Group(g)`**: the object is owned by a *group object*, which is itself an object on the chain. The group's validation logic determines whether a given transaction is authorised to mutate the group-owned object. This is the mechanism for multi-signature ownership, organisational ownership, and complex shared-control patterns. The group is itself owned by some entity (an address, another group, or `Shared`), giving rise to nested ownership trees.
+
+Ownership is a property of the object, not of the account. An account holds a set of objects; transferring an object to another account is a state transition that updates the object's `owner` field, leaving the object's identity and contents otherwise unchanged.
+
+**Ownership transitions.** An object's ownership may be transferred subject to the rules of its current ownership mode and the object's mutability declaration. Specifically: an `Address`-owned object may be transferred by the owning account; a `Shared` object may not be made `Address`-owned without explicit consent in the protocol's transition logic; an `Immutable` object's ownership cannot change (it remains permanently un-owned); a `Group`-owned object's ownership transitions follow the group's rules.
+
+### 5.1.4 Mutability
+
+This is the field that operationalises Principle V (mutability as a property of objects, not the chain). Every object declares its mutability at creation, and the declaration is itself immutable: an object created `IMMUTABLE` cannot become `OWNER_UPGRADEABLE`; an object created `OWNER_UPGRADEABLE` cannot become `IMMUTABLE` except via the `UPGRADEABLE_UNTIL_FROZEN` mechanism, which itself was declared at creation.
+
+The protocol defines six mutability variants:
+
+```
+enum Mutability {
+    Immutable,
+    OwnerUpgradeable {
+        owner: AccountId,
+    },
+    VoteUpgradeable {
+        token_type: TypeId,
+        approval_threshold: u32,    // basis points: 10000 = 100%
+        quorum_threshold: u32,      // basis points
+        voting_period_secs: u64,
+        execution_delay_secs: u64,
+    },
+    UpgradeableUntilFrozen {
+        owner: AccountId,
+        // becomes Immutable after `freeze` is called
+    },
+    Custom {
+        upgrade_validator: TypeId,  // type of validator object that authorises upgrades
+        validator_id: ObjectId,
+    },
+    Forked {
+        // for objects created by forking another object;
+        // inherits original's mutability with restrictions, see section 5.5
+        original: ObjectId,
+        fork_height: u64,
+    },
+}
+```
+
+Each variant is detailed below.
+
+#### `Immutable`
+
+The object's code, rules, and validation logic are permanently fixed at creation. The object's `contents` field may still change according to the rules of the object's type, but the rules themselves never change.
+
+This is the strongest mutability declaration. A user interacting with an `Immutable` object knows, with cryptographic certainty, that the rules of engagement cannot be altered after the fact.
+
+Use cases: financial primitives (token contracts, escrow contracts, lending markets) where users commit substantial value and require certainty that the rules cannot be retroactively changed; digital monuments (commemorative records, public-record archives); standard libraries and well-known reference implementations.
+
+#### `OwnerUpgradeable { owner }`
+
+The object's code and rules may be changed by transactions authorised under the specified owner account. This is the most permissive standard mutability mode.
+
+Use cases: rapidly-iterating early-stage applications; contracts whose authors retain full operational control; private internal tools; applications where the user is also the owner.
+
+**Trust model.** Users interacting with `OwnerUpgradeable` objects must trust the owner not to make changes that disadvantage them. The protocol does not constrain the owner; it only ensures that the user is *aware* of the owner's authority. Wallets `MUST` display the owner's account when surfacing an `OwnerUpgradeable` object's mutability, so users can make informed decisions about whether to interact.
+
+#### `VoteUpgradeable { token_type, approval_threshold, quorum_threshold, voting_period_secs, execution_delay_secs }`
+
+The object's code and rules may be changed by a vote of token holders, where:
+
+- `token_type`: the `TypeId` of the token whose holders are eligible to vote
+- `approval_threshold`: minimum percentage of cast votes that `MUST` approve the change (in basis points; 5000 = 50.00%, 6700 = 67.00%)
+- `quorum_threshold`: minimum percentage of total token supply that `MUST` participate for the vote to be valid
+- `voting_period_secs`: duration of the voting window
+- `execution_delay_secs`: delay between vote success and upgrade application, allowing token holders who object to exit before the change takes effect
+
+This mode supports decentralised governance of contracts. A typical configuration for a community-governed application: 67% approval threshold, 30% quorum, 7-day voting period, 7-day execution delay.
+
+**Important note on credible neutrality.** This mutability mode applies to *individual objects*, not to the protocol itself. The protocol's own consensus rules, virtual machine, and validity logic are `Immutable` by construction (Principle I, section 11). `VoteUpgradeable` is a tool that *applications* can use, not a backdoor through which the protocol itself can be governed.
+
+#### `UpgradeableUntilFrozen { owner }`
+
+A common pattern: the object is `OwnerUpgradeable` for a period (during which the owner iterates on the implementation), and at some later point, the owner calls a `freeze` operation that converts the object's mutability permanently to `Immutable`. After freeze, the object behaves identically to one declared `Immutable` at creation.
+
+This mode is the recommended pattern for many production applications. The owner can fix bugs and deploy improvements during the early operational period; once the application has matured, the owner relinquishes that power and commits to the current implementation forever. Users who interact with the object before freeze trust the owner; users who interact after freeze trust no one.
+
+**Cannot un-freeze.** The freeze operation is one-way. Once frozen, an object cannot be unfrozen, even by the original owner, even by a future fork, even by the protocol itself. This is enforced at the protocol layer, not by convention.
+
+**Wallet display.** Wallets `MUST` distinguish between "frozen" and "still upgradeable" states for `UpgradeableUntilFrozen` objects, so users can see clearly which trust model they are operating under at the time of interaction.
+
+#### `Custom { upgrade_validator, validator_id }`
+
+The object's upgrade rules are specified by a separate validator object (itself a regular Adamant object, with its own type and rules). When an upgrade is proposed, the protocol invokes the validator's `validate_upgrade` method with the proposed change as input; the validator returns *valid* or *invalid*.
+
+This is the protocol's escape hatch for upgrade logic that doesn't fit the standard patterns. Examples:
+
+- **Multi-stage approval.** An upgrade requires approval from a board of trustees AND a community vote AND a 30-day waiting period.
+- **Time-restricted upgradeability.** The object is upgradeable only during specified maintenance windows.
+- **Conditional upgrades.** Upgrades are permitted only if the object's current state meets specified preconditions.
+- **Cross-object dependencies.** Upgrades require the simultaneous upgrade of related objects.
+
+The cost of `Custom` is complexity: users wishing to understand the trust model must inspect the validator object. Wallets `SHOULD` provide tooling that surfaces well-known validator patterns by name (e.g. "this object uses the standard 3-stage governance validator") rather than presenting raw validator code.
+
+#### `Forked { original, fork_height }`
+
+Reserved for objects produced by the chain-fork mechanism specified in section 11. A `Forked` object inherits its predecessor's rules but with restrictions designed to ensure that forks do not produce ambiguous claims of authority. End users do not encounter `Forked` mutability in normal operation.
+
+### 5.1.5 Contents
+
+A type-specific serialized payload. The schema is specified by the object's type (section 5.1.2). The protocol does not interpret `contents` directly; it is the virtual machine's responsibility (section 6) to deserialize, manipulate, and re-serialize this field according to the type definition.
+
+`contents` size is bounded per object. The current bound is 1 MiB; objects requiring more state are expected to split themselves into multiple linked objects. This bound exists to ensure that any single object can be loaded into memory by a validator with reasonable hardware.
+
+### 5.1.6 Version
+
+A monotonically-increasing 64-bit counter, incremented on every state transition that mutates the object. The version field is essential to the consensus mechanism (section 8): two transactions both attempting to mutate the same object at the same version conflict, and only one can be ordered first; the second fails with a version conflict.
+
+The version field is also the basis of the protocol's *causal ordering* property (anticipated in section 1, fully specified in section 8). Two transactions touching disjoint sets of object versions are causally independent and can be processed in any order, in parallel. Two transactions touching the same object version are causally dependent and require consensus to determine which executes first.
+
+### 5.1.7 Metadata
+
+Protocol-managed bookkeeping fields, not under the user's control:
+
+- `created_at_height`: the consensus height (section 8) at which the object was created
+- `last_modified_height`: the consensus height of the most recent state transition
+- `creator`: the account that created the object
+- `storage_rent_paid_through`: the consensus height through which storage rent has been paid (section 5.6)
+- `proof_commitment`: cryptographic commitment to the object's history, used by the privacy layer (section 7) and recursive verification (section 8). The commitment is a KZG commitment on BLS12-381 (section 3.7.2), serialised as a compressed G₁ element (48 bytes).
+
+Users do not write to metadata fields directly; they are updated by the protocol as a side-effect of valid state transitions.
+
+### 5.1.8 Canonical serialisation
+
+Every object, every component of an object, and every value that flows through consensus has a single canonical byte representation. Canonical serialisation is consensus-critical: every conforming Adamant implementation must produce byte-identical encodings of the same logical value, or hashes diverge and consensus breaks.
+
+The protocol uses **BCS (Binary Canonical Serialization)** as its canonical encoding, the same format deployed by Sui, Aptos, and the broader Move ecosystem. BCS was designed specifically for blockchain consensus contexts: it produces a unique encoding for each value (no ambiguity in field ordering, no optional padding, no variable-length integer encodings without canonical resolution), it is compact, and it has a stable specification with mature implementations.
+
+BCS encoding rules used by the protocol:
+
+- Integers: little-endian fixed-width for `u8` through `u128`; ULEB128 for collection lengths.
+- Booleans: single byte, `0x00` for false, `0x01` for true.
+- Sequences (`Vec<T>`): ULEB128 length prefix followed by elements in order.
+- Structs: fields serialised in source-declaration order with no separators.
+- Enums: ULEB128 variant tag followed by the variant's payload.
+- Fixed-size arrays: elements in order with no length prefix.
+
+This is the standard BCS specification; the protocol does not deviate from it. Any value that hashes into consensus — `ObjectId` derivation (section 5.1.1), `TypeId` derivation (section 5.1.2), `Address` derivation (section 4.2), state commitments, transaction hashes — first canonically serialises to BCS bytes, then hashes those bytes with SHA3-256 under an appropriate domain tag (section 3.3.1).
+
+Implementations `MUST` use a BCS-conformant encoder and `MUST NOT` introduce protocol-level fields that BCS cannot represent canonically (for instance: `HashMap` with non-deterministic iteration order, floating-point values, or self-referential structures).
+
+## 5.2 State as a graph of objects
+
+The chain's global state at any moment is the set of all live objects. State transitions are caused by transactions, which take a set of input objects, perform computation, and produce a set of output objects. An object's "history" is the sequence of versions it has passed through, each version produced by a specific transaction.
+
+This is fundamentally different from the global-mutable-state model of account-based chains. Adamant has no global state vector that all validators must agree on at every instant; it has a graph of object histories that validators agree on independently per-object.
+
+### 5.2.1 Causal ordering
+
+Two transactions are *causally dependent* if and only if they read or write at least one common object version. Two transactions that touch disjoint object versions are *causally independent*.
+
+The consensus mechanism (section 8) imposes total ordering only on causally dependent transactions. Causally independent transactions are not ordered relative to each other at the protocol layer; they can be processed in parallel by any validator, in any order, with deterministic results.
+
+This is the core property that makes Adamant's throughput target (200,000+ TPS) achievable. In real-world workloads, the vast majority of transactions are causally independent: Alice paying Bob does not depend on Carol paying Dan. Consensus needs to order them only when they collide, which for typical workloads is a small fraction of total transactions.
+
+The chain's history can therefore be visualised as a directed acyclic graph: nodes are object versions, edges are transactions that read or write objects, and the graph's "shape" reflects the actual causal structure of the chain's activity. Validators agree on the shape of this graph; they do not agree on a single sequential history because no such history exists for causally independent activities.
+
+### 5.2.2 No global state root, but per-object commitments
+
+Account-based chains compute a single global state root after every block — a Merkle (or Verkle) hash of the entire state. This is convenient for light-client verification but expensive to maintain at high throughput, because every transaction touches the global root.
+
+Adamant takes a different approach. Each object maintains its own commitment in its `metadata.proof_commitment` field. The chain's "state root" at any point is the aggregated commitment over all live objects, computable from the per-object commitments without re-hashing the entire state.
+
+This change has two consequences:
+
+- **State updates are local.** A transaction touching N objects updates N commitments, not the entire global state. Throughput scales with object-level parallelism.
+- **Recursive proofs are compositional.** Section 8's recursive verification works by aggregating per-object validity proofs, rather than proving validity of monolithic state transitions. This is what enables phone-verifiable verification.
+
+The per-object commitment is computed using KZG vector commitments over BLS12-381 (specified in section 3.7.2). The aggregation across objects uses Halo 2 recursive proofs (section 3.7.1).
+
+## 5.3 The mutability declaration is enforced by consensus
+
+This subsection makes explicit a property that has been implied throughout: **mutability declarations are not enforced by convention or by smart-contract code; they are enforced by the protocol's consensus rules.**
+
+Concretely, when a validator processes a transaction that proposes to upgrade an object's code or rules, the validator checks the target object's `mutability` field directly. If the field is `Immutable`, the upgrade transaction is invalid and rejected at the consensus layer, regardless of what the rest of the transaction says. The validator does not invoke any smart contract to determine whether the upgrade is permitted; the permission is a structural property of the object.
+
+This is in deliberate contrast to Ethereum's proxy patterns, where upgradeability is implemented in user-level smart-contract code and where bugs or unexpected interactions in that code can produce upgradeability behaviours the user did not anticipate. Adamant's mutability is a first-class protocol concept, with the same status as ownership, with no possibility of user-level code violating its constraints.
+
+**This is the property that makes mutability-as-declaration trustworthy.** A user inspecting an `Immutable` object knows that no path in any contract can render it mutable. A user inspecting an `UpgradeableUntilFrozen` object knows that the freeze operation will, in fact, transition the object to permanent immutability at the protocol layer. The mutability declaration is a constitutional fact, not a programming convention.
+
+## 5.4 Object lifecycle
+
+An object passes through a defined lifecycle:
+
+1. **Creation.** A transaction explicitly creates the object, specifying its type, owner, mutability, initial contents, and any other type-specific parameters. The object is assigned an `ObjectId`, set to version 1, and added to the chain state.
+
+2. **Active.** The object exists and is subject to mutation per its rules. State transitions produced by valid transactions update its `contents`, `owner`, or other fields, increment its version, and update its commitments and metadata.
+
+3. **Frozen** (only for `UpgradeableUntilFrozen`). The owner has called the `freeze` operation. The object's mutability is now effectively `Immutable`; no further upgrades are permitted. State transitions per the existing rules continue to be valid.
+
+4. **Archived.** If the object's storage rent (section 5.6) is not maintained, the object enters an archived state. Archived objects' contents are pruned from validator working storage; only their commitment hash is retained. Archived objects cannot be referenced by new transactions until restored. Restoration requires paying the accumulated rent and submitting a proof (provided by archival nodes) of the object's most recent active contents.
+
+5. **Destroyed.** Some objects are explicitly destroyed by their type's logic — for example, a redeemed coupon, a fulfilled escrow, a settled bet. Destruction is a state transition that removes the object from the active state set. Destroyed objects are pruned from working storage but their existence is permanently recorded in the chain's history; their `ObjectId` cannot be reused.
+
+The lifecycle is enforced by the protocol; type-specific logic determines which transitions occur, but cannot violate the lifecycle's structural properties.
+
+## 5.5 Object derivation: forks, copies, and references
+
+Object identity is unique. Two objects with the same `ObjectId` are the same object. The protocol does not support arbitrary cloning of objects; what it supports are several specific derivation operations:
+
+- **Reference.** Many objects can hold references to a single shared object. A reference is a 32-byte `ObjectId` field that the holding object's logic can use to dispatch operations to the referenced object. References are cheap and create no new state.
+
+- **Copy of contents.** A new object is created whose `contents` are derived from another object's `contents` (typically by transforming or summarising it). The new object has a fresh `ObjectId` and an independent existence; modifications to either object do not affect the other. Copying is a normal `create` operation; the protocol does not distinguish copies from any other newly-created object.
+
+- **Fork.** A reserved operation specified in section 11. Forking applies in the context of a chain fork — a divergence where part of the validator set has migrated to a new client implementation with different consensus rules. Forked objects inherit their predecessor's content and rules but carry the `Forked` mutability variant, signalling that they exist on a forked timeline. End users do not encounter forked objects in normal operation.
+
+- **Snapshot.** A reserved operation that creates a content-addressed read-only handle to an object's state at a specific version. Snapshots support certain advanced patterns (proof-of-historical-state, audit trails) without violating the unique-identity property, because snapshots are themselves identified by `(ObjectId, version)` pairs rather than fresh `ObjectId`s.
+
+## 5.6 Storage and rent
+
+The chain's state grows monotonically as objects are created. Without a counterbalance, validators would eventually be unable to store the full state on commodity hardware, centralising the network. The protocol prevents this through a state-rent mechanism.
+
+### 5.6.1 The rent model
+
+Every object is associated with a *storage rent rate*: a per-byte-per-second cost charged to the object's "rent account." The rent account is funded by the object's owner (or by anyone, for shared objects) through normal token transfers. When the rent account is depleted, the object enters the *archived* lifecycle state.
+
+**Rent rates.** The rent rate is a chain-wide parameter set at genesis and not modifiable post-genesis. The exact value is specified in section 10 (Economics & Incentives); for context, the design target is that one year's storage of one kilobyte of object content costs approximately the same as one normal transaction's fee.
+
+**Pre-payment.** Object creation includes pre-payment of rent for some initial period (default: one year). Owners may top up the rent account at any time.
+
+### 5.6.2 Archival is not deletion
+
+When an object is archived, its `contents` are pruned from validator working storage, but its `ObjectId` and commitment remain in chain state. The object is *unreferenceable* in new transactions but not *forgotten*. Specifically:
+
+- The object's `proof_commitment` remains in the chain's recursive proof.
+- The object's `ObjectId` cannot be reassigned to a new object.
+- The object's contents are retained by *archival nodes* — voluntary participants who store full historical state for cryptographic or social reasons. Archival nodes are not part of consensus and are not required by the protocol; they are a community resource.
+- The object can be *restored* to active state by paying accumulated rent plus a restoration fee, and submitting a proof (provided by an archival node) that the object's pre-archival contents are unchanged.
+
+This model ensures that state size is bounded by *active* state, not total state ever created. Inactive state is preserved for historical and forensic purposes but does not impose ongoing cost on consensus participants.
+
+### 5.6.3 Rent-exempt objects
+
+Some objects, by their nature, cannot be archived without violating the chain's invariants. Examples:
+
+- **Type definitions.** If a type definition were archived, every object of that type would become uninterpretable. Type definitions pay one-time rent at creation that grants permanent active status.
+- **Active validator records.** A validator's record is essential to consensus; it cannot be archived while the validator is participating.
+- **Recently-created objects.** Objects in their first 30 days are rent-exempt to prevent denial-of-service attacks where an adversary creates objects faster than rent payments can be collected.
+
+The exempt categories are specified in section 11 (Genesis & Constitution) and cannot be expanded after genesis.
+
+## 5.7 Privacy and the object model
+
+This section has described objects as if they were universally visible. They are not. Section 7 (Privacy Layer) specifies how the object model interacts with the protocol's privacy properties, but the high-level relationship is:
+
+- **Object existence is public.** The set of `ObjectId`s in active state is observable by all participants. The total state size is observable. The number of objects created and destroyed per consensus epoch is observable.
+
+- **Object contents may be shielded.** An object's `contents` may be encrypted such that only specified parties (the owner, holders of view keys, parties to a multi-party object) can decrypt them. Shielded `contents` are accompanied by zero-knowledge proofs that state transitions involving the object are valid, computable without decrypting the contents.
+
+- **Ownership may be hidden.** An object's `owner` field may itself be shielded, such that the chain records only that the object is owned by *some* account, without recording which account. Stealth-address mechanisms (section 7) support this.
+
+- **Mutability declarations are public.** The `mutability` field is always in clear text. This is required by Principle V's user-visibility requirement: users `MUST` be able to query an object's mutability before interacting, even if they cannot read its contents.
+
+The privacy model is therefore selective: structural properties of objects (existence, type, mutability, version-counter advancement) are public; semantic properties (contents, ownership in detail, the meaning of state transitions) may be shielded. Section 7 specifies the cryptographic constructions in detail.
+
+## 5.8 Worked example: a token
+
+To make the foregoing concrete, here is the structure of a typical fungible-token object on Adamant:
+
+**Type definition** (a `Type` object, registered once):
+
+- `name`: "ExampleToken"
+- `symbol`: "EXM"
+- `decimals`: 6
+- `total_supply_logic`: defines how supply changes (mint/burn rules)
+- `transfer_logic`: defines how token balances move between accounts
+- `default_mutability`: `Immutable` (recommended for production tokens)
+
+**Token-supply object** (a single `Shared` object representing the global token supply):
+
+- `id`: derived from creation
+- `type_id`: the ExampleToken type
+- `owner`: `Shared`
+- `mutability`: `Immutable`
+- `contents`: encodes total supply, supply schedule, mint/burn authority
+- `version`: increments on every supply change
+
+**User-balance objects** (one per holder, `Address`-owned):
+
+- `id`: derived per-balance
+- `type_id`: the ExampleToken-balance type
+- `owner`: `Address(holder_account)`
+- `mutability`: `Immutable`
+- `contents`: encrypted; encodes the holder's balance
+- `version`: increments on every transfer
+
+A transfer transaction reads the sender's balance object, the recipient's balance object, and (potentially) the supply object; produces updated versions of the sender's and recipient's balance objects; and emits a zero-knowledge proof that the transfer is valid (sender's balance decreases by amount X, recipient's balance increases by amount X, no funds created or destroyed). The supply object is not modified, only read.
+
+This pattern — global supply object plus per-holder balance objects — is the canonical fungible-token implementation on Adamant. It supports parallel processing (transfers between disjoint pairs of accounts do not conflict), it supports privacy (balances are shielded; transfers use stealth addresses; observers see only that *some* account transferred to *some other* account), and it is verifiable by recursive proofs (the chain's recursive proof attests that all balance changes are well-formed across all token types).
+
+Section 6 (the virtual machine) specifies how this pattern is expressed in the protocol's smart-contract language. Section 7 specifies the privacy mechanisms that shield the contents.
+
+
+# 6. Execution & Virtual Machine
+
+This section specifies how transactions are executed on Adamant: the smart-contract language, the virtual machine, the parallel execution model, and the resource accounting (gas) framework. It builds directly on the object model of section 5 and is the layer at which user-defined logic interacts with chain state.
+
+The protocol's execution model is governed by three requirements:
+
+1. **Resource safety.** The language must make value-related bugs (double-spend, accidental destruction, reentrancy) structurally impossible, not merely conventionally avoidable. This is non-negotiable for a chain whose users hold significant value in shielded form, where the auditability of contracts is reduced and the cost of a single class of bugs can be catastrophic.
+
+2. **Parallel execution.** The VM must support deterministic parallel execution at scale, exploiting the causal-independence property of the object model (section 5.2.1). Sequential execution as in Ethereum's EVM is incompatible with the throughput targets in Principle IV.
+
+3. **Privacy compatibility.** The language must integrate cleanly with the privacy layer (section 7). Shielded execution — running a contract while keeping its inputs, intermediate state, and outputs encrypted — must be a first-class concept, not an afterthought.
+
+## 6.1 The Adamant Move language
+
+The protocol's smart-contract language is **Adamant Move**, a derivative of the Move language originally developed by Facebook (Diem project, 2018–2022) and now maintained as an open standard by the Move community, with significant production deployment in Sui and Aptos.
+
+### 6.1.1 Why Move
+
+Move was designed from first principles around the problem of representing digital assets safely. Its core innovation is a *linear type system* in which values denoting assets cannot be copied, accidentally discarded, or implicitly destroyed. Operations on assets must explicitly account for their movement: a function that takes a `Coin` as input must explicitly transfer it, store it, or destroy it; the compiler refuses to compile code that does anything else.
+
+This property is enforced at the type level, not by runtime checks. A contract that incorrectly handles assets does not compile; it cannot be deployed; it cannot run. This makes whole classes of bugs that have plagued Solidity contracts (double-spends due to integer underflow, lost funds due to forgotten transfers, reentrancy attacks due to ordering bugs) structurally impossible in Move.
+
+The protocol adopts Move because:
+
+1. **Linear types are the right primitive for value-bearing systems.** Every other language requires programmer discipline; Move enforces correctness at the compiler.
+
+2. **Move's object model aligns with Adamant's object model.** Move's "resources" map cleanly to Adamant's `Address`-owned objects; Move's "shared objects" (in Sui's variant) map cleanly to Adamant's `Shared` objects. The languages are designed for the same world.
+
+3. **Production track record.** Sui mainnet (May 2023) and Aptos mainnet (October 2022) have processed over $30B in cumulative volume across hundreds of millions of transactions on Move. The language is not experimental.
+
+4. **Existing tooling.** Compilers, formal verifiers (the Move Prover), debuggers, and IDE support exist. Adamant inherits this ecosystem rather than rebuilding it.
+
+5. **Active research community.** Mysten Labs, Aptos Labs, and academic researchers continue to publish on Move's foundations. Adamant participates in this community rather than diverging from it.
+
+### 6.1.2 What "Adamant Move" extends
+
+Adamant Move is Move with three protocol-specific extensions. Where standard Move and Adamant Move agree, programs written in standard Move work without modification on Adamant; where they differ, the differences are documented here.
+
+**Extension 1: Mutability declarations as first-class syntax.**
+
+Standard Move does not have native syntax for object mutability declarations as defined in section 5.3. Adamant Move adds the following construct to module declarations:
+
+```move
+module 0xCOFFEE::example_token {
+    use adamant::object;
+    use adamant::mutability;
+
+    // The mutability declaration is part of the type definition,
+    // visible to readers, enforced by the protocol.
+    #[mutability(immutable)]
+    public struct ExampleToken has key {
+        id: object::ObjectId,
+        balance: u64,
+    }
+
+    // ...
+}
+```
+
+Available declarations: `#[mutability(immutable)]`, `#[mutability(owner_upgradeable(addr))]`, `#[mutability(vote_upgradeable(token_type, thresholds))]`, `#[mutability(upgradeable_until_frozen(addr))]`, `#[mutability(custom(validator_id))]`. The compiler refuses to compile a module that lacks an explicit mutability annotation; defaults are not provided, because defaulting to anything other than the strictest option silently weakens the user's expectations.
+
+**Extension 2: Shielded and transparent execution annotations.**
+
+Functions in Adamant Move are annotated with their privacy requirement:
+
+```move
+// Operates entirely on shielded inputs and shielded state.
+// Produces a zk-SNARK proof of correct execution without
+// revealing inputs or state to validators.
+#[shielded]
+public fun private_transfer(
+    sender: &mut Coin,
+    recipient: address,
+    amount: u64,
+) { /* ... */ }
+
+// Operates on transparent (cleartext) inputs and state.
+// Validators see all inputs and outputs.
+#[transparent]
+public fun public_donation(
+    coin: Coin,
+    pool: &mut DonationPool,
+) { /* ... */ }
+
+// Default: contract author has not specified.
+// Compiler error - explicit choice required.
+public fun unspecified() { /* ... */ }
+```
+
+The compiler refuses to compile functions without an explicit privacy annotation. This forces contract authors to make a deliberate choice about each function's privacy properties, rather than producing transparent contracts by default.
+
+The protocol enforces these annotations at execution time. A `#[shielded]` function invoked in a transparent transaction is an error; a `#[transparent]` function invoked under a shielded execution context is an error. Section 7 specifies the cryptographic mechanisms by which shielded execution operates.
+
+**Extension 3: Privacy primitives.**
+
+Adamant Move provides built-in primitives for the privacy operations specified in section 7. Contract authors do not implement these from scratch; they call protocol-provided functions:
+
+- `adamant::privacy::shielded_balance` — type representing an encrypted balance
+- `adamant::privacy::stealth_address` — derive a one-time recipient address
+- `adamant::privacy::view_key_release` — produce a sub-view-key for selective disclosure
+- `adamant::privacy::range_proof` — prove a value lies in a range without revealing it
+- `adamant::privacy::membership_proof` — prove an element belongs to a set without revealing which
+
+These primitives compile to circuit operations in the protocol's Halo 2 circuit library (section 7), invisibly to the contract author. The contract author thinks of them as ordinary function calls; the compiler emits the corresponding circuit witnesses.
+
+### 6.1.3 What Adamant Move does not change
+
+Adamant Move preserves Move's core semantics unchanged. Specifically:
+
+- The linear type system, including the `key` and `store` ability constraints
+- Module structure, function visibility, and abilities
+- Generic types and phantom type parameters
+- Bytecode format (Adamant Move bytecode is a strict superset of standard Move bytecode, with the additional protocol-specific instructions documented in subsection 6.3)
+- The Move Prover specification language for formal verification
+- Standard library types (vectors, options, strings, etc.)
+
+A developer fluent in Move learns Adamant Move in days. The differences are additive, not breaking.
+
+### 6.1.4 What Adamant Move excludes
+
+Adamant Move excludes the following constructs that exist in some Move dialects:
+
+- **Dynamic dispatch via runtime type discovery.** Move's type system is statically resolved; dynamic dispatch in some dialects is implemented through trait-like patterns. Adamant Move declines these patterns to preserve verifiability properties.
+
+- **Native functions (NFTs in the language sense, not in the asset sense).** Standard Move permits "native functions" implemented by the runtime in C++ for performance. Adamant Move does not: every function is implemented in Move bytecode and verifiable. Performance-critical primitives are provided through the Halo 2 circuit interface (section 7) rather than through bytecode-bypass mechanisms.
+
+- **Direct global storage access.** Some Move dialects permit modules to read and write global storage by address. Adamant Move requires all storage access to be mediated through object references, consistent with section 5's object model.
+
+These exclusions tighten the language's verifiability and parallelism properties at modest cost to expressiveness.
+
+## 6.2 The Adamant Virtual Machine (AVM)
+
+The Adamant Virtual Machine (AVM) is the runtime that executes Adamant Move bytecode. It is implemented in Rust (Principle VI: standard tooling) and operates as one component of the validator node.
+
+### 6.2.1 Bytecode format
+
+AVM bytecode is a register-based instruction set with the following classes of instructions:
+
+- **Stack and register operations.** Move values, copy primitive values, swap, drop.
+- **Arithmetic and logical operations.** Integer arithmetic (with overflow checks by default), bitwise operations, comparison.
+- **Object operations.** Read object field, write object field, transfer ownership, create object, destroy object.
+- **Control flow.** Conditional branches, function calls, loops with bounded iteration.
+- **Privacy operations.** Invoke shielded function, invoke transparent function, generate proof, verify proof, release sub-view-key.
+- **Cryptographic primitives.** Hash, signature verification, KZG operations, Halo 2 circuit invocation.
+- **Resource operations.** Charge gas, query remaining gas, raise out-of-gas error.
+
+The instruction set is finite and frozen at genesis. New instructions cannot be added without a hard fork (section 11).
+
+### 6.2.2 Execution model
+
+When a transaction is executed by the AVM, the following sequence occurs:
+
+1. **Authorisation.** The transaction's authorisation logic is run (section 4). If invalid, execution aborts.
+
+2. **Object loading.** All objects referenced by the transaction are loaded from chain state. The transaction declares its read-set and write-set in advance; the loader validates that the transaction touches no objects outside its declared sets.
+
+3. **Type checking.** The bytecode is verified against the declared types of loaded objects.
+
+4. **Gas budgeting.** The transaction's gas budget (specified by the user, paid in advance) is checked against the protocol's minimum requirements.
+
+5. **Execution.** Bytecode runs to completion or until gas is exhausted. State changes are accumulated in a transaction-local buffer; chain state is not mutated until execution succeeds.
+
+6. **Privacy proof generation.** For shielded transactions, a Halo 2 proof is generated attesting to the correctness of the execution without revealing the shielded inputs or state. For transparent transactions, no proof is required.
+
+7. **Commit or abort.** If execution succeeded and (for shielded transactions) the proof verifies, state changes are committed: object versions increment, ownership transfers apply, new objects are created, destroyed objects are removed. If execution failed, all state changes are discarded except for the gas charged.
+
+This model is per-transaction. Parallel execution across transactions is the next subsection.
+
+### 6.2.3 Parallel execution
+
+The protocol exploits the causal-independence property of the object model (section 5.2.1) to execute many transactions in parallel. The mechanism is **deterministic, declared parallelism**: each transaction declares its read-set and write-set; the scheduler partitions transactions into groups whose declared sets do not overlap; each group runs in parallel.
+
+**Scheduler algorithm (high level).** Given a batch of transactions to execute:
+
+1. Compute the conflict graph: nodes are transactions; edges connect transactions whose read/write sets overlap.
+2. Compute a graph colouring: transactions of the same colour have no edges, hence no conflicts.
+3. Execute all transactions of the same colour in parallel on available cores.
+4. Once a colour completes, proceed to the next colour.
+5. Across colours, ordering follows the consensus order from section 8.
+
+This is a deterministic version of the Block-STM algorithm used by Aptos and Sui, with the optimisation that conflicts are detected statically (from declared sets) rather than discovered optimistically at runtime. Static detection is possible because Adamant Move requires explicit declaration of read/write sets; this is a deliberate language design choice that pays off at execution.
+
+**Throughput properties.** For typical workloads, in which the vast majority of transactions touch disjoint object sets, the conflict graph has very few edges and most transactions run in the first colour. Empirically (extrapolating from published Sui and Aptos benchmarks), this translates to per-validator throughput of 100,000+ transactions per second per CPU core, scaling roughly linearly to the number of cores used. The 200,000 TPS target in Principle IV is achievable on a 4–8 core validator at realistic conflict rates.
+
+**Conflict handling.** When two transactions conflict, the consensus order (section 8) determines which executes first. The losing transaction is re-executed against the post-state of the winner; if the re-execution succeeds, both commit; if it fails (for example, the winner consumed a resource that the loser also needed), the loser aborts with a clear error and its gas is charged against the user's account.
+
+### 6.2.4 Determinism
+
+The AVM is deterministic: two executions of the same transaction against the same state produce identical results. This is essential for consensus: validators must agree on the outcome of every transaction without communicating.
+
+Sources of nondeterminism that Adamant Move and the AVM eliminate:
+
+- **No floating-point arithmetic.** All numeric operations are over fixed-precision integers.
+- **No system time access.** Functions cannot query wall-clock time. The chain provides a "consensus time" derived from the consensus mechanism (section 8) which is deterministic across all validators.
+- **No randomness from runtime sources.** When randomness is needed, it comes from the consensus VRF (section 8), which is deterministic given the chain state.
+- **No I/O.** The AVM cannot make network requests, read files, or interact with anything outside the chain state.
+- **Bounded loops only.** All loops must have statically-bounded iteration counts or run within a gas budget that bounds them dynamically.
+- **No undefined behaviour.** All operations have specified behaviour for all inputs; there is no equivalent of C's "undefined behaviour" that compilers may exploit.
+
+These constraints are familiar from other smart-contract VMs and are necessary for the correctness of the consensus mechanism. The cost is that some classes of computation cannot be expressed in Adamant Move; this is acceptable.
+
+## 6.3 Resource accounting (gas)
+
+Computation on Adamant is metered. Every operation has a gas cost; transactions specify a gas budget; the budget is charged regardless of whether the transaction succeeds. This prevents denial-of-service attacks and allocates a finite computational resource fairly.
+
+### 6.3.1 Multi-dimensional gas
+
+Adamant uses multi-dimensional gas accounting, separating distinct resources rather than collapsing them into a single number. The dimensions are:
+
+1. **Computation.** CPU cycles consumed by bytecode execution. Charged per instruction class, with weights calibrated to actual hardware costs.
+
+2. **State storage.** Bytes added to active state. Charged per byte at object creation and at object growth.
+
+3. **State rent prepayment.** When an object is created, an amount of rent (section 5.6) must be prepaid. This is a separate dimension from storage to allow per-byte storage and per-byte-second rent to be priced independently.
+
+4. **Bandwidth.** Bytes transmitted by validators when propagating the transaction. Charged per byte at submission.
+
+5. **Proof verification.** CPU cost of verifying zero-knowledge proofs attached to shielded transactions. Charged per proof.
+
+6. **Proof generation (optional).** CPU cost of generating zero-knowledge proofs, if outsourced to a prover market (section 7). Charged per proof when used.
+
+Each dimension has its own price (in ADM) set per epoch by the EIP-1559-style mechanism specified in section 10. A transaction's total fee is the sum of its consumption across dimensions, each multiplied by the relevant price.
+
+**Why multi-dimensional.** The cost of a simple transfer is dominated by computation and bandwidth; the cost of creating a large data object is dominated by storage; the cost of a complex shielded operation is dominated by proof verification. Pricing these as a single "gas" number, as Ethereum does, mis-allocates resources: simple transfers subsidise heavy contracts, and the chain's bottleneck shifts unpredictably between resources. Multi-dimensional accounting prices each resource at its actual marginal cost.
+
+### 6.3.2 Gas costs are fixed at genesis
+
+The gas costs of individual instructions are part of the consensus rules and are fixed at genesis. They cannot be modified by any on-chain mechanism. Changes require a hard fork (section 11).
+
+This is consistent with Principle I (credible neutrality) but represents a real constraint. If, post-genesis, an instruction is found to be under-priced (allowing denial-of-service attacks) or over-priced (deterring legitimate use), the protocol cannot be patched without coordinating a hard fork. The genesis gas table must therefore be calibrated carefully against published benchmarks before launch.
+
+The exception is the *prices* — the multipliers from gas units to ADM. Prices are determined per-epoch by the EIP-1559-style mechanism in section 10, which targets a specific block-fullness. This is not governance; it is a feedback loop with parameters fixed at genesis.
+
+### 6.3.3 Failed transactions are charged
+
+A transaction that fails partway through execution is charged for the gas it consumed up to the point of failure, plus a small minimum fee. This prevents adversaries from submitting failing transactions for free.
+
+The exception is authorisation failure: if a transaction's authorisation logic (section 4) returns invalid, the transaction is rejected at the mempool layer and never executed. No gas is charged because no execution occurred.
+
+### 6.3.4 Sponsored transactions
+
+The smart-account model (section 4) allows validation logic to specify that fees are paid by an account other than the transaction submitter. This enables:
+
+- **Application-sponsored transactions.** A dapp pays the gas for its users' interactions, removing a key onboarding friction.
+- **Paymaster contracts.** A specialised contract pays gas for specified categories of transactions, charging users in another currency or off-chain.
+- **Free-tier sponsorship.** A protocol-deployed contract pays gas for users below a usage threshold, funded by some other mechanism (advertisement-free model, philanthropic funding, etc.).
+
+Sponsored transactions are not a special case in the protocol; they are a natural consequence of validation logic being arbitrary code. The "fee payer" of a transaction is whichever account the validation logic specifies — typically, but not necessarily, the transaction submitter.
+
+## 6.4 Module deployment and upgrades
+
+Smart contracts on Adamant are organised into *modules*, the same unit of code organisation as in standard Move. A module contains type definitions and function definitions; modules are deployed to the chain as Adamant Move bytecode.
+
+### 6.4.1 Deployment
+
+Module deployment is a transaction whose effect is to create a new `Module` object on the chain. The `Module` object's `mutability` field is the module's declared mutability (from the `#[mutability(...)]` annotation, section 6.1.2). The module's bytecode is stored in the `contents` field.
+
+After deployment, contracts and other modules can reference the deployed module by its `ObjectId`, invoke its public functions, and read its public types.
+
+### 6.4.2 Upgrade
+
+A module upgrade is a transaction that submits new bytecode to replace the existing bytecode of a module. Whether the upgrade succeeds depends on the module's mutability:
+
+- `Immutable` modules cannot be upgraded. Upgrade transactions targeting them are rejected by consensus.
+- `OwnerUpgradeable` modules can be upgraded by a transaction signed by the owner.
+- `VoteUpgradeable` modules can be upgraded after a successful vote, with the upgrade applied after the execution delay.
+- `UpgradeableUntilFrozen` modules can be upgraded by the owner until the freeze operation is called, after which they behave as `Immutable`.
+- `Custom` modules can be upgraded subject to the validator object's rules.
+
+### 6.4.3 Compatibility constraints on upgrades
+
+A module upgrade is required to be *compatible* with the previous version, in a specific technical sense: types defined by the module that are referenced by other modules cannot be removed or have their layout changed. Adding new types, new functions, or extending existing functions in backward-compatible ways is permitted.
+
+This constraint exists to prevent silent breakage of dependent contracts. If module A defines type `T` and module B holds a value of type `T`, an upgrade to module A that removes `T` would render module B's value un-interpretable. The compiler and the chain enforce this constraint at upgrade time.
+
+For cases where breaking changes are desired, the standard pattern is to deploy a new module (with a new `ObjectId`) and migrate users explicitly.
+
+## 6.5 Standard library
+
+The protocol provides a standard library of modules, deployed at genesis with `Immutable` mutability. The standard library includes:
+
+- `adamant::primitives` — basic types (vectors, options, strings, etc.) and operations
+- `adamant::object` — object manipulation primitives
+- `adamant::address` — address arithmetic and validation
+- `adamant::hash` — SHA-3 and BLAKE3 wrappers
+- `adamant::signature` — Ed25519 and ML-DSA verification
+- `adamant::privacy` — shielded execution primitives
+- `adamant::token` — fungible token reference implementation
+- `adamant::nft` — non-fungible token reference implementation
+- `adamant::governance` — vote-based mutability helpers
+- `adamant::recovery` — social-recovery helpers for accounts
+
+Modules in the standard library are accessible from any contract without separate deployment. They are `Immutable` and cannot be modified post-genesis. A future hard fork may extend the standard library; existing standard-library modules are permanent.
+
+The standard library is deliberately conservative. It provides the primitives applications need without prescribing application architectures. Higher-level patterns (decentralised exchange logic, lending protocols, identity systems, etc.) are expected to be implemented as user-deployed modules, not bundled into the standard library.
+
+## 6.6 Verification and the Move Prover
+
+The Move language was designed alongside the **Move Prover**, a static verification tool that checks contracts against formal specifications. Adamant Move inherits the Move Prover; specifications written in the Move Prover specification language are checked against contracts at compile time.
+
+The Move Prover's contribution is the ability to prove non-trivial properties of contracts: "this contract never allows the total token supply to exceed X", "this lending protocol never allows under-collateralised positions", "this voting contract never allows double-voting". These are exactly the properties that have, on other chains, been violated by deployed contracts with catastrophic consequences.
+
+The protocol does not require contracts to be Prover-verified; it does, however, strongly recommend it for any contract holding significant value. Reference wallets `SHOULD` surface verification status to users when displaying contracts: "this contract has been formally verified for the property [X]" is a meaningfully different trust signal than "this contract compiled without errors".
+
+## 6.7 Worked example: continuing the token
+
+Continuing the worked example from section 5.8, here is the structure of a fungible-token module in Adamant Move:
+
+```move
+#[mutability(immutable)]
+module 0xCOFFEE::example_token {
+    use adamant::object;
+    use adamant::token;
+
+    public struct ExampleToken has key, store {
+        id: object::ObjectId,
+        balance: u64,
+    }
+
+    public struct TokenSupply has key {
+        id: object::ObjectId,
+        total: u64,
+        max_supply: u64,
+    }
+
+    #[shielded]
+    public fun transfer(
+        from: &mut ExampleToken,
+        to: &mut ExampleToken,
+        amount: u64,
+    ) {
+        // Linear types ensure 'amount' is accounted for exactly:
+        // it leaves 'from' and arrives at 'to'.
+        from.balance = from.balance - amount;
+        to.balance = to.balance + amount;
+        // The compiler emits range-proof and balance-conservation
+        // circuit witnesses automatically, because the function is
+        // marked #[shielded].
+    }
+
+    #[transparent]
+    public fun supply(supply: &TokenSupply): u64 {
+        supply.total
+    }
+
+    // ... mint, burn, etc.
+}
+```
+
+A few features worth observing:
+
+- The mutability is declared `Immutable` at the module level. The module's code cannot be changed after deployment. Users interacting with the token can rely on its current rules forever.
+- The `transfer` function is `#[shielded]`. The compiler automatically generates the zero-knowledge circuit witness; the developer writes ordinary code.
+- The linear type system ensures `amount` is correctly accounted for. Code that "forgets" to update `to.balance` after subtracting from `from.balance` does not compile.
+- The function body is short because the protocol provides the cryptographic machinery. The contract author writes business logic; the protocol handles cryptography.
+
+This worked example will be revisited in section 7 (Privacy Layer), which specifies the cryptographic mechanisms underlying `#[shielded]` functions.
+
+
+# 7. Privacy Layer
+
+This section specifies how Adamant achieves privacy by default. It is the longest and most cryptographically dense section in this whitepaper, because privacy that is genuinely usable — private by default, programmable, auditable when the user chooses, and resistant to deanonymisation through chain analysis — requires substantial cryptographic machinery.
+
+The section builds on section 3 (cryptographic primitives), section 4 (account model and view keys), section 5 (object model), and section 6 (Adamant Move's `#[shielded]` annotation). It specifies:
+
+1. The note model: how value is represented privately on the chain
+2. Stealth addresses: how recipient identities are hidden
+3. Shielded execution circuits: how Halo 2 proofs attest to correct shielded computation
+4. View keys and selective disclosure: the cryptographic basis of section 4.4
+5. The shielded pool: the global anonymity set
+6. Encrypted memos: how parties communicate transaction context privately
+7. Prover markets: the optional outsourcing of proof generation
+8. Compliance considerations and threat boundaries
+
+The design follows from Principle II (privacy by default), and it is designed to interact cleanly with Principle I (credible neutrality) and Principle IV (performance). Where these come into tension, the priority order in section 2.8 governs.
+
+## 7.1 The note model
+
+The fundamental unit of shielded value on Adamant is the **note**: a cryptographic commitment to a value held by a specified recipient under specified conditions. Notes are conceptually similar to Zcash Sapling/Orchard notes and to Aztec's notes, with adaptations for Adamant's object model.
+
+A note is a tuple:
+
+```
+Note {
+    value:        u64,           // the amount, in the smallest unit
+    asset_type:   TypeId,        // identifies the type of asset (e.g. ADM, a token type)
+    recipient:    StealthAddress, // see section 7.2
+    randomness:   [u8; 32],      // sampled per note; ensures uncorrelatable commitments
+    metadata:     NoteMetadata,  // application-specific data
+}
+```
+
+A note never appears on the chain in cleartext. What appears on the chain is the note's **commitment**, computed as:
+
+```
+commitment = Poseidon(value || asset_type || recipient || randomness || metadata_hash)
+```
+
+The commitment is 256 bits and reveals nothing about its inputs. Two notes with the same `value`, `asset_type`, and `recipient` but different `randomness` values produce uncorrelated commitments.
+
+### 7.1.1 Note states
+
+Notes have three possible states:
+
+1. **Created** — the commitment exists in the global note commitment tree, but the note has not been spent.
+2. **Spent** — the note's nullifier has been published, indicating that the note has been consumed by some transaction. The note's commitment remains in the tree (commitments are append-only) but the nullifier prevents double-spending.
+3. **Discoverable** — the note's owner has access to it via their view key but has not yet spent it. This is a property of view-key holders, not a global state.
+
+### 7.1.2 Nullifiers
+
+A **nullifier** is a 256-bit value uniquely derived from a note and its owner's secret key. It is published to the chain when the note is spent, and the chain rejects any future transaction that publishes the same nullifier.
+
+Nullifier construction:
+
+```
+nullifier = Poseidon(domain_tag || nullifier_key || note_commitment || position_in_tree)
+```
+
+Where:
+- `nullifier_key` is a key derived from the owner's spending key (specifically: `nullifier_key = Poseidon(domain || spending_key)`)
+- `position_in_tree` is the note's leaf index in the global commitment tree
+
+This construction has critical properties:
+
+- **Unlinkability.** A nullifier reveals nothing about the note it nullifies — neither value, recipient, nor commitment. To an observer, a published nullifier is a random 256-bit value.
+- **Uniqueness.** Each note has exactly one valid nullifier. An attacker who tries to spend the same note twice must produce the same nullifier; the chain rejects the duplicate.
+- **Unforgeability.** Producing the correct nullifier requires the spending key. Without it, computing the nullifier is intractable.
+
+### 7.1.3 The note commitment tree
+
+All note commitments ever created on Adamant live in a single append-only Merkle tree, the **global note commitment tree** (GNCT). The tree has a fixed depth of 64, allowing 2^64 notes — sufficient for the chain's projected lifetime.
+
+Tree properties:
+
+- **Append-only.** Once a commitment is added, it cannot be removed or modified. This is essential to the privacy model: removing commitments would create deanonymisation opportunities.
+- **Per-shielded-transaction Merkle proof.** A transaction spending a note proves, via a Merkle path, that the note's commitment is in the tree. The proof reveals only the path's hash chain, not which specific commitment is referenced. This is the basis of the protocol's anonymity set.
+- **Anonymity set = entire tree.** Every shielded spend is indistinguishable from spending any other note in the tree, because the Merkle proof reveals only that *some* commitment in the tree is being spent. The anonymity set grows with the chain's history.
+- **Recent-roots window.** Validators retain Merkle roots of the GNCT for the most recent 100 epochs (approximately 1 hour at 36-second epochs). Spends prove against any of these roots, allowing wallets to spend notes without re-syncing the latest tree state on every transaction.
+
+The tree is implemented using the Pedersen-hashed Merkle construction with Poseidon hashing for in-circuit efficiency.
+
+### 7.1.4 Comparison with Zcash and Aztec
+
+Adamant's note model is closest to Zcash Orchard (the current generation of Zcash shielded notes), with two adaptations:
+
+1. **Asset diversity.** Adamant notes carry an `asset_type` field, allowing many distinct assets (tokens, NFT-like objects, etc.) to share the global anonymity set. Zcash's Orchard pool is single-asset (ZEC only); Adamant's design follows Aztec's multi-asset approach.
+
+2. **Programmable metadata.** Adamant notes carry application-specific metadata, allowing contracts to attach arbitrary data to notes (e.g. a vesting schedule, an unlock condition, an attached message hash). The metadata is committed in the note commitment but visible only to view-key holders.
+
+These adaptations preserve Zcash's strong privacy properties while extending the model to support programmable shielded contracts.
+
+## 7.2 Stealth addresses
+
+A **stealth address** is a one-time-use address derived from a recipient's long-term identity such that observers cannot link multiple notes destined for the same recipient.
+
+### 7.2.1 The problem stealth addresses solve
+
+Without stealth addresses, every transfer to a particular recipient would publish the recipient's address (or a fixed hash of it) on the chain. Even if the value and sender are hidden, repeated transfers to the same recipient would be observable: "the same recipient received 50 transactions over the past week" is a powerful starting point for deanonymisation, even without knowing who the recipient is.
+
+Stealth addresses solve this by deriving a fresh, unlinkable address for every transfer. A recipient publishes a single long-term *viewing key* and *spending public key*, and senders derive one-time addresses from these such that the recipient can recognise transfers to themselves but no observer can correlate multiple transfers.
+
+### 7.2.2 Construction
+
+The protocol uses a Diffie-Hellman-based stealth address scheme adapted from the Monero and Zcash designs.
+
+A recipient's long-term identity comprises:
+
+- **Spending key** `sk_s`: scalar in the BLS12-381 scalar field
+- **Viewing key** `sk_v`: scalar in the BLS12-381 scalar field
+- **Spending public key** `pk_s = sk_s · G` where G is the curve generator
+- **Viewing public key** `pk_v = sk_v · G`
+
+The recipient's "address" published off-chain (in payment URIs, QR codes, etc.) is `(pk_s, pk_v)`.
+
+To send a note to this recipient, a sender:
+
+1. Generates a fresh random scalar `r`
+2. Computes the stealth public key: `R = r · G` (this becomes part of the note's on-chain data)
+3. Computes the shared secret: `s = HashToScalar(r · pk_v || domain_tag)`
+4. Computes the one-time stealth address: `P = pk_s + s · G`
+5. Constructs the note with `recipient = P`
+
+The shared secret `s` derivation uses `pk_v` (the viewing key) so that the recipient can compute `s` using `sk_v` (since `r · pk_v = r · sk_v · G = sk_v · R`).
+
+The recipient's wallet, upon scanning the chain, computes for each note:
+
+1. `s' = HashToScalar(sk_v · R || domain_tag)`
+2. `P' = pk_s + s' · G`
+3. If `P' == note.recipient`, the note is for this recipient
+
+If the note is theirs, the recipient derives the corresponding spending key as `sk' = sk_s + s'` and uses it to construct the nullifier when spending.
+
+### 7.2.3 Properties
+
+- **Unlinkability.** Two stealth addresses for the same recipient look entirely uncorrelated to anyone without the viewing key. Computing the link requires either `sk_v` or solving the discrete logarithm problem on BLS12-381.
+- **No interaction.** The sender does not communicate with the recipient; the stealth address is derived purely from public information.
+- **Selective disclosure compatible.** Disclosing the viewing key reveals all notes for the recipient but does not reveal the spending key, so view-key holders can audit but not spend.
+
+### 7.2.4 View tag optimisation
+
+A naive scan of the chain requires the recipient to compute `s'` and `P'` for every note ever created — an operation that becomes prohibitive as the chain grows. The protocol addresses this with a **view tag**: an 8-bit value attached to each note, computed from the shared secret. A wallet scanning notes can quickly reject notes whose view tag does not match the expected value, computing the full check only for the ~1/256 notes that pass the tag filter.
+
+This optimisation is borrowed from Monero's view tag design (introduced 2022). It reduces wallet scan cost by roughly 256× at the cost of a minor reduction in privacy: an attacker observing the view tags of a known recipient can identify roughly 1/256 of notes as candidates for that recipient. This is a substantially weaker signal than full address linkage and is widely accepted as a reasonable trade-off.
+
+## 7.3 Shielded execution circuits
+
+A shielded transaction's correctness is attested by a Halo 2 zero-knowledge proof. The proof asserts that the transaction is valid — every input note exists, every nullifier is correctly derived, every output note is well-formed, every value-conservation rule is respected — without revealing the inputs, the values, or the recipients.
+
+### 7.3.1 Anatomy of a shielded transaction
+
+A shielded transaction comprises:
+
+```
+ShieldedTransaction {
+    nullifiers:        Vec<Nullifier>,        // notes being spent
+    output_commitments: Vec<NoteCommitment>,  // notes being created
+    encrypted_outputs:  Vec<EncryptedNote>,   // for recipient delivery
+    public_inputs:     PublicInputs,          // explicit transaction parameters
+    proof:             Halo2Proof,            // attests to validity
+    binding_signature: Signature,             // ties the proof to the transaction
+}
+```
+
+Public inputs include the nullifiers, the output commitments, the GNCT root being spent against, the asset types involved (which may be partially disclosed for compliance), and any explicit fees. Everything else is hidden.
+
+### 7.3.2 The validity circuit
+
+The Halo 2 circuit that proves validity asserts the following statements:
+
+1. **Input note existence.** For each nullifier, there exists a note commitment in the GNCT (proven via a Merkle path) and the nullifier is correctly derived from the note's contents.
+
+2. **Nullifier uniqueness.** Each published nullifier has not previously appeared on the chain. (This check is partly in-circuit, partly enforced by the consensus layer's nullifier set.)
+
+3. **Output note well-formedness.** Each output commitment is correctly computed from valid inputs (a recipient stealth address, a value, an asset type, randomness).
+
+4. **Value conservation.** The sum of input values equals the sum of output values plus the explicit fees, *per asset type*. This is the property that prevents inflation: a shielded transaction cannot create value from nothing or destroy value silently.
+
+5. **Range proofs.** Every value in the transaction lies in `[0, 2^64)`. Without this, an attacker could create notes with negative values that nominally satisfy value conservation while creating value.
+
+6. **Authority.** For each input note, the prover knows the spending key corresponding to the note's recipient. This is the analog of "the spender authorised the spend."
+
+7. **Smart-contract execution.** For shielded executions of `#[shielded]` Adamant Move functions, the circuit additionally proves that the function executed correctly given the shielded inputs and produced the shielded outputs.
+
+The circuit is large — typical proofs cover tens of thousands of constraints. Halo 2's PLONKish arithmetisation is well suited to this scale; proof size is approximately 1–4 KB depending on the complexity of the shielded computation.
+
+### 7.3.3 Proof generation cost
+
+Generating a Halo 2 proof for a typical shielded transaction takes:
+
+- **Simple transfer (1 input, 2 outputs):** approximately 2–5 seconds on consumer laptop hardware (M2-class CPU), 4–10 seconds on a modern smartphone.
+- **Complex shielded contract execution:** can range from 10 seconds to several minutes depending on circuit complexity.
+
+These figures derive from published Halo 2 benchmarks and Aztec's measured proving times for analogous operations (Aztec mainnet, November 2025 onwards). They are improving over time as proving systems mature.
+
+### 7.3.4 Proof verification cost
+
+Verifying a Halo 2 proof is fast: approximately 5–10 milliseconds per proof on commodity hardware, regardless of the proof's circuit size. Validators verify proofs as part of consensus; the verification cost is bounded and predictable.
+
+## 7.4 View keys and selective disclosure
+
+Section 4.4 introduced view keys conceptually. This subsection specifies the cryptographic mechanisms.
+
+### 7.4.1 View key hierarchy
+
+A user's master seed deterministically generates a hierarchical key tree:
+
+```
+master_seed
+   ├── spending_key (sk_s)
+   ├── viewing_key (sk_v) ── full account visibility
+   │      ├── time_window_view_key   ── visibility into [t1, t2] only
+   │      ├── counterparty_view_key  ── visibility into transactions with X only
+   │      ├── amount_threshold_view_key ── visibility into amounts > Y only
+   │      └── compliance_view_key    ── visibility into transactions matching rules R
+   └── nullifier_key (sk_n) ── deterministic from sk_s
+```
+
+The viewing key has full visibility. Sub-view-keys are derived deterministically from the viewing key with parameters specifying their scope. The derivation is one-way: a sub-view-key holder cannot derive the parent viewing key.
+
+### 7.4.2 Sub-view-key construction
+
+A sub-view-key for scope `S` is constructed as:
+
+```
+sub_view_key_S = (sk_v + Hash(domain || S || sk_v) · G_aux)
+```
+
+Where `G_aux` is a fixed auxiliary curve point and `S` is a structured description of the sub-key's scope (e.g. `{"start": t1, "end": t2}` for a time-windowed key).
+
+The sub-view-key allows the holder to compute the shared secret `s'` for notes that fall within scope `S`, but is cryptographically constructed so that notes outside scope `S` produce nonsense decryption results.
+
+The implementation of "in scope" is enforced by the recipient's wallet, not by the chain: the wallet decides which sub-view-keys to derive and to whom. The chain has no view-key-related logic; it does not know which sub-view-keys exist.
+
+### 7.4.3 Provable disclosure
+
+A user can produce cryptographic proofs of specific facts about their transactions without revealing other facts. Examples:
+
+- "I received at least X ADM from address Y between dates D1 and D2." Prover constructs a Halo 2 proof that some subset of their notes meet these criteria, without revealing which specific notes or what other notes they hold.
+- "My current shielded balance is at least Z." Useful for proof-of-solvency to a counterparty.
+- "I have not received any notes from sanctioned address X." Useful for compliance assertions where the user wants to prove the negative.
+
+The protocol provides circuit primitives for constructing such proofs (`adamant::privacy::prove_assertion(...)` in the standard library, section 6.5). Wallets expose them as user-friendly operations: "generate audit proof for tax filing", "generate solvency proof for counterparty", etc.
+
+### 7.4.4 Compliance considerations
+
+The view-key mechanism provides users with a strong compliance posture: they can prove facts about their financial activity to legitimate authorities (auditors, tax authorities, regulators with demonstrated legal standing) without exposing unrelated transaction history.
+
+This is a significantly *stronger* compliance posture than transparent chains offer. On a transparent chain, a user complying with a regulatory request must expose their entire transaction history forever, to all observers. On Adamant, the user controls precisely what is disclosed and to whom.
+
+The protocol does **not** include any mechanism for compelled disclosure. There is no key escrow, no master decryption key held by any party, no protocol-level mechanism by which a third party can demand a view key. A user who refuses to disclose simply does not disclose; the protocol does not provide override.
+
+This is not a regulatory loophole; it is a deliberate design choice consistent with Principle I and Principle II. The protocol's view is that compliance is an obligation of the user, not a property the protocol enforces. Users in jurisdictions with disclosure requirements can comply; users facing illegitimate demands have the cryptographic option to refuse.
+
+## 7.5 The shielded pool and anonymity set
+
+The "shielded pool" is the collective set of all unspent shielded notes on the chain. The pool's size is the protocol's anonymity set: every shielded spend is, in principle, indistinguishable from spending any note in the pool.
+
+### 7.5.1 Anonymity set growth
+
+The anonymity set grows monotonically over time, in two senses:
+
+1. **More notes.** As transactions create more notes, the pool grows. A spend's anonymity set is the entire pool at the time of spending.
+2. **More age.** The age distribution of notes in the pool widens over time, making timing-correlation attacks harder.
+
+There is no equivalent on Adamant of Monero's "ring size" or Zcash's "selected anonymity set". Every spend is anonymised against the full pool, because the Merkle proof of inclusion reveals only that *some* commitment is being spent.
+
+### 7.5.2 Anonymity set hygiene
+
+Several practices preserve the strength of the anonymity set:
+
+- **Default-shielded transactions.** Because Adamant transactions are shielded by default (Principle II), the anonymity set comprises the entire population of users, not the subset who opted into privacy. This is the most important property: the anonymity set is the chain's user base, not its privacy-conscious subset.
+
+- **Decoy transactions are unnecessary.** Some privacy chains generate decoy traffic to obscure timing patterns. Adamant does not, because the volume of organic shielded traffic at the throughput target is sufficient.
+
+- **No pool segmentation.** All shielded transactions, regardless of asset type or amount, draw from the same anonymity set. There is no "small-value pool" vs "large-value pool"; segmentation would weaken privacy by partitioning users.
+
+### 7.5.3 Known limitations
+
+The anonymity set is a powerful but not unconditional defence:
+
+- **Off-chain context.** If a user known to receive a payment from another known user transfers funds shortly afterward, an observer with off-chain knowledge can draw inferences. The chain's privacy does not protect against off-chain correlation.
+
+- **Statistical attacks at edges.** Users who interact only rarely with the chain present a smaller "behavioural" anonymity set to a sophisticated observer with access to broad metadata (network surveillance, exchange records, etc.). The chain's cryptographic privacy is unconditional, but the *practical* privacy of an individual user depends on their broader operational security.
+
+- **Zero-day cryptographic breaks.** The privacy guarantees rest on Halo 2's soundness, the discrete-log assumption on BLS12-381, and the random-oracle assumption on Poseidon. A break in any of these would compromise privacy. The protocol uses well-studied primitives to minimise this risk but cannot eliminate it.
+
+These limitations are documented because they are real. The protocol does not promise privacy that it cannot deliver.
+
+## 7.6 Encrypted memos
+
+Senders frequently need to communicate context to recipients — invoice numbers, references, free-text notes. The protocol supports this via **encrypted memos** attached to notes.
+
+### 7.6.1 Memo construction
+
+A memo is up to 512 bytes of arbitrary data, encrypted to the recipient's stealth address. The memo is included in the note's encrypted output (the data structure that allows the recipient to decrypt the note's contents) and is invisible to all other parties.
+
+Encryption uses ChaCha20-Poly1305 (section 3.5) with the key derived from the stealth shared secret:
+
+```
+memo_key = HashToKey(s || domain_tag_memo)
+encrypted_memo = ChaCha20Poly1305(memo_key, nonce, memo_plaintext)
+```
+
+The recipient decrypts using their derived shared secret.
+
+### 7.6.2 Memo policies
+
+Applications may define structured memo formats: standard fields for invoices, payment references, etc. The protocol does not prescribe a format; common formats may emerge by convention.
+
+Wallets `SHOULD` warn users that memos are visible to the recipient and to anyone the recipient shares their viewing key with. A "private memo" between sender and recipient is genuinely private only if both parties' operational security is intact.
+
+## 7.7 Prover markets
+
+Generating Halo 2 proofs is computationally significant — seconds on a laptop, longer on a phone for complex contracts. Some users will prefer to outsource proof generation to specialised hardware. The protocol supports this through **prover markets**.
+
+### 7.7.1 Mechanism
+
+A user constructing a shielded transaction can:
+
+1. **Prove locally.** Generate the Halo 2 proof on their own device. The proof reveals nothing to anyone; the user pays only standard transaction fees.
+
+2. **Outsource to a prover.** Encrypt the witness data (the inputs the prover needs) to a chosen prover's public key, submit the witness with a fee offer to the prover market, and receive the completed proof. The prover sees the witness contents (so the user must trust the prover with this data); the chain sees only the final proof.
+
+3. **Outsource via a privacy-preserving prover.** Some prover protocols (using secure enclaves, multi-party computation, or trusted hardware) allow proving without revealing the witness to the prover. These are emerging technologies; the protocol supports them where available but does not require them.
+
+### 7.7.2 The trust model
+
+Outsourcing proof generation is a trust trade-off: the user trades computational convenience for the prover's ability to see (and potentially log) their witness data. For low-value transactions where the witness contents are uninteresting, this is fine. For high-value transactions, users `SHOULD` prove locally or use privacy-preserving proving.
+
+The chain does not enforce this trade-off; it is the user's choice. Wallets `SHOULD` surface the choice clearly.
+
+### 7.7.3 Provers as a market
+
+Multiple provers compete in the market. Provers advertise their fee rates, their hardware, and (where applicable) their privacy-preservation properties. Users select provers based on these criteria.
+
+Provers earn fees in ADM. The protocol does not specify the prover protocol in detail beyond ensuring that the on-chain submission mechanism (a transaction containing a prover-generated proof) works identically to a self-generated proof. The market itself is permissionless: anyone can become a prover.
+
+## 7.8 Privacy and the object model
+
+Section 5.7 anticipated this subsection: how does the privacy layer interact with the object model?
+
+### 7.8.1 Shielded vs transparent objects
+
+An object is either **shielded** or **transparent**, declared at creation:
+
+- **Shielded objects.** The `contents` field is encrypted. State transitions are accompanied by Halo 2 proofs attesting to correctness. The object's existence is public; its contents and ownership details are not.
+
+- **Transparent objects.** The `contents` field is in clear text. State transitions are visible to all observers. Ownership is visible. Useful for public-record applications, public bounties, transparent governance, and any case where the application's purpose requires transparency.
+
+This is a per-object choice, not a per-transaction choice. An object created shielded remains shielded for its lifetime; an object created transparent remains transparent for its lifetime. (A shielded object can produce transparent outputs by explicitly burning to a transparent destination, and vice versa, but the object itself does not switch modes.)
+
+### 7.8.2 Mixed transactions
+
+A single transaction may touch both shielded and transparent objects. The transaction's structure reflects this: shielded portions carry Halo 2 proofs; transparent portions are visible. The mix is common: a user spends shielded notes to pay a transparent contract, or a transparent contract emits shielded notes to a recipient.
+
+The Adamant Move compiler handles the proof generation for the shielded portions automatically when functions are annotated `#[shielded]` (section 6.1.2).
+
+### 7.8.3 Privacy of mutability declarations
+
+Object mutability declarations are *always* in clear text, regardless of whether the object is otherwise shielded. This is mandated by Principle V (mutability must be visible to users before interaction). A user inspecting a contract `MUST` be able to determine its mutability without trust in any party.
+
+## 7.9 Threat model and limitations
+
+This subsection documents what the privacy layer protects against and what it does not.
+
+### 7.9.1 Protected against
+
+- **On-chain analysis.** An adversary observing only the chain learns the existence and structural properties of shielded transactions but not their contents, values, or participants beyond what is publicly disclosed.
+
+- **Validator surveillance.** Validators see the same data as any other on-chain observer; their privileged role in consensus does not give them privileged access to shielded data.
+
+- **Network surveillance of shielded transaction contents.** Encryption between user wallets and the network protects shielded transaction data in transit.
+
+- **Compelled decryption.** No party — including the protocol's original implementers, validators acting in concert, or governments — can decrypt shielded data without the user's cooperation.
+
+### 7.9.2 Not protected against
+
+- **Off-chain correlation.** If the user identifies themselves to a third party (an exchange, a vendor, a service provider) and that party correlates on-chain activity to their off-chain identity, the chain's cryptographic privacy is undefeated but the practical anonymity is reduced.
+
+- **Compromised user devices.** A malware-infected wallet leaks the user's keys and renders cryptographic privacy moot.
+
+- **Operational security failures.** A user reusing the same payment addresses, leaking metadata through transaction timing, or interacting predictably with services that expose their identity reduces their practical anonymity.
+
+- **Quantum cryptanalysis (long-term).** The privacy primitives (BLS12-381, Halo 2) are not post-quantum. A future quantum adversary could retroactively break the privacy of historical shielded transactions. This is a known limitation; the protocol's signature scheme is post-quantum (ML-DSA), but the privacy primitives are not yet, because production-ready post-quantum proving systems do not exist as of this draft. Section 11 specifies the migration path.
+
+- **Side-channel attacks on prover hardware.** When proofs are generated on devices vulnerable to side channels (timing attacks, power analysis, electromagnetic leakage), an adversary with physical access could potentially extract witness data. This is a hardware concern, not a protocol concern.
+
+### 7.9.3 Quantum vulnerability of historical privacy
+
+The protocol acknowledges that a future sufficiently large quantum computer could retroactively break BLS12-381-based discrete-log assumptions and retroactively break Halo 2's privacy guarantees. Transactions made today might, in 2050, be retrospectively decryptable.
+
+This is a real and acknowledged limitation. The protocol's responses:
+
+1. **Forward security via key rotation.** A user who rotates their viewing keys regularly limits the scope of historical decryption to the period under each key.
+
+2. **Forward security of nullifiers.** Even if historical privacy is compromised, nullifiers prevent any reanalysis from triggering double-spends or other consensus violations. The chain's integrity is not at risk; only its historical privacy.
+
+3. **Migration to post-quantum proving.** When post-quantum zk proving systems mature into production-ready form (likely some years after the chain's launch), the protocol can be migrated. New shielded transactions would use the new system. Section 11 specifies the migration mechanism.
+
+The honest assessment: a user requiring privacy that survives the next 25–50 years against nation-state-level adversaries with future quantum computers should not rely on Adamant's privacy layer alone. They should also use operational security measures (separate identities, careful counterparty selection, geographically diverse infrastructure) and consider the eventual post-quantum migration.
+
+For the typical use cases — privacy of financial activity against contemporary adversaries, including most regulatory and commercial threat actors — the protocol's privacy is sound and substantial.
+
+## 7.10 Summary
+
+The privacy layer is constructed from peer-reviewed primitives composed in well-understood patterns:
+
+- **Notes and nullifiers** following Zcash Orchard's design, extended for multi-asset support
+- **Stealth addresses** following the Diffie-Hellman construction shared with Monero and Zcash, with view-tag optimisation
+- **Halo 2 proofs** for shielded execution validity, leveraging Zcash's production implementation
+- **View keys and sub-view-keys** for selective disclosure, structured for granular user control
+- **Encrypted memos** for sender-to-recipient context
+- **Prover markets** for optional outsourcing of proof generation
+
+The contribution is the integration: a system where these primitives compose cleanly with the object model, the smart-contract language, and the consensus mechanism (specified in section 8 next), to deliver a chain that is genuinely private by default and genuinely usable.
+
+
+# 8. Consensus
+
+This section specifies how Adamant's validators agree on the order of transactions, the state of the chain, and the validity of each state transition. It is the longest technical section in this whitepaper because consensus is where the protocol's correctness, performance, and credible-neutrality properties are simultaneously realised.
+
+The protocol uses a **DAG-based Byzantine fault-tolerant consensus mechanism** with the following properties:
+
+1. **Causal ordering, not total ordering.** Transactions that do not conflict are not ordered relative to each other. This is the property that makes 200,000+ TPS achievable.
+2. **Sub-second finality.** Transactions touching only owned objects (no shared state) finalise in approximately 500 milliseconds. Transactions touching shared state finalise in approximately 1.5 seconds.
+3. **Encrypted mempool integration.** Threshold decryption is performed by the same validator set that produces consensus, eliminating the latency of externally-coordinated decryption.
+4. **Recursive proof of validity.** Every consensus epoch produces a recursive Halo 2 proof attesting to the validity of all included transactions. The chain's entire history is compressed into a constant-size proof verifiable on consumer hardware.
+5. **No leader.** The consensus mechanism is leaderless; no single validator's failure can stall progress.
+6. **Permissionless validation.** Anyone meeting the published technical and stake requirements can become a validator without permission from any party.
+
+The mechanism draws on the Mysticeti protocol family (peer-reviewed at NDSS 2025), with modifications specific to Adamant's encrypted mempool, recursive verification, and credible-neutrality requirements. The Mysticeti reference is structural, not literal: Adamant's implementation is original code, written from scratch, informed by the published Mysticeti paper but adapted to our requirements.
+
+## 8.1 Validators and stake
+
+### 8.1.1 What a validator is
+
+An Adamant validator is a node operator who participates in consensus by:
+
+1. Receiving transactions from the network's mempool
+2. Constructing and broadcasting consensus messages
+3. Verifying other validators' messages
+4. Contributing to threshold decryption of mempool transactions
+5. Generating partial recursive proofs of epoch validity
+6. Committing finalised transactions to chain state
+
+Validators receive rewards (specified in section 10) for these contributions and face slashing penalties for provable misbehaviour.
+
+### 8.1.2 Becoming a validator
+
+A user becomes a validator by:
+
+1. **Registering a validator object.** A transaction creates an on-chain `Validator` object containing the validator's identity (public keys) and operational parameters.
+2. **Posting bonded stake.** The validator's `Validator` object is associated with a bonded stake — ADM tokens locked in a stake account. Stake serves as the validator's "skin in the game" and is at risk of slashing for misbehaviour.
+3. **Joining an active set.** Once registered with sufficient stake, the validator is eligible to be selected for the active set in the next epoch boundary.
+
+There is no minimum stake floor at the protocol level. Practically, very small validators are unprofitable because operational costs exceed their proportional rewards; the natural floor emerges from operational economics, not from a protocol-imposed barrier. This is consistent with Principle VII: validation is permissionless.
+
+### 8.1.3 Active set
+
+In any epoch, a subset of registered validators forms the **active set** — the validators currently responsible for consensus. The active set is selected by stake-weighted lottery using the consensus VRF (subsection 8.6) at each epoch boundary.
+
+The active set has a target size of 200 validators. This number is chosen to balance:
+
+- **Decentralisation.** Larger sets spread power more widely.
+- **Performance.** Smaller sets reduce communication overhead.
+- **Robustness.** The set must be large enough to tolerate up to one-third Byzantine without halting.
+
+200 is in the range of validator counts used by Aptos (~150), Sui (~110), and other production DAG-based chains. It supports ~67 validators of fault tolerance with reasonable communication costs.
+
+The active set size is fixed at 200 at genesis. Changing it post-genesis requires a hard fork (Principle I).
+
+### 8.1.4 Stake delegation
+
+Token holders who do not wish to operate validator hardware may delegate their stake to validators. Delegation is implemented at the protocol layer:
+
+- A holder calls `delegate(validator_id, amount)`. Their tokens become part of the validator's bonded stake; the holder receives a proportional share of that validator's rewards (less the validator's commission).
+- The holder may undelegate at any time, subject to a 28-day unbonding period during which the stake is still slashable but no longer earning rewards.
+- The validator may not spend or claim the delegated stake; it remains the holder's property, locked under the consensus contract.
+
+Delegation has two purposes: it allows non-operators to earn yield from stake, and it allows the active set to be selected by stake-weighted lottery without requiring stake to be self-bonded. Both Aptos and Cosmos use similar designs.
+
+### 8.1.5 Slashing
+
+Validators who violate consensus rules face automatic slashing of their bonded stake. The protocol slashes for the following provable offences:
+
+- **Equivocation:** signing two distinct consensus messages for the same DAG round. Slashing: 100% of stake.
+- **Incorrect threshold decryption:** publishing a decryption share that does not correctly correspond to the validator's threshold key. Slashing: 5% of stake.
+- **Liveness failure:** failing to participate in consensus for more than 2 consecutive epochs while in the active set. Slashing: 0.5% of stake plus removal from the active set.
+- **Invalid proof:** producing a partial recursive proof that does not verify. Slashing: 10% of stake.
+
+Slashed stake is burned (not redistributed). This ensures slashing is a pure cost, not a transfer to other validators that might be incentivised to provoke offences.
+
+Slashing is automatic and on-chain: any party can submit evidence of equivocation (two signed messages) or invalid proof (the failing proof itself), and the protocol slashes the offending validator without requiring a vote. There is no governance review of slashing; the rules are mechanical.
+
+## 8.2 Epochs and rounds
+
+Consensus operates in two timescales:
+
+- **Rounds:** the basic unit of DAG progression. Each round adds one layer to the DAG. Target round duration: 250 milliseconds.
+- **Epochs:** a fixed number of rounds (144, approximately 36 seconds). Active set selection, threshold key generation, recursive proof aggregation, and reward distribution all occur on epoch boundaries.
+
+The 250ms round target is chosen for sub-second finality: shared-state transactions finalise after 4–6 rounds (approximately 1–1.5 seconds), well below the target in Principle IV.
+
+The 36-second epoch is chosen to balance:
+
+- **Threshold key churn.** Shorter epochs mean more frequent DKG (distributed key generation) for threshold encryption, which is cryptographically expensive.
+- **Active set responsiveness.** Longer epochs mean validators leaving the active set face longer delays before their changes take effect.
+- **Reward distribution granularity.** Validators and delegators see rewards at epoch boundaries; users prefer finer granularity.
+
+36 seconds is in the range used by Sui (24 hours per epoch with shorter checkpoint intervals), Cosmos chains (typically 6-12 hours), and other DAG protocols (1-60 seconds). The choice is calibrated to Adamant's specific cryptographic requirements.
+
+## 8.3 The DAG structure
+
+The protocol's consensus mechanism is structured around a **directed acyclic graph (DAG)** of validator messages. Each message references multiple parent messages from the previous round; the resulting graph encodes both the temporal progression of consensus and the pattern of validator agreement.
+
+### 8.3.1 Vertices
+
+A **vertex** is the unit of validator participation per round. Each validator in the active set produces one vertex per round. A vertex contains:
+
+```
+Vertex {
+    author:           ValidatorId,
+    round:            u64,
+    parents:          Vec<VertexId>,    // references to previous-round vertices
+    transactions:     Vec<Transaction>, // mempool batch
+    threshold_shares: Vec<DecryptionShare>, // for previously-encrypted txs
+    proof_witness:    PartialProofWitness,  // contribution to recursive proof
+    signature:        BLSSignature,
+}
+```
+
+Each vertex must reference at least 2/3+1 vertices from the previous round. This is the "quorum requirement" inherited from Mysticeti: validators must have seen and agreed with a supermajority of the previous round's vertices before proceeding.
+
+### 8.3.2 The DAG grows by rounds
+
+At round 1, validators broadcast vertices referencing the genesis state. At round R+1, each validator broadcasts a vertex referencing 2/3+1 of the round-R vertices. The graph grows in layers, with each round adding one layer.
+
+Two vertices can be **causally compared**: vertex A is a *causal ancestor* of vertex B if there is a path from B back to A through parent edges. Two vertices that are neither's ancestor are *causally concurrent*.
+
+This causal structure is what enables Adamant's parallel execution model (section 6.2.3): transactions in causally concurrent vertices can be executed in parallel; transactions in causally ordered vertices must be executed in their causal order.
+
+### 8.3.3 Commit waves
+
+Periodically (every 4 rounds, by default), the DAG enters a **commit wave**: a process by which a specific vertex is selected as the "anchor" for that wave, and the anchor's causal history is committed to the chain.
+
+The commit wave proceeds as follows:
+
+1. **Anchor election.** Using the consensus VRF, one vertex from a specific round is elected as the wave's anchor.
+2. **Commit decision.** Validators determine, based on the DAG's structure, whether the anchor is "committed" (sufficient validators have built on top of it) or skipped.
+3. **Causal commit.** If the anchor commits, all of its causal ancestors that are not already committed are committed in causal order.
+4. **Transaction extraction.** The protocol extracts all transactions from the committed vertices, applies them in causal order, and updates chain state.
+
+This is a simplified description of the Mysticeti commit rule. The full rule handles edge cases (multiple consecutive anchor failures, network partitions) with care; the published Mysticeti paper specifies it formally.
+
+### 8.3.4 Why DAG instead of chain
+
+A traditional blockchain proceeds linearly: each block extends a single chain. A DAG proceeds in parallel: many vertices per round, many parents per vertex.
+
+The advantage is *throughput*. At any given moment, all validators in the active set are simultaneously producing vertices and broadcasting them. The chain's effective throughput is the *aggregate* of all validators' contributions, not the throughput of a single leader. With 200 validators each contributing ~1,000 transactions per round and 4 rounds per second, the protocol can process ~800,000 transactions per second under optimal conditions, well above the 200,000 TPS target.
+
+The disadvantage is *complexity*. DAG protocols are harder to reason about than linear chains, harder to implement correctly, and historically have suffered from subtle correctness bugs. Mysticeti's contribution is a formally analyzed DAG protocol with proven safety and liveness properties; Adamant inherits this analysis.
+
+## 8.4 Encrypted mempool integration
+
+Section 9 (Networking & Mempool) specifies the mempool layer in detail. This subsection specifies the consensus-level integration of the encrypted mempool.
+
+### 8.4.1 Why integration matters
+
+A naive encrypted mempool runs in two phases: (1) validators commit to transaction order without seeing contents, then (2) validators decrypt and execute. The two phases are sequential, and the gap between them imposes latency.
+
+Shutter Network on Gnosis Chain demonstrates this: their encrypted mempool adds approximately 3 minutes to transaction inclusion because the decryption phase happens out-of-band, with separate keypers running their own coordination protocol.
+
+Adamant's design eliminates this gap by making validators their own keypers. The threshold decryption happens *during consensus*, by the same set of validators producing the DAG. There is no second protocol; there is no separate keyper set; the decryption is a side-effect of consensus.
+
+### 8.4.2 Encryption for the next epoch
+
+Users encrypt their transactions to the active validator set's threshold public key for the *upcoming* epoch:
+
+- Round R is in epoch E.
+- Transactions submitted during epoch E are encrypted to the threshold key of epoch E+1.
+- They are propagated, included in vertices, and ordered during epoch E.
+- At the epoch E → E+1 transition, the threshold key for E becomes "expired" and validators publish their decryption shares for the included transactions.
+- The transactions are decrypted and executed at the start of epoch E+1.
+
+This means encrypted transactions have approximately one epoch (36 seconds) of latency added relative to transparent transactions. For most use cases this is acceptable; for use cases requiring lower latency, transactions may be submitted in transparent form (forfeiting the encrypted-mempool protection).
+
+### 8.4.3 The DKG
+
+At every epoch boundary, the active validator set runs a **distributed key generation (DKG)** protocol to establish the new threshold key. The DKG is a constant-round protocol producing:
+
+- A **master public key** for the next epoch (used by users to encrypt their transactions)
+- **Per-validator secret shares** (each validator holds a share of the master secret)
+- **Verification keys** (allowing any party to verify decryption shares)
+
+The DKG uses Pedersen-style verifiable secret sharing over BLS12-381, with KZG commitments (section 3.7.2) to validate participants' contributions.
+
+DKG completion is a precondition for entering the new epoch: if the DKG fails (insufficient participation), the previous epoch is extended by one until it succeeds. This is rare in practice (validators have strong incentives to participate) but the protocol handles it gracefully.
+
+### 8.4.4 Decryption share generation
+
+When a vertex includes encrypted transactions, the proposing validator also includes their decryption shares for transactions ordered in the *previous* epoch. Once 2/3+1 valid shares are collected for a transaction, the protocol decrypts it and proceeds with execution.
+
+This share generation happens automatically as part of vertex production; validators do not need to participate in a separate decryption protocol. The cryptographic cost is small (roughly one BLS pairing per transaction) and is included in the validator's per-round work.
+
+### 8.4.5 Censorship resistance
+
+The encrypted mempool's central property is *censorship resistance*: validators cannot selectively exclude transactions based on their content, because they cannot read the content until after ordering is committed.
+
+This eliminates the structural conditions that enable:
+
+- **Front-running.** A validator who could see transaction contents could insert their own transaction ahead. With encryption, no validator sees contents during ordering.
+- **Sandwich attacks.** Same mechanism as front-running.
+- **Selective censorship.** A validator who could see transaction contents could exclude transactions to/from specific addresses. With encryption, validators see only encrypted blobs.
+
+Censorship resistance is not absolute: a validator can refuse to include any transactions at all (a denial-of-service attack), and a colluding majority can refuse to include transactions from specific encrypted senders (if they can identify the sender by other means, such as network metadata). The protocol mitigates these via:
+
+- **Liveness slashing.** Validators who fail to include transactions face slashing (subsection 8.1.5).
+- **Network-layer privacy.** The networking layer (section 9) uses onion routing and timing obfuscation to prevent network-metadata-based identification.
+
+These are not perfect defences, but they substantially raise the cost of censorship.
+
+## 8.5 Recursive proof generation
+
+Adamant produces a **recursive proof of validity** for the entire chain at every epoch boundary. This is the cryptographic basis of phone-verifiable verification (Principle III).
+
+### 8.5.1 What the proof attests to
+
+The recursive proof, at any given epoch boundary, attests:
+
+- The genesis state is a specific commitment (anchored at the protocol's genesis block).
+- Every transaction in the committed DAG history was authorised, well-formed, and correctly executed.
+- Every shielded transaction's Halo 2 proof verified.
+- The chain state at the end of the current epoch is a specific commitment.
+
+A verifier checking this proof learns: "the chain state at epoch N is X, derived correctly from the genesis state via valid transactions, and I do not need to trust any party to know this."
+
+### 8.5.2 How recursion works
+
+Halo 2 supports recursive proof composition: a proof of statement P1 can be verified inside a circuit, and the verification result becomes part of the witness for a new proof. Iterating this allows arbitrarily long histories to be compressed into a single proof of constant size.
+
+The protocol's recursive proof at epoch N:
+- Verifies the recursive proof from epoch N-1 (constant size, ~5-10 KB)
+- Verifies all per-transaction proofs in epoch N (typically thousands)
+- Outputs a new constant-size proof for epoch N
+
+The total proof at any point in time is a single artifact, ~5-10 KB, attesting to the validity of the entire chain history.
+
+### 8.5.3 Distributed proof generation
+
+Generating the recursive proof is computationally expensive — much more expensive than verifying it. To prevent this from becoming a centralisation bottleneck, the protocol distributes the work across validators:
+
+- Each validator generates a partial proof for their own contributions during the epoch.
+- At the epoch boundary, partial proofs are aggregated into the epoch's recursive proof.
+- The aggregation itself is performed by a rotating subset of validators, with the result published as part of the epoch transition.
+
+This distribution means no single validator is solely responsible for proof generation. If the proof-generating subset fails, the next subset takes over. Slashing (subsection 8.1.5) penalises invalid proofs.
+
+### 8.5.4 Verifier requirements
+
+A verifier — anyone wishing to confirm the chain's validity without trusting validators — needs:
+
+- The chain's genesis commitment (in the protocol's genesis specification, section 11)
+- The current epoch's recursive proof (publishable from any validator or archive node)
+- A Halo 2 verifier (open-source, runnable on any modern hardware)
+
+Verification time is approximately 50-200 milliseconds on a modern smartphone, regardless of how many epochs of history exist. This is the property that makes the protocol genuinely "phone-verifiable."
+
+## 8.6 The consensus VRF
+
+Several consensus operations require deterministic randomness: active set selection, anchor election, leader rotation. The protocol provides this through a **consensus VRF** (Verifiable Random Function).
+
+### 8.6.1 Construction
+
+The VRF is constructed from BLS signatures: each validator's BLS signature over a specific input is deterministic (a property of BLS) and unpredictable to anyone without the validator's secret key (the random-oracle assumption). Aggregating BLS signatures from a quorum of validators produces a value that is unpredictable to anyone who cannot compromise a majority of validators.
+
+VRF inputs:
+
+- For active set selection at epoch boundaries: the previous epoch's recursive proof commitment.
+- For anchor election within an epoch: the previous round's aggregate VRF output, plus the round number.
+
+VRF outputs are publicly verifiable: anyone can check that the published output is correct given the input and the validators' public keys.
+
+### 8.6.2 Why this matters
+
+Randomness manipulation is a known attack vector in proof-of-stake systems. An adversary who can predict or influence randomness can game leader election (becoming leader more often than their stake warrants), select favourable transaction orderings, or exclude themselves from validator slashing.
+
+The BLS-based aggregate VRF makes manipulation expensive: an adversary must compromise a supermajority of validators to influence a single output, and even then the manipulation is detectable (the output would not match the published BLS signatures' aggregate). This raises the cost of manipulation to approximately the cost of compromising the chain itself.
+
+## 8.7 Consensus safety and liveness
+
+The consensus mechanism's correctness is established by the following theorems, derived from the Mysticeti analysis with adaptations specific to Adamant's modifications:
+
+**Theorem 1 (Safety).** If fewer than 1/3 of validators by stake are Byzantine, the chain never commits two conflicting transactions. (No double-spends, no fork ambiguity.)
+
+**Theorem 2 (Liveness).** If fewer than 1/3 of validators by stake are Byzantine and network partitions are eventually resolved, the chain commits transactions at a rate determined by network conditions, with expected delay bounded above by a constant.
+
+**Theorem 3 (Fairness).** No validator can extract more than their proportional share of MEV-style value, because the encrypted mempool prevents validators from observing transaction contents during ordering.
+
+These theorems rely on:
+- BLS signature soundness (subsection 3.4.3)
+- Halo 2 soundness (subsection 3.7.1)
+- KZG commitment binding (subsection 3.7.2)
+- Threshold encryption security (subsection 3.6)
+- The honest-majority assumption (≥2/3 of stake non-Byzantine)
+
+The proofs are not reproduced here; they appear in the Mysticeti paper (NDSS 2025) and in the supplementary cryptographic literature for the modified components. Adamant's deviations from Mysticeti are localised; their effect on the original proofs is marginal and the proofs are reconstructed in supplementary material to the reference implementation.
+
+## 8.8 Failure modes
+
+The consensus mechanism handles a range of partial failures gracefully. The following are documented because they are the operational realities validators encounter:
+
+- **Single-validator crash.** Other validators continue without interruption. The crashed validator's contributions for the affected rounds are missing but the DAG progresses normally if 2/3+1 validators remain.
+- **Network partition.** If the network splits into pieces each containing fewer than 2/3 of stake, no piece can commit. Once the partition heals, both sides reconcile by adopting the higher-stake side's history.
+- **Active set turnover during DKG.** If the DKG fails partway through (e.g. validators dropping out during the protocol), the previous epoch is extended and the DKG retries. Repeated failures indicate a serious operational problem and trigger an alert, but do not violate safety.
+- **Mass coordinated failure.** If more than 1/3 of stake fails simultaneously (e.g. due to a software bug affecting one client implementation), liveness is lost until validators recover. Safety is preserved: no incorrect state is committed.
+
+Recovery procedures are specified in the operational documentation that accompanies the reference implementation, not in this section.
+
+## 8.9 Light clients and verification
+
+Anyone may run a **light client** that follows the chain without storing full state. Light clients receive the recursive proof at each epoch boundary and verify it; this is sufficient to know the current state commitment without trusting any validator.
+
+Light clients can also verify *specific* claims:
+
+- "Account X has a balance of at least Y." Verified via Merkle path into the state commitment, plus the recursive proof.
+- "Transaction T was included in epoch E." Verified via the epoch's transaction commitment.
+- "Object O exists with current state S." Verified via the state commitment.
+
+The protocol's commitment to phone-verifiable verification (Principle III) means light client verification is a first-class operational mode, not an afterthought. Wallets `SHOULD` operate as light clients by default, syncing only the recursive proof and Merkle paths for the user's own state.
+
+## 8.10 Comparison to alternatives
+
+For context, here is how Adamant's consensus compares to the alternatives that were considered:
+
+- **Single-leader BFT (Tendermint, HotStuff, Sui's pre-Mysticeti protocol).** Simpler but throughput is bounded by the leader's resources. Adamant rejects this for performance reasons.
+
+- **Proof-of-Work (Bitcoin, Ethereum pre-Merge).** Strong simplicity but unsuited to sub-second finality and incompatible with Adamant's encrypted mempool design.
+
+- **Other DAG protocols (Narwhal/Bullshark, Aleph).** Adjacent to Mysticeti, with similar performance characteristics. Mysticeti was chosen as the closest fit because of its fast-path single-vote commit (in optimistic conditions, transactions can finalise in 250ms via the fast path).
+
+- **Asynchronous BFT (HoneyBadgerBFT, Dumbo).** Provably safe under arbitrary network conditions but with higher communication overhead. Adamant prefers Mysticeti's partial-synchrony assumption (which requires the network to eventually deliver messages) because it is realistic for internet conditions and enables better performance.
+
+The choice of Mysticeti-derived consensus reflects Adamant's prioritisation of the throughput-finality-decentralisation triangle at production scale.
+
+
+# 9. Networking & Mempool
+
+This section specifies the network layer of Adamant: how nodes find each other, how transactions reach validators, how messages are propagated, and how network-level metadata is protected. It complements section 8 (Consensus) by specifying the infrastructure on which consensus operates.
+
+The networking layer follows Principle II (privacy by default) and Principle VII (permissionless participation): the network is open, the protocols are public, and the metadata is protected to the extent practical.
+
+## 9.1 Architectural overview
+
+The network comprises four classes of node:
+
+1. **Validators.** Participate in consensus (section 8), maintain full state, generate proofs.
+2. **Full nodes.** Maintain full state and verify all transactions but do not participate in consensus. Operated by exchanges, indexers, archive services, and security-conscious individual users.
+3. **Light clients.** Maintain only the recursive proof and Merkle paths to specific state of interest. Wallets typically operate as light clients.
+4. **Archive nodes.** Maintain historical state beyond what active state requires (section 5.6.2). Voluntary participants.
+
+All four classes communicate over the same peer-to-peer network. There is no separate "validator network" or "user network"; a single permissionless overlay connects everyone.
+
+## 9.2 The libp2p substrate
+
+The protocol's network layer uses **libp2p**, the modular peer-to-peer networking framework originally developed for IPFS and now the de facto standard for blockchain peer-to-peer networks.
+
+### 9.2.1 Why libp2p
+
+The protocol does not roll its own peer-to-peer stack. libp2p is used by Ethereum (consensus and execution clients), Polkadot, Filecoin, Cosmos chains, and many others. It provides:
+
+- **Pluggable transports.** TCP, QUIC, WebSockets, WebTransport — all interchangeable.
+- **Pluggable security.** Noise protocol, TLS 1.3 — both supported with strong security properties.
+- **Multiplexing.** Multiple logical streams over a single connection.
+- **Peer discovery.** Kademlia DHT, mDNS, bootstrap nodes — all standard.
+- **Pubsub.** Gossip-based message dissemination.
+- **NAT traversal.** Hole punching, AutoRelay — for nodes behind firewalls.
+
+Implementing each of these from scratch would consume engineering effort with no marginal benefit. libp2p is a known-good choice (Principle VI: standard primitives, novel synthesis).
+
+### 9.2.2 Specific libp2p configuration
+
+The protocol uses:
+
+- **Transport:** QUIC primary, TCP fallback. QUIC's built-in encryption, multiplexing, and connection migration are well-suited to a high-throughput chain.
+- **Security:** Noise protocol with the `Noise_XX` handshake pattern, providing forward secrecy and mutual authentication.
+- **Multiplexing:** Yamux for stream multiplexing within QUIC connections.
+- **Discovery:** Kademlia DHT for peer discovery, with bootstrap nodes published in the genesis specification (section 11). The bootstrap nodes are not "trusted"; they are simply the initial seeds for DHT participation. Once the DHT is populated, bootstrap nodes are not specially privileged.
+- **Pubsub:** `gossipsub` v1.1 for message dissemination, with Adamant-specific topic configuration.
+
+### 9.2.3 No central servers
+
+The protocol's networking design has no central servers, no required relays, and no participants whose role is to mediate the network. Bootstrap nodes are convenient seeds for new clients to find peers; the network functions identically without them once peers know each other.
+
+This is consistent with Principle I (credible neutrality): there is no infrastructure component whose operator can selectively block or surveil network participation.
+
+## 9.3 Transaction propagation
+
+When a user submits a transaction, the following sequence occurs:
+
+1. **Wallet construction.** The wallet constructs the transaction, signs it under the account's validation logic, and (for shielded transactions) generates the Halo 2 proof.
+2. **Encryption (optional).** For mempool privacy, the wallet encrypts the transaction to the upcoming epoch's threshold key (section 8.4.2). The encrypted envelope contains the transaction and the proof.
+3. **Submission.** The wallet submits the (possibly encrypted) transaction to one or more nodes, typically via a `gossipsub` topic dedicated to mempool messages.
+4. **Gossip propagation.** Nodes propagate the transaction to their peers using `gossipsub`'s mesh-based dissemination. Within seconds, the transaction is known to all validators.
+5. **Mempool inclusion.** Validators add the transaction to their local mempool, ranked by fee (section 10).
+6. **Consensus inclusion.** Validators include high-priority mempool transactions in their next vertex (section 8.3.1).
+
+This is the standard pattern for blockchain transaction propagation. The Adamant-specific elements are the encryption (step 2) and the multi-dimensional fee ranking (step 5).
+
+### 9.3.1 Transaction format
+
+A transaction submitted to the network has the following structure:
+
+```
+NetworkTransaction {
+    version:           u8,          // protocol version
+    encryption_mode:   u8,          // 0 = transparent, 1 = encrypted
+    payload:           Bytes,       // the transaction or its encrypted envelope
+    fee_tip:           u64,         // ADM the user is willing to pay above base fee
+    expiration_round:  u64,         // round after which this tx is invalid
+    submission_proof:  Option<...>, // anti-DoS rate-limiting proof
+}
+```
+
+The `expiration_round` prevents indefinite mempool retention: a transaction not included by its expiration round is dropped. This bounds mempool memory and prevents stale transactions from being included long after the user assumed they had failed.
+
+The `submission_proof` is a small computational proof attached to mempool submissions to prevent denial-of-service attacks (subsection 9.5).
+
+### 9.3.2 Transaction sizes
+
+Typical transaction sizes:
+
+- **Simple transparent transfer:** ~200-400 bytes
+- **Shielded transfer (single input, two outputs):** ~2-4 KB (dominated by the Halo 2 proof)
+- **Complex shielded contract execution:** ~4-10 KB
+- **Account creation (with dual-signature setup):** ~5 KB
+
+The chain's bandwidth requirement at 200,000 TPS with mostly-shielded transactions is approximately 600 MB/sec aggregate across all validators. Per-validator bandwidth is approximately 3-6 MB/sec, well within consumer-grade home-internet capabilities.
+
+### 9.3.3 Mempool replacement
+
+Users may replace a previously-submitted transaction by submitting a new transaction with the same nonce and a higher fee. This is the standard "RBF" (replace-by-fee) pattern from Bitcoin and other chains, adapted to Adamant's transaction model.
+
+Replacement is constrained: the replacing transaction must offer a fee at least 10% higher than the original, and replacement is permitted only before the original is included in a vertex. Once a transaction enters consensus, it cannot be replaced; users must wait for it to either commit or expire.
+
+## 9.4 Network-layer privacy
+
+The chain's cryptographic privacy (section 7) protects the contents of transactions. The networking layer's privacy protects the *metadata* — who is sending what, to whom, when, from where.
+
+### 9.4.1 Default transport encryption
+
+All node-to-node communication is encrypted via libp2p's Noise transport (subsection 9.2.2). Network observers see only encrypted traffic between peers; they cannot read transaction contents in flight, peer messages, or consensus communications.
+
+This is the baseline. Network observers without privileged position learn:
+
+- Which IP addresses participate as nodes (visible to anyone running their own libp2p node)
+- Approximate traffic volumes between peers (visible to observers with traffic-analysis capability)
+- Approximate transaction submission times (visible to observers near the user's IP)
+
+These observations leak metadata. The protocol provides additional defences for users who require stronger privacy.
+
+### 9.4.2 Onion routing
+
+The protocol supports onion-routed transaction submission for users requiring strong network-level privacy. Onion routing follows the Tor and I2P models:
+
+- The user's wallet selects a chain of relay nodes (typically 3) from the network.
+- The transaction is encrypted in layers, one per relay.
+- Each relay decrypts one layer, learning only the next hop (not the original source or the final destination).
+- The final relay submits the transaction to the mempool.
+
+The protocol does not specify the relay-selection mechanism; this is a wallet-level concern. Relays are not privileged validators; they are ordinary network participants who opt in to relaying. Relay operation is not rewarded by the protocol (it is a community-provided service); the protocol provides the cryptographic tools to support it.
+
+### 9.4.3 Timing obfuscation
+
+Sophisticated network observers can correlate transaction submissions to specific users through timing analysis: a user's transaction appears in the mempool seconds after they performed a related off-chain action. The protocol's defences:
+
+- **Random submission delay.** Wallets `SHOULD` introduce small random delays (uniform in [0, 5] seconds) between user actions and transaction submission. This breaks tight timing correlations.
+- **Submission batching.** Wallets `MAY` batch multiple user transactions and submit them together at predictable intervals (e.g. once per minute). This is a stronger obfuscation but introduces user-visible latency.
+
+These defences are wallet-level, not protocol-level. The protocol allows them; the protocol does not enforce them.
+
+### 9.4.4 What network-level privacy does not provide
+
+Network-level privacy is a useful complement to cryptographic privacy but does not replace it:
+
+- Onion routing protects the IP-level source of submissions but does not hide the existence of the submission itself. An observer monitoring all relays could still observe that *some* transaction was submitted at a given time.
+- Timing obfuscation reduces correlation power but does not eliminate it. Determined adversaries with broad surveillance capabilities can still construct probabilistic associations.
+- A user whose identity is exposed off-chain (by interacting with services that know their identity) cannot be made anonymous by network-level protections alone.
+
+Users requiring strong end-to-end privacy combine: (a) cryptographic privacy at the transaction layer, (b) network-level privacy via onion routing, (c) careful operational security including separate identities for sensitive activities. The protocol provides the first two; the third is the user's responsibility.
+
+## 9.5 Anti-denial-of-service
+
+A permissionless network is susceptible to denial-of-service attacks: adversaries flooding the network with low-value transactions to consume validator resources. The protocol's defences operate at multiple layers:
+
+### 9.5.1 Submission proofs
+
+Mempool submissions include a small computational proof (typically a 50-100ms PoW puzzle, parameterised based on current network load). This is not a "mining" mechanism; it is a rate-limiter. Honest users barely notice it; spam-flooders find their submission rate capped.
+
+The proof difficulty is adjusted dynamically per-node: heavily-loaded nodes increase difficulty; lightly-loaded nodes decrease it. This adapts to current attack pressure without requiring intervention.
+
+### 9.5.2 Fee floors
+
+Every transaction must pay at least a per-byte minimum fee to be relayed by the network. Validators discard transactions below this floor without propagating them. The floor is set high enough to make spam economically expensive while remaining negligible for real use (section 10).
+
+### 9.5.3 Per-peer rate limiting
+
+Each node imposes per-peer rate limits on incoming messages. Peers that exceed their limits are temporarily throttled or disconnected. Limits are conservative by default and adjust based on the peer's history (well-behaved peers earn higher limits).
+
+### 9.5.4 Cryptographic verification before propagation
+
+Before propagating a transaction, each node verifies its signature, its proofs, and its fee compliance. Invalid transactions are discarded immediately; they are not propagated. This prevents adversaries from amplifying attacks by submitting transactions whose validation cost is high but rejection is certain.
+
+## 9.6 Discovery and bootstrapping
+
+A new node joining the network needs to discover existing peers. The protocol's discovery mechanism uses libp2p's Kademlia DHT, seeded from a list of bootstrap nodes published in the genesis specification.
+
+### 9.6.1 Bootstrap nodes
+
+The genesis specification (section 11) includes a list of bootstrap node addresses. These are nodes operated by parties willing to maintain stable network presence for newcomers. They are not validators in any privileged sense; they are simply known endpoints.
+
+A new node connects to one or more bootstrap nodes, queries the DHT for active peers, and joins the network. After this initial connection, the node maintains its peer list independently; bootstrap nodes are only needed for the initial join.
+
+The protocol does not "trust" bootstrap nodes for any consensus-critical purpose. They cannot censor connections, lie about chain state (the new node will verify state independently), or otherwise compromise the protocol. They are convenience infrastructure.
+
+### 9.6.2 Decentralisation of bootstrap
+
+Multiple parties operate bootstrap nodes. The genesis specification lists at least 20 such nodes operated by independent parties at launch. Anyone may operate a bootstrap node by registering with the DHT; the genesis list is a starting point, not an exhaustive list.
+
+If all genesis bootstrap nodes are simultaneously unavailable (a coordinated denial-of-service or coercive shutdown), new nodes can still discover peers through:
+
+- mDNS for nodes on the same local network
+- Manually-specified peer addresses
+- Out-of-band peer lists shared via web, social media, or mesh networks
+
+The chain remains operable even if every bootstrap node is taken down, though new-node onboarding becomes manual until alternative peer-discovery mechanisms repopulate.
+
+## 9.7 Mempool design
+
+Each validator maintains a local mempool of pending transactions. The mempool is a priority queue ranked by:
+
+1. **Fee tip.** Transactions offering higher tips above the base fee are preferred.
+2. **Submission time.** Among equally-tipped transactions, earlier submissions are preferred.
+3. **Encrypted vs transparent.** Encrypted transactions are propagated identically to transparent ones; encryption does not affect mempool priority. (This is a deliberate choice: privileging one form over the other would create observable distinctions.)
+
+### 9.7.1 Mempool size
+
+Each validator maintains up to ~100,000 pending transactions in their mempool. When the mempool is full, the lowest-priority transactions are evicted to make room for higher-priority arrivals.
+
+### 9.7.2 Mempool synchronisation
+
+Validators do not maintain identical mempools. Each validator independently observes the gossipsub stream of transactions and decides which to retain. Different validators may have slightly different mempool contents at any given moment.
+
+This is acceptable: consensus does not require validators to agree on mempool contents, only on which transactions are included in vertices. A validator who happens to have a transaction in their mempool may include it; another validator who does not have it cannot include it but does not stall consensus by its absence.
+
+## 9.8 Network observability
+
+The protocol's networking is designed to be observable for operational purposes (network health monitoring, abuse detection) without compromising user privacy.
+
+What is observable:
+
+- The set of active nodes (their IP addresses, libp2p peer IDs, and approximate liveness)
+- Aggregate network traffic patterns
+- Public consensus messages (vertices, signatures, recursive proof commitments)
+
+What is not observable (without breaking transport encryption):
+
+- The contents of specific transactions
+- Specific peer-to-peer message contents
+- Validator-internal computations
+
+This observability supports the operation of a healthy decentralised network: anyone can monitor the network's health, identify misbehaving nodes, and contribute to community-level abuse mitigation. The same observability is bounded by the encryption protections that prevent it from becoming a surveillance vector.
+
+
+# 10. Economics & Incentives
+
+This section specifies the protocol's economic model: the native token, its issuance schedule, the fee mechanism, the staking and reward economy, and the fair-launch mechanics. These specifications are part of the consensus rules; they cannot be modified by any on-chain mechanism (Principle I).
+
+The economic model has three goals:
+
+1. **Sustainable security.** Validator rewards must be sufficient to attract honest participation in perpetuity, even at modest network usage.
+2. **Real value accrual.** The native token's value must be tied to actual network usage, not to speculation. Fee burn under usage achieves this.
+3. **Credibly fair distribution.** No premine, no founder allocation, no privileged early holders. Distribution begins at genesis through mechanisms anyone can participate in.
+
+## 10.1 The native token
+
+The protocol's native token is provisionally named **ADM**. The name is provisional because community input is appropriate before final selection; the name is not consensus-critical and a final name will be selected before genesis through a public process. For specification purposes, ADM is used throughout.
+
+### 10.1.1 Properties
+
+ADM is:
+
+- **Divisible.** The smallest unit is `1 base unit = 10^-9 ADM` (i.e., 9 decimal places). This is finer granularity than fiat currencies and supports micropayments at the protocol's intended cost level.
+- **Fungible.** All ADM units are interchangeable. The protocol does not distinguish ADM by origin, age, or transaction history.
+- **Used for fees.** All transaction fees are paid in ADM.
+- **Used for staking.** All validator stake is denominated in ADM.
+- **Native, not contract-defined.** ADM exists at the protocol layer, not as a smart contract. This makes ADM unforgeable, unstoppable, and free of contract-level risks (no rug pulls, no contract upgrades, no admin functions).
+
+### 10.1.2 Total supply
+
+ADM has **no fixed total supply**. The total supply is determined by the issuance schedule (subsection 10.3) net of fee burn (subsection 10.4). Under typical usage, the supply is approximately stable or slowly deflating; under heavy usage, it deflates measurably.
+
+This is a deliberate choice. Fixed-supply tokens (Bitcoin's 21M cap) provide a strong narrative anchor but eventually face the question of how to reward validators when the issuance schedule terminates. Adamant's continuous-issuance-with-burn model resolves this: validator rewards are sustainable indefinitely, while burn ties supply to usage.
+
+The expected long-term equilibrium: in steady state, fees burned approximately equal new issuance, producing rough supply stability with mild deflationary pressure under above-average usage.
+
+## 10.2 Fair launch mechanics
+
+The protocol's launch follows a strict no-premine, no-allocation rule. Specifically:
+
+### 10.2.1 What does not happen at genesis
+
+At genesis, no party — including the protocol's original implementers, contributors, advisors, hypothetical investors, validators, or the protocol itself (as a foundation or treasury) — receives any token allocation.
+
+The genesis state contains:
+
+- The genesis recursive proof anchor
+- The initial protocol parameters (gas costs, validator set size, etc.)
+- The list of bootstrap node addresses
+- The Powers of Tau ceremony reference
+- Zero ADM allocations to any account
+
+There is no:
+- Founder allocation
+- Foundation treasury
+- Pre-mine for development funding
+- Early-investor allocation
+- Validator set "starter pack"
+- Ecosystem fund
+- Marketing fund
+
+Anyone holding ADM at any point after genesis acquired it through one of the mechanisms specified below.
+
+### 10.2.2 Genesis distribution mechanism
+
+At genesis, the protocol begins issuance through a single mechanism: **fair-launch mining**, structured as proof-of-burn.
+
+For the first 12 epochs (approximately 7.2 minutes of chain time, but calibrated such that the actual genesis distribution period is 6 months in calendar terms — see "Genesis launch parameters" in section 11), the protocol issues tokens via a sealed-bid mechanism. Participants commit funds (in BTC, ETH, or other widely-traded assets, via cryptographic bridge attestations specified in section 11) to a one-way burn address; the protocol distributes ADM proportionally to participants based on their committed value.
+
+The mechanics:
+
+- Anyone may participate by burning supported assets to the protocol's well-known burn address.
+- Burn transactions are observed via cryptographic proofs of inclusion in their source chains.
+- Each daily window distributes a fixed quantity of ADM to that day's participants, proportional to their burn value.
+- The genesis distribution period totals 6 months. After it ends, no further fair-launch mining occurs.
+
+This mechanism has the following properties:
+
+- **No party with insider advantage.** The implementers do not hold ADM going into the launch; they must participate in fair-launch mining like everyone else if they wish to hold ADM.
+- **Anti-whale by design.** Daily windows mean that a single very large burn does not capture a disproportionate share; the burner is competing against everyone else burning that day.
+- **Provably fair.** Anyone can verify the mechanism's outputs against the on-chain burn evidence and the protocol's distribution formula.
+- **No legal complexity.** The mechanism is not a sale; participants receive ADM proportional to their voluntary burns, with no commercial relationship to any party. This is the same legal structure as Bitcoin's launch.
+
+### 10.2.3 Why this approach
+
+Alternative launch mechanisms considered and rejected:
+
+- **Pre-mine to founders.** Violates Principle I. Founders with substantial ADM holdings have ongoing power over the chain. Rejected.
+- **VC fundraising.** Same reason. Investors with allocations expect influence over the chain's direction. Rejected.
+- **Airdrop to existing crypto users.** Easier launch path but creates an "incumbent class" of large early holders who benefit from arbitrary inclusion criteria. Rejected.
+- **Pure proof-of-work mining (Bitcoin's model).** Excellent fairness but environmentally expensive and produces hardware-arms-race dynamics that we do not want. Rejected.
+- **Liquidity bootstrapping pools.** Used by some projects but has the same insider-advantage problems as VC rounds, with the additional disadvantage of being more complex. Rejected.
+
+Fair-launch mining via proof-of-burn is the cleanest path that satisfies the principles. The 6-month period is long enough that participation is not artificially constrained by short windows of time-zone availability.
+
+### 10.2.4 Validator set at genesis
+
+At genesis, no party holds ADM, and therefore no party holds the stake necessary to be a validator. The active set is empty.
+
+The protocol's solution: the active set populates organically as fair-launch participants accumulate ADM and choose to stake it. The first 12 epochs are a "bootstrap" period during which:
+
+- The protocol's consensus mechanism is paused.
+- Fair-launch mining proceeds.
+- Participants accumulate ADM and may register as validators.
+- Once at least 50 validators have registered with stake totalling at least 1 million ADM, the consensus mechanism activates.
+
+This is a one-time bootstrap; once the chain is active, the standard validator-onboarding mechanism (subsection 8.1.2) applies.
+
+## 10.3 Issuance schedule
+
+After the genesis distribution period, the protocol issues new ADM continuously to validators as block rewards. The issuance rate is fixed at genesis and cannot be modified without a hard fork.
+
+### 10.3.1 Schedule
+
+The issuance schedule is:
+
+- **Year 1-5:** Validator rewards equal to 4% of current total supply per year, paid in proportion to validator stake.
+- **Year 6-10:** 3% per year.
+- **Year 11-20:** 2% per year.
+- **Year 21+:** 1% per year, in perpetuity.
+
+This produces a slowly-decreasing inflation rate that asymptotes at 1% indefinitely. At long-term equilibrium, the 1% issuance balances against fee burn under typical usage levels, producing approximately stable supply.
+
+The schedule is designed to provide substantial early validator rewards (the 4% level supports many validators with reasonable hardware investments) while reducing inflation as the chain matures.
+
+### 10.3.2 Where issuance goes
+
+Newly-issued ADM goes entirely to validators (and their delegators) as rewards for consensus participation. No portion goes to a foundation, a development fund, or any other recipient.
+
+Specifically, each epoch:
+
+- The protocol calculates the epoch's issuance based on the schedule above.
+- The issuance is distributed across the active set in proportion to each validator's bonded stake (including delegated stake).
+- Each validator's share is further split between the validator and their delegators per the validator's commission rate.
+
+Validators set their own commission rates (typically 5-15%); the rest passes through to delegators. Delegators receive their share automatically each epoch; it accrues to their stake account and can be withdrawn or restaked.
+
+### 10.3.3 Why not "burn the issuance and let fees do the work"
+
+Some chains (notably Ethereum post-Merge) attempt to make issuance nearly zero, paying validators primarily from fees. This is sustainable only if fees are reliably high.
+
+Adamant rejects this approach because:
+
+- It produces volatile validator economics: in periods of low network usage, validators are under-rewarded and the active set thins, weakening security.
+- It creates pressure to increase fees, which conflicts with our cost target ($0.0001 per transfer, Principle IV).
+- It makes validator participation uneconomic for smaller validators with less efficient operations, centralising the active set.
+
+The issuance-plus-fee-burn model provides a stable validator income floor (issuance) while still tying token value to usage (burn).
+
+## 10.4 Fee mechanism
+
+### 10.4.1 Multi-dimensional fees
+
+As specified in section 6.3, fees are computed across multiple dimensions:
+
+1. **Computation:** per gas unit consumed by execution
+2. **State storage:** per byte added to active state
+3. **State rent prepayment:** per byte-second of object lifetime
+4. **Bandwidth:** per byte transmitted
+5. **Proof verification:** per Halo 2 proof verified
+6. **Proof generation (optional):** per Halo 2 proof generated by paid prover
+
+Each dimension has its own price. The user's transaction fee is the sum across dimensions.
+
+### 10.4.2 EIP-1559-style price discovery
+
+The price for each dimension is determined per-epoch by an EIP-1559-style mechanism:
+
+- Each dimension has a target consumption per epoch (a "block fullness" target).
+- If the previous epoch consumed more than the target, the price increases (up to 12.5% per epoch).
+- If the previous epoch consumed less than the target, the price decreases (down to 12.5% per epoch).
+- The base price for each dimension is consumed by burn (not paid to validators).
+- A small "tip" above the base price is paid to validators as a priority signal.
+
+This produces:
+
+- Predictable congestion pricing: heavy usage periods see higher prices, but the increase is bounded per-epoch.
+- Efficient resource allocation: each dimension is priced independently; demand for one does not crowd out demand for another.
+- Token value capture from usage: base fees are burned, reducing supply in proportion to usage.
+
+### 10.4.3 Cost target
+
+The protocol's design target is that simple transparent transfers cost approximately $0.0001 USD-equivalent at typical usage. This is achievable with the multi-dimensional fee model: a simple transfer's resource consumption is small in every dimension.
+
+Shielded transfers cost more, primarily due to proof verification cost: typically $0.001-$0.01 USD-equivalent. This is more expensive than transparent transfers but still within consumer payment-network territory and far below Ethereum's typical $1-50 fee range.
+
+Heavy contract executions cost more still, scaling with their actual resource consumption. The protocol's contribution is that you pay for what you use, not a flat rate that mis-allocates costs.
+
+### 10.4.4 Fee burn
+
+Base fees are burned. Tips go to validators. The burn mechanism:
+
+- Each transaction's base fee (the price-per-dimension multiplied by consumption-per-dimension, summed across dimensions) is destroyed at execution time.
+- The burn is recorded in the chain state but the burned ADM is no longer counted in total supply.
+- Tips are paid to the validator who included the transaction in a vertex.
+
+Under typical usage, fee burn approximately equals issuance, producing roughly stable supply. Under heavy usage, burn exceeds issuance, producing net deflation. Under light usage, issuance exceeds burn, producing modest inflation.
+
+### 10.4.5 Sponsored fees
+
+The smart-account model (section 4) allows validation logic to designate a fee payer other than the transaction submitter. This enables:
+
+- **Application-paid fees.** Apps pay for their users' transactions.
+- **Paymaster contracts.** Services pay user fees and recoup costs in another currency.
+- **Free-tier sponsorship.** Protocol or community-funded contracts pay for users below thresholds.
+
+The protocol does not specify these patterns; it makes them possible. Whether they are widely used depends on application-level economics.
+
+## 10.5 Staking economy
+
+### 10.5.1 Validator rewards
+
+A validator's epoch reward is:
+
+```
+reward = (validator_stake / total_staked) * epoch_issuance + tips_collected
+```
+
+The validator's commission is taken from this reward; the remainder is distributed to delegators.
+
+A validator's effective annual yield is approximately the issuance rate (4% in early years, declining per the schedule) minus their operational costs and any slashing they incur. After slashing risk and operational overhead, the typical net yield to delegators is in the range of 3.5% in early years.
+
+### 10.5.2 Slashing risk
+
+Validators (and their delegators) face slashing risk for the offences in subsection 8.1.5. Honest validators with well-operated infrastructure rarely incur slashing; the risk is primarily a defence against malicious or grossly negligent operators.
+
+Delegators bear slashing in proportion to their delegation: if a validator is slashed 5%, all delegators' stakes decrease by 5%. This aligns delegator incentives with validator selection: delegators are economically motivated to delegate to high-quality validators.
+
+### 10.5.3 Liquid staking
+
+The protocol does not provide liquid staking at the protocol layer. Liquid staking — receiving a tradeable token representing one's staked position — can be implemented as a smart contract using the standard primitives. The protocol declines to provide this as a primitive because it would centralise on a single liquid-staking provider; allowing the market to provide multiple competing options is healthier.
+
+### 10.5.4 Compounding
+
+Validator rewards accrue automatically. Delegators may compound (restake their rewards) by submitting a restake transaction; rewards do not auto-compound by default. This is a deliberate choice: auto-compounding requires defining a compounding interval that may not match every delegator's preferred cadence; manual restaking puts the choice in delegators' hands.
+
+## 10.6 Genesis economic parameters
+
+The following parameters are set at genesis and cannot be modified:
+
+- Genesis distribution period: 6 months
+- Daily distribution windows during genesis: 180
+- Minimum validator stake: 1 ADM (no floor at protocol level; market floor emerges from operational economics)
+- Active set size: 200
+- Active set selection: stake-weighted lottery via consensus VRF
+- Validator commission ceiling: 100% (no protocol cap; market discipline applies)
+- Unbonding period: 28 days
+- Issuance schedule: as specified in subsection 10.3.1
+- Slashing rates: as specified in section 8.1.5
+- Fee dimensions: 6, as specified in section 6.3
+- Base price adjustment: ±12.5% per epoch
+- Block fullness targets: per-dimension, calibrated at genesis
+
+These parameters are stored in the genesis specification (section 11) and are subject to the same constitutional immutability as consensus rules. Changes require the social-coordination mechanism for hard forks specified in section 11.
+
+## 10.7 What this section deliberately omits
+
+This section does not contain:
+
+- Predictions of token price
+- Projections of network fee revenue
+- Projections of validator adoption rates
+- Investment-related language of any kind
+
+The protocol is a piece of infrastructure. Its economic model is specified in mechanical terms — issuance schedules, fee formulas, burn rates — and the consequences of those mechanics in terms of token supply and validator economics are derivable from the specifications. Predicting market outcomes is outside the scope of a technical specification and is intentionally absent.
+
+
+# 11. Genesis & Constitution
+
+This section is the protocol's constitutional commitment. It specifies what is fixed forever at genesis, what cannot be changed by any party including the protocol's original implementers, and the precise mechanism by which the protocol may change despite this — through socially-coordinated hard forks in which every node operator individually chooses whether to adopt new client software.
+
+This section is the operational realisation of Principle I (credible neutrality). Every other section of this whitepaper specifies *what* the protocol does; this section specifies *what cannot change about that, and how*.
+
+## 11.1 The constitutional commitment
+
+At genesis, the protocol's specification — every section of this whitepaper, the parameters defined within it, and the reference implementation that realises it — is fixed. The fixing is enforced not by a foundation, not by a multisig, not by an on-chain governance mechanism, but by the structural absence of any mechanism to modify the protocol.
+
+After genesis, the protocol exists as:
+
+- A **specification document** (this whitepaper, version-frozen at v1.0)
+- A **reference implementation** (the Rust code in this repository, version-tagged at v1.0.0)
+- A **running network** (the validators executing the reference implementation)
+
+There is no party with the authority to:
+
+- Add a new validity rule
+- Change a gas cost
+- Modify the issuance schedule
+- Add a new system contract
+- Freeze any account or transaction
+- Censor any participant
+- Pause the chain
+- Issue an emergency fix
+- Coordinate an automatic upgrade
+- Change the active set size, the round duration, the epoch length, the slashing rates, or any other consensus parameter
+
+Each of these operations is technically *possible* — anyone can write a modified Rust implementation that does any of them. What is *impossible* is for any party to make such modifications take effect on the running network without the explicit cooperation of the validators running the existing implementation.
+
+This is the meaning of "constitutional immutability": not that the protocol cannot change, but that change requires a process that cannot be controlled by any party.
+
+## 11.2 What is fixed at genesis
+
+The following are set at genesis and constitute the protocol's permanent character:
+
+### 11.2.1 The seven design principles
+
+The principles in section 2, in priority order:
+
+1. Credible neutrality
+2. Privacy by default
+3. Verifiability without trust
+4. Performance sufficient for use
+5. Mutability as a property of objects
+6. Standard primitives, novel synthesis
+7. Permissionless participation
+
+These principles are the protocol's identity. A future version of this protocol that violated any of these principles would, by definition, be a different protocol — not a revised Adamant.
+
+### 11.2.2 Cryptographic primitives
+
+The cryptographic primitives specified in section 3, including:
+
+- SHA3-256 and SHAKE-256 as primary hash functions
+- BLAKE3 as auxiliary hash
+- Poseidon as zk-friendly hash
+- Ed25519 and ML-DSA-65 as signature schemes
+- BLS12-381 with G1 signatures and G2 public keys for aggregation
+- ChaCha20-Poly1305 for symmetric encryption
+- BLS-based threshold encryption for the encrypted mempool
+- Halo 2 (Pasta curves) for general-purpose proving
+- KZG commitments on BLS12-381 for vector commitments
+
+These choices are part of the consensus rules. Migration to alternatives requires hard fork.
+
+### 11.2.3 Object model and mutability
+
+The object model specified in section 5, including:
+
+- The six mutability variants (`Immutable`, `OwnerUpgradeable`, `VoteUpgradeable`, `UpgradeableUntilFrozen`, `Custom`, `Forked`)
+- The four ownership modes (`Address`, `Shared`, `Immutable`, `Group`)
+- The protocol-enforced mutability semantics (validators reject upgrades inconsistent with the declared mutability)
+- The 1 MiB per-object size cap
+- The state rent mechanism
+
+### 11.2.4 Adamant Move language
+
+The smart-contract language specified in section 6:
+
+- The bytecode instruction set
+- The mutability and privacy annotations
+- The standard library (the modules in `adamant::*`)
+- The gas cost table
+
+The standard library modules are deployed at genesis with `Immutable` mutability; they cannot be modified post-genesis.
+
+### 11.2.5 Privacy layer
+
+The privacy layer specified in section 7:
+
+- The note model
+- The stealth address construction
+- The view key hierarchy
+- The Halo 2 circuit specifications for shielded execution
+
+### 11.2.6 Consensus mechanism
+
+The consensus mechanism specified in section 8:
+
+- DAG structure with 250ms target round duration
+- 36-second epochs (144 rounds per epoch)
+- Active set size of 200 validators
+- 2/3+1 quorum threshold
+- The slashing rates and offences
+- The DKG protocol for threshold encryption
+
+### 11.2.7 Economic model
+
+The economic model specified in section 10:
+
+- The fair-launch mining mechanism
+- The 6-month genesis distribution period
+- The issuance schedule (4% Y1-5, 3% Y6-10, 2% Y11-20, 1% perpetual)
+- The EIP-1559-style base fee mechanism
+- The fee burn mechanism
+- The 28-day unbonding period
+
+### 11.2.8 Genesis state
+
+The specific state at the moment of genesis, including:
+
+- The protocol's null genesis state (no balances, no objects beyond standard library)
+- The bootstrap node addresses for initial network discovery
+- The Powers of Tau ceremony parameters (using Ethereum's ceremony output, July 2023)
+- The reference implementation hash (committed at v1.0.0 release)
+
+The genesis state is published as a distinct artifact (`genesis.json` in the repository) and is itself version-controlled. Once the chain launches, this artifact becomes immutable: every node's local genesis state must match the published artifact, or the node is on a different chain.
+
+## 11.3 What is not fixed at genesis
+
+The following are explicitly *not* fixed and are subject to natural variation:
+
+- The set of validators (changes per epoch)
+- The set of active applications (changes continuously as developers deploy contracts)
+- The token's market price (determined externally)
+- Wallet implementations (any client may exist)
+- Network gateways, RPC providers, and indexer services (any party may operate these)
+- Off-protocol coordination mechanisms (forums, social media, communications channels)
+
+These are the natural ecosystem around the protocol. Their evolution is healthy and expected.
+
+## 11.4 The fork mechanism
+
+Despite all the above, the protocol *can* change. The mechanism is:
+
+1. **Specification revision.** Someone proposes a change. They draft the change as a revised whitepaper section, a new reference implementation, or both.
+
+2. **Public discussion.** The proposal is discussed in public forums (the protocol's GitHub repository, public mailing lists, etc.). The discussion is open; anyone may participate.
+
+3. **Implementation.** A reference implementation of the change is published. Anyone may write or audit the implementation.
+
+4. **Validator opt-in.** Validators choose whether to upgrade their software. Each validator's decision is independent.
+
+5. **Activation.** When a sufficient supermajority of validators (at least 2/3+1 by stake) have upgraded, the new rules become effective on the network they form. Validators who did not upgrade either:
+   - Find themselves on a "minority chain" with the same history but different rules going forward
+   - Upgrade voluntarily to remain on the chain with the supermajority
+
+There is no point at which any party — including the proposers, the implementers, or any subset of validators — can force the upgrade onto unwilling participants. The minority chain remains operational as long as it has any validators willing to maintain it.
+
+### 11.4.1 What this looks like in practice
+
+In practice, hard forks are infrequent and contentious in proportion to their scope:
+
+- **Routine upgrades** (bug fixes, performance improvements that don't change semantics): typically uncontroversial, supermajority adoption within weeks.
+- **Substantive upgrades** (new features, parameter changes): contested, take months to gather supermajority adoption, may produce minority chains.
+- **Fundamental upgrades** (changes to core principles): produce permanent splits. The protocol's history may include such splits; both sides continue with their preferred ruleset.
+
+This is the same mechanism Bitcoin uses. Bitcoin has had multiple hard forks (Bitcoin Cash, Bitcoin SV, etc.), each producing a separate chain whose adherents preferred the alternative ruleset. Both chains continue operating; users choose which to use; the market resolves which receives more value over time.
+
+Adamant accepts that some changes will produce splits, and considers this preferable to a centralised mechanism that prevents splits at the cost of forcing changes on dissenters.
+
+### 11.4.2 What the original implementers commit to
+
+The original implementers — those of us drafting this specification and writing the reference implementation — commit to the following:
+
+1. We will not retain admin keys, hardcoded backdoors, or other privileged access mechanisms in the reference implementation. The implementation, once released, has no special accommodations for our continued involvement.
+
+2. We will not pre-mine, allocate to ourselves, or otherwise position ourselves to receive ADM beyond what we acquire through public participation in fair-launch mining alongside everyone else.
+
+3. We will not maintain "official" forks or channels in a way that confers privilege. If we propose changes, we propose them through the same mechanism anyone else does. Our proposals receive no special weight.
+
+4. We will not claim ownership of the protocol's name, logo, or other markers in a way that creates leverage. If forks adopt different names, that is a healthy outcome of the fork mechanism.
+
+5. We will publish the specification, reference implementation, and supporting materials under permissive licenses (Apache 2.0) such that anyone may modify and redistribute.
+
+These commitments are voluntary. They are not enforced by the protocol; they are enforced by the same mechanism that enforces credible neutrality — the absence of any mechanism by which we *could* violate them while the chain remains running.
+
+### 11.4.3 Why this is credible
+
+A skeptical reader may ask: "The original implementers say they will not pre-mine, but how can users verify this?"
+
+The answer is that the genesis state is verifiable. The genesis specification contains every account that exists at genesis (none), every object that exists at genesis (only the standard library modules and consensus parameters), and every parameter that governs subsequent issuance. Anyone may verify that the implementers do not appear in this state. Anyone may follow the chain's subsequent history and verify that no privileged distribution occurred.
+
+If the implementers wished to sneak a pre-mine into the protocol, they would have to do so visibly, in the published genesis specification, where it could be detected before launch. They cannot insert it post-launch because there is no mechanism to do so.
+
+The credibility comes from the protocol's design making misbehaviour infeasible, not from the implementers' promises.
+
+## 11.5 Anticipated future revisions
+
+For honest engagement with the future, this section anticipates several categories of change that may eventually justify hard forks:
+
+### 11.5.1 Post-quantum migration
+
+The protocol's privacy primitives (BLS12-381, Halo 2) are not post-quantum (section 7.9.3). When production-ready post-quantum proving systems mature — likely in the 2030s — a migration to post-quantum primitives may become appropriate. The migration would be additive: new shielded transactions use post-quantum primitives; existing notes can be spent under the old primitives until users choose to migrate.
+
+This is anticipated but not specified in detail because the specific post-quantum primitives that will be appropriate are not yet known.
+
+### 11.5.2 Throughput improvements
+
+The protocol's single-shard throughput target (200,000 TPS) may eventually be insufficient. Sharding extensions, parallel consensus instances, or other techniques may be proposed. These extensions require hard forks; they are not anticipated to occur before year 5 of the chain's operation, by which point empirical data on usage patterns will inform the design.
+
+### 11.5.3 Cryptographic algorithm improvements
+
+New zero-knowledge proving systems, new signature schemes, and new threshold encryption schemes are likely to mature during the chain's lifetime. Migration to these — when they are clearly superior, peer-reviewed, and production-tested — will be proposed via the same hard-fork mechanism.
+
+### 11.5.4 Bug fixes
+
+Despite extensive review and testing, some bugs in the reference implementation may be discovered post-launch. Bug fixes that do not change protocol semantics (e.g. fixing a memory leak in the validator) can be deployed by validators choosing to run patched software without coordinating with anyone. Bug fixes that *do* change protocol semantics (e.g. fixing an underflow in fee calculation) require the same hard-fork mechanism as any other change.
+
+### 11.5.5 What is not anticipated
+
+The protocol does not anticipate:
+
+- Adding on-chain governance (this would violate Principle I)
+- Adding admin keys (same)
+- Adding a foundation or treasury (same)
+- Removing privacy by default (this would violate Principle II)
+- Removing permissionless participation (this would violate Principle VII)
+
+These changes, if proposed, would not be revisions of Adamant but proposals for a different protocol. The fork mechanism would still apply, but the resulting chain would not be considered Adamant by anyone who values the original principles.
+
+## 11.6 The constitutional commitment, restated
+
+The protocol's constitutional commitment, in the simplest possible terms:
+
+- The rules at genesis are the rules forever, except by the explicit individual choice of every node operator to run different software.
+- No party — including the protocol's original implementers, validators acting in concert, governments, or any other actor — has the authority to modify the protocol.
+- The mechanism for change is social coordination: discussion, proposal, implementation, voluntary adoption.
+- The mechanism's slowness is its strength: it ensures that any change has been examined, debated, and accepted by a supermajority of those whose participation makes the chain function.
+- A protocol with this property cannot be captured. It can only be replaced by an alternative that participants prefer.
+
+This is what is meant by "the chain you use when you don't trust anyone." The chain itself is what you trust, and it is constructed such that the trust is mechanical, not personal.
+
+
+# 12. Conclusion & Open Problems
+
+This section closes the whitepaper. It is shorter than the technical sections by design: it does not specify new protocol behaviour but reflects on what has been specified, identifies the open problems that remain, and outlines the path from this document to a running chain.
+
+## 12.1 What this document has specified
+
+This whitepaper specifies, in detail sufficient to implement, a Layer 1 blockchain protocol with the following properties:
+
+- **Credible neutrality.** No foundation, no admin keys, no on-chain governance, no premine, no upgrade authority. The chain has no master.
+
+- **Privacy by default.** All transactions are shielded by default through Halo 2 zero-knowledge proofs. Users retain selective disclosure via view keys.
+
+- **High throughput.** DAG-based consensus targeting 200,000+ transactions per second on a single shard, with sub-second finality.
+
+- **Phone-verifiable.** Recursive zero-knowledge proofs compress chain history into a constant-size proof verifiable on consumer hardware.
+
+- **Encrypted mempool.** Threshold encryption integrated into consensus, eliminating the structural conditions that enable front-running and validator-level censorship.
+
+- **Post-quantum signatures from genesis.** ML-DSA-65 alongside Ed25519, configurable per account.
+
+- **Mutability as a first-class property.** Every contract declares its mutability rules at creation; declarations are protocol-enforced and visible to users before interaction.
+
+- **Native account abstraction.** Every account is a smart account from genesis. No retrofit, no special cases.
+
+- **Adamant Move smart contracts.** Linear-typed, resource-safe, formally verifiable smart-contract language.
+
+- **Multi-dimensional gas.** Six independent fee dimensions, EIP-1559-style price discovery, fee burn.
+
+- **Fair launch.** Six-month proof-of-burn distribution mechanism. No premine, no investor allocation, no founder allocation.
+
+- **Constitutional immutability.** Protocol rules fixed at genesis; changes require socially-coordinated hard forks with individual node-operator opt-in.
+
+The protocol's contribution is the integration: each component above exists in some form in some existing chain or research paper, but no chain combines all of them coherently. Adamant is the engineering effort to do so.
+
+## 12.2 What remains to be done
+
+This whitepaper is a specification. Substantial work remains before genesis:
+
+### 12.2.1 Reference implementation
+
+The Rust reference implementation is, as of this draft, not begun. The estimated scope is 150,000-250,000 lines of Rust across a workspace of 20-30 crates, implementing every component described in this whitepaper.
+
+The implementation will proceed in phases:
+
+1. **Cryptographic foundations** — the primitives in section 3, packaged as standalone crates with property tests.
+2. **Object model and VM** — a minimal Adamant Move implementation with object storage but no privacy or consensus.
+3. **Privacy layer** — Halo 2 circuits, note construction, stealth addresses, view keys.
+4. **Consensus and networking** — the DAG protocol, libp2p integration, encrypted mempool.
+5. **Recursive proofs** — the recursive proof construction, distributed generation, light client verification.
+6. **Genesis tooling** — the fair-launch mining mechanism, the genesis state generation.
+7. **Audit, hardening, and testnet** — extensive testing, security audits, public testnets.
+8. **Genesis launch** — the moment the network goes live.
+
+A realistic timeline for one or two engineers working full-time is 24-36 months. With a small team (3-5 core engineers plus auditors and reviewers), the timeline can be compressed to 18-24 months.
+
+### 12.2.2 Open problems
+
+Several problems are acknowledged as open and will be addressed during implementation:
+
+**Optimal gas calibration.** The gas costs of individual instructions must be calibrated against actual hardware benchmarks before being committed at genesis. The numbers in this whitepaper are placeholders; final values require empirical measurement on the reference implementation.
+
+**Distributed proof generation pragmatics.** Section 8.5.3 specifies that recursive proof generation is distributed across validators. The exact protocol — how validators coordinate, how partial proofs aggregate, how failures are handled — needs implementation experience to refine.
+
+**DKG protocol details.** Section 8.4.3 specifies that validators run a Pedersen-style DKG at each epoch boundary. Concrete protocol details (specific message formats, timeout handling, late-joining rules) are deferred to the implementation.
+
+**Fee dimension calibration.** Section 6.3 and section 10.4 specify multi-dimensional gas with EIP-1559-style price discovery, but the specific block-fullness targets per dimension require empirical calibration.
+
+**Stealth address scanning performance.** Section 7.2.4 specifies view tags as an optimisation for wallet scanning. As the chain grows, even with view tags, scan time may become a UX issue. Future optimisations (probabilistic data structures, server-assisted scanning with privacy guarantees) may be needed but are not part of v1.0.
+
+**Bridging.** The protocol does not specify a bridge to other chains. Bridges are a frequent source of catastrophic failures in blockchain history (over $2B in bridge hacks since 2022), and the protocol takes no position on bridge design at genesis. Bridges, if they emerge, will be deployed as smart contracts subject to the standard rules; the protocol provides no special infrastructure for them.
+
+**MEV in cross-vertex composition.** Section 8.4 specifies that the encrypted mempool eliminates MEV at the protocol layer. However, when shielded transactions interact with shared transparent state, some forms of MEV may persist (e.g. an attacker observing the *order* of shielded transactions affecting a transparent DEX). Further analysis and possible mitigations are an open research area.
+
+**Long-term storage costs.** Section 5.6 specifies state rent and archival, but the long-term economics of the archival ecosystem (how many archive nodes are needed, who pays for them) are uncertain. The protocol provides the mechanism; the ecosystem must develop in practice.
+
+**Operational tooling.** Wallets, indexers, block explorers, RPC providers, monitoring tooling — these are not part of the protocol but are essential for users. The protocol's launch must be accompanied by reasonable tooling, and the early ecosystem requires bootstrapping.
+
+### 12.2.3 Limitations acknowledged
+
+Some limitations are not "open problems" but acknowledged constraints:
+
+- The privacy primitives are not post-quantum. Long-term private transactions are vulnerable to retrospective decryption by future quantum adversaries (section 7.9.3). The signature layer is post-quantum; the privacy layer's eventual migration is anticipated but cannot be specified in advance.
+
+- The chain has no governance mechanism for emergency intervention. A bug discovered post-launch cannot be patched without a hard fork. This is a deliberate consequence of credible neutrality (Principle I) and is accepted as a cost.
+
+- Single-shard throughput is bounded by the consensus mechanism. Beyond the 200,000 TPS target, scaling requires sharding or other techniques not specified in v1.0. The protocol accepts that it will not, in v1.0, displace high-frequency-trading-grade infrastructure.
+
+- The chain does not natively support complex compliance frameworks (KYC, AML enforcement). These are deliberately excluded by Principle II and Principle VII. Users and applications requiring such frameworks must implement them at the application layer or use other chains.
+
+- The fair-launch mechanism (section 10.2.2) requires bridging from other chains for genesis distribution. The bridge mechanism for genesis is specified (cryptographic proofs of inclusion in source chains) but is itself a potential failure point requiring careful implementation.
+
+These are honest constraints, documented to set accurate expectations.
+
+## 12.3 The path from here
+
+The path from this whitepaper to a running chain is approximately:
+
+**Phase 0 (now → 6 months).** Specification refinement. Public review of this whitepaper. Iteration based on feedback from cryptographers, blockchain engineers, and the broader research community. Finalisation of v1.0 specification.
+
+**Phase 1 (6 → 18 months).** Reference implementation development. The crates, the test suites, the formal specifications. Public development with monthly releases. Engagement with the Move community, Halo 2 maintainers, libp2p maintainers, and other upstream projects.
+
+**Phase 2 (18 → 24 months).** Audits, testnets, hardening. Multiple security audits by reputable firms. Public testnets with progressively realistic conditions. Bug bounties.
+
+**Phase 3 (24+ months).** Genesis preparation and launch. Bootstrap node operator recruitment. Fair-launch mining infrastructure. Final genesis specification publication. Genesis transaction. Network activation.
+
+These phases are estimates, not commitments. Software development is hard to schedule, and a project of this scope is more uncertain than most. The protocol's value is in being right at genesis, not in being early; if delays are needed to ensure correctness, they will be taken.
+
+## 12.4 Closing
+
+The blockchain ecosystem in 2026 is a maze of compromises. Most chains compromise neutrality for governance flexibility; many compromise privacy for compliance friendliness; some compromise verifiability for performance. Each compromise produces real users who chose that chain because the compromise suited them.
+
+Adamant is for the users who are not served by these compromises. It is for the users whose threat model includes their own government, their own foundation, their own validators. It is for the users for whom "the chain has a foundation" is a security flaw, not a feature. It is for the users who want to commit value to a system whose rules they can verify with cryptographic finality.
+
+This whitepaper specifies how to build that chain. The next document — and the next several years of work — is how it gets built.
+
+---
+
+*This whitepaper is a draft. It is subject to revision based on public review and implementation experience. The v1.0 release will be tagged in the repository when the specification is considered complete and frozen for the genesis implementation.*
+
+*The reference implementation is being developed at [github.com/adamant-protocol/adamant](https://github.com/adamant-protocol/adamant) under the Apache 2.0 license. Issues, pull requests, and substantive review are welcome.*
+
+

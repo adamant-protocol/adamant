@@ -180,9 +180,28 @@ Protocol-managed bookkeeping fields, not under the user's control:
 - `last_modified_height`: the consensus height of the most recent state transition
 - `creator`: the account that created the object
 - `storage_rent_paid_through`: the consensus height through which storage rent has been paid (section 5.6)
-- `proof_commitment`: cryptographic commitment to the object's history, used by the privacy layer (section 7) and recursive verification (section 8)
+- `proof_commitment`: cryptographic commitment to the object's history, used by the privacy layer (section 7) and recursive verification (section 8). The commitment is a KZG commitment on BLS12-381 (section 3.7.2), serialised as a compressed G₁ element (48 bytes).
 
 Users do not write to metadata fields directly; they are updated by the protocol as a side-effect of valid state transitions.
+
+### 5.1.8 Canonical serialisation
+
+Every object, every component of an object, and every value that flows through consensus has a single canonical byte representation. Canonical serialisation is consensus-critical: every conforming Adamant implementation must produce byte-identical encodings of the same logical value, or hashes diverge and consensus breaks.
+
+The protocol uses **BCS (Binary Canonical Serialization)** as its canonical encoding, the same format deployed by Sui, Aptos, and the broader Move ecosystem. BCS was designed specifically for blockchain consensus contexts: it produces a unique encoding for each value (no ambiguity in field ordering, no optional padding, no variable-length integer encodings without canonical resolution), it is compact, and it has a stable specification with mature implementations.
+
+BCS encoding rules used by the protocol:
+
+- Integers: little-endian fixed-width for `u8` through `u128`; ULEB128 for collection lengths.
+- Booleans: single byte, `0x00` for false, `0x01` for true.
+- Sequences (`Vec<T>`): ULEB128 length prefix followed by elements in order.
+- Structs: fields serialised in source-declaration order with no separators.
+- Enums: ULEB128 variant tag followed by the variant's payload.
+- Fixed-size arrays: elements in order with no length prefix.
+
+This is the standard BCS specification; the protocol does not deviate from it. Any value that hashes into consensus — `ObjectId` derivation (section 5.1.1), `TypeId` derivation (section 5.1.2), `Address` derivation (section 4.2), state commitments, transaction hashes — first canonically serialises to BCS bytes, then hashes those bytes with SHA3-256 under an appropriate domain tag (section 3.3.1).
+
+Implementations `MUST` use a BCS-conformant encoder and `MUST NOT` introduce protocol-level fields that BCS cannot represent canonically (for instance: `HashMap` with non-deterministic iteration order, floating-point values, or self-referential structures).
 
 ## 5.2 State as a graph of objects
 

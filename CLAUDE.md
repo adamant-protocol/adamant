@@ -175,7 +175,7 @@ adamant/
 ├── rust-toolchain.toml Pinned Rust version
 ├── crates/             Reference implementation crates
 │   ├── adamant-crypto/         Standard primitive wrappers (Section 3)
-│   ├── adamant-types/          Core data types (Object, Transaction, etc.)
+│   ├── adamant-types/          Core data types from sections 4 & 5 (Object, Address, etc.; Transaction lives in adamant-vm)
 │   ├── adamant-account/        Account and identity logic (Section 4)
 │   ├── adamant-state/          Object model and state management (Section 5)
 │   ├── adamant-vm/             Adamant Move VM (Section 6)
@@ -203,7 +203,7 @@ We build in this order. Each phase produces a working artifact before the next b
 
 1. **Phase 1: `adamant-crypto`** — Wrappers around the standard primitive libraries. Establish the cryptographic foundations cleanly before anything else depends on them.
 
-2. **Phase 2: `adamant-types`** — Core data types from the whitepaper: `ObjectId`, `Object`, `Mutability`, `Ownership`, `Transaction`, etc. No behaviour yet, just types and serialisation.
+2. **Phase 2: `adamant-types`** — Core data types from whitepaper sections 4 (identity & accounts) and 5 (object model & state): `Address`, `ObjectId`, `TypeId`, `Object`, `Mutability`, `Ownership`, `Lifecycle`, etc. No behaviour yet, just types and canonical serialisation (BCS per whitepaper 5.1.8). The `Transaction` type is deferred to Phase 5 (`adamant-vm`) where the VM and transaction format are specified together; defining it earlier means inventing fields the spec does not pin.
 
 3. **Phase 3: `adamant-account`** — Account creation, validation logic, key rotation, view keys.
 
