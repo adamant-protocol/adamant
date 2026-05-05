@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Seven confirmed instances during Phases
+sources before proceeding. Eight confirmed instances during Phases
 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -201,6 +201,33 @@ sources before proceeding. Seven confirmed instances during Phases
   the wire format is consensus-critical and pinnable now; the
   construction semantics belong in the sections that define each
   type's cryptographic or runtime role (commit 41ddb41).
+- **Bytecode format** (whitepaper 6.2.1, 6.1.3 correction) — §6.2.1
+  was a seven-line prose paragraph naming instruction classes; the
+  specification needed for an independent implementation was
+  under-specified across ten related areas: dialect choice (Diem /
+  Sui / Aptos / custom), module file format, instruction-set
+  enumeration with opcodes, operand encoding, register/stack
+  architecture (the prose said "register-based" but §6.1.3 claimed
+  "strict superset of standard Move bytecode" — a contradiction,
+  since all Move dialects are stack-based), object-reference
+  representation in bytecode, privacy/mutability annotation
+  encoding, validator rules, type-system encoding, and
+  per-instruction gas costs. Resolved by spec revision expanding
+  §6.2.1 into seven subsubsections: §6.2.1.1 pins Sui-Move as the
+  bytecode substrate (chosen because §5's object model is itself
+  Sui-derived); §6.2.1.2 inherits Sui's `CompiledModule` binary
+  format (`move-binary-format`); §6.2.1.3 specifies module-level
+  mutability metadata (`b"adamant.mutability"`) and a function-level
+  privacy-annotation byte; §6.2.1.4 inherits Sui's instruction set
+  and adds 17 Adamant-specific extensions (privacy operations,
+  proof primitives, hash and signature verification, gas
+  manipulation); §6.2.1.5 inherits Sui's variable-length operand
+  encoding; §6.2.1.6 inherits Sui's `move-bytecode-verifier` and
+  adds eight Adamant-specific validator rules; §6.2.1.7 frames
+  per-instruction gas costs (full table deferred to a normative
+  appendix). §6.1.3 also corrected: the forward-reference now
+  points at §6.2.1, and the bytecode architecture is explicit as
+  stack-based (commit 5489d09).
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
