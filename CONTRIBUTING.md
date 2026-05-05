@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Nine confirmed instances during Phases
+sources before proceeding. Ten confirmed instances during Phases
 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -247,6 +247,29 @@ sources before proceeding. Nine confirmed instances during Phases
   in §6.0.7 to bytecode operands: encoding pinned now, semantic
   construction deferred to the section that defines the role
   (commit 0d3a957).
+- **Per-extension operand encodings** (whitepaper 6.2.1.5) — the
+  Phase 5 bytecode wire encoding deliverable proposal surfaced
+  that §6.2.1.5 specified generic operand-encoding rules
+  (ULEB128 indices, fixed-width little-endian immediates) for
+  inherited Sui-Move bytecode but did not pin per-extension
+  operand layouts for the 17 Adamant-specific instructions per
+  §6.2.1.4. Three operand types appear across the extensions
+  (`FunctionHandleIndex`, `CircuitId`, `GasDimension`), each
+  needing an explicit encoding choice; without resolution the
+  implementation would have pinned the encodings silently at
+  first commit, exactly the failure mode the discipline exists
+  to prevent. Resolved by spec amendment adding a "Per-extension
+  operand encodings" paragraph to §6.2.1.5 pinning each:
+  `FunctionHandleIndex` as ULEB128 (matching Sui-Move's
+  inherited encoding); `CircuitId` as ULEB128 (matching
+  Sui-Move's encoding pattern for other indices, treating
+  `CircuitId` as an index per §6.2.1.4's framing); `GasDimension`
+  as a single byte variant tag 0x00–0x05 in declaration order
+  matching `GasBudget`'s field order from §6.0.7 (matching the
+  variant-tag pattern from §6.0.7's `Value` enum); and the 11
+  zero-operand extensions carrying no operand bytes. These
+  encodings are genesis-fixed; changing any is a hard fork
+  (commit 84e60d0).
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
