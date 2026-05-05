@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Ten confirmed instances during Phases
+sources before proceeding. Eleven confirmed instances during Phases
 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -270,6 +270,32 @@ sources before proceeding. Ten confirmed instances during Phases
   zero-operand extensions carrying no operand bytes. These
   encodings are genesis-fixed; changing any is a hard fork
   (commit 84e60d0).
+- **`LdU256` operand endianness** (whitepaper 6.2.1.5) — the
+  Phase 5 bytecode wire encoding implementation needed to commit
+  the `match Bytecode::LdU256(value)` arm to a specific byte
+  order. §6.2.1.5 specified "32 big-endian bytes matching section
+  6.0.7's `Value::U256` encoding," but Sui-Move's inherited
+  `write_u256` (at
+  `vendor/move-binary-format/src/file_format_common.rs:480` and
+  `vendor/move-core-types/src/u256.rs:313`) encodes
+  `value.to_le_bytes()` — little-endian. The spec contradicted
+  §6.2.1.1's "strict superset of Sui-Move bytecode" commitment
+  and Sui's actual implementation. The same sentence specified
+  `LdU64` and `LdU128` as little-endian (correct, matching
+  Sui-Move) before switching to "big-endian" for `LdU256` with a
+  §6.0.7 cross-reference; the cross-reference was the source of
+  the editorial slip, since §6.0.7's BCS `U256` is big-endian but
+  BCS and bytecode are different encoding paths. Without
+  resolution, the implementation would have made a
+  consensus-critical encoding choice silently — exactly the
+  failure mode the discipline exists to prevent. Resolved by
+  amending §6.2.1.5: `LdU256` is now specified as 32 little-endian
+  bytes matching Sui-Move's inherited encoding, with an explicit
+  follow-on paragraph acknowledging the divergence from §6.0.7's
+  BCS encoding and noting that the two paths never share bytes
+  (bytecode operands appear inside Move binary modules; BCS-encoded
+  values appear in transaction arguments and on-chain typed
+  values) (commit 83bb1e9).
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
