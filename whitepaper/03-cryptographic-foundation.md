@@ -176,17 +176,90 @@ The alternative, AES-256-GCM, is faster on platforms with hardware AES accelerat
 
 ## 3.6 Threshold encryption
 
-The encrypted mempool (section 9) uses threshold encryption built on BLS12-381. Transactions are encrypted by users such that decryption requires cooperation of a threshold of validators serving as keypers. The construction is the standard Boneh-Lynn-Shacham identity-based encryption combined with Shamir secret sharing of the master secret.
+The encrypted mempool (section 9) uses threshold encryption built on BLS12-381. Transactions are encrypted by users such that decryption requires cooperation of a threshold of validators serving as keypers. The construction is a hashed-ElGamal threshold key encapsulation mechanism (KEM) on BLS12-381, in the Boneh-Franklin / Baek-Zheng lineage, combined with Shamir secret sharing of the master secret. The same construction is deployed in production by Shutter Network on Gnosis Chain.
 
-**High-level construction.** The validator set holds a shared master secret distributed via a distributed key generation (DKG) protocol at the start of each epoch. A user encrypts a transaction with respect to a public identifier (specifically, the consensus epoch number plus a salt). To decrypt, a threshold of validators contribute decryption shares; the shares are combined to recover the message. No single validator, no minority of validators, and no observer can decrypt before the threshold is reached.
+**High-level operation.** The validator set holds a shared master secret distributed via a distributed key generation (DKG) protocol at the start of each epoch. A user encrypts a transaction with respect to a public identifier (specifically, the consensus epoch number plus a salt). To decrypt, a threshold of validators contribute decryption shares; the shares are combined to recover a symmetric key, which is then used to decrypt the transaction's AEAD-encrypted payload. No single validator, no minority of validators, and no observer can decrypt before the threshold is reached.
 
 **Parameters.** The threshold is set at two-thirds of validators by stake, matching the consensus safety threshold. Decryption is integrated into consensus: the act of committing a consensus vertex containing an encrypted transaction simultaneously triggers the decryption-share contribution. This integration is what allows Adamant's encrypted mempool to operate at sub-second latency, in contrast to externally-coordinated systems such as Shutter Network on Gnosis Chain (current latency approximately three minutes).
 
-**Distributed key generation.** At each epoch boundary, validators run a Pedersen-style DKG to establish the new master public key and individual key shares. The DKG protocol itself is specified in section 8 alongside consensus. The specification of DKG primitives (commitment, verification) is built on KZG commitments (section 3.7) over BLS12-381.
+### 3.6.1 Cryptographic construction
 
-**Quantum vulnerability.** Threshold encryption based on BLS12-381 is vulnerable to a quantum adversary, in the same way as BLS signatures. The protocol accepts this for the same reason: encrypted mempool envelopes are short-lived. A transaction is encrypted, ordered, and decrypted within a single epoch. After the epoch closes, the transaction is in the chain (in either shielded or transparent form) and the ephemeral encryption is no longer security-relevant. A quantum adversary in 2040 cannot retroactively decrypt transactions from 2030 in any meaningful sense — those transactions are already public knowledge or already finalised in zero-knowledge proofs that do not depend on the original encryption.
+The protocol uses a **hashed-ElGamal threshold KEM** on BLS12-381 with the following structure.
 
-**Long-term threshold encryption.** If, at some future point, post-quantum threshold encryption schemes mature into production-ready form, they may be adopted via specification revision under the procedure in section 12. The protocol does not attempt to anticipate which scheme that will be.
+**Group orientation.** Master public key in G₂ (96 bytes compressed); decryption shares in G₁ (48 bytes compressed). This matches the BLS signature orientation in section 3.4.3 (G₁ signatures, G₂ public keys) and reuses the same hash-to-curve operation on G₁.
+
+**Domain separation.** Threshold encryption uses its own hash-to-curve domain tag, distinct from BLS signatures:
+
+```
+BLS_TE_BLS12381G1_XMD:SHA-256_SSWU_RO_ADAMANT_v1
+```
+
+This domain separation is essential to the security of the construction. A decryption share is computationally identical to a BLS signature on the same identity under the same key share — the structural identity is what makes the construction efficient and verifiable. Without domain separation, a signature produced under a validator's signing key could be used as a decryption share, opening cross-protocol forgery attacks. The TE-specific DST cryptographically separates the two operations: a value valid as a signature under the BLS DST is computationally unrelated to a value valid as a decryption share under the TE DST.
+
+**Algorithm specification.**
+
+Let `r` denote the BLS12-381 scalar field order, `g₁`, `g₂` the canonical generators of G₁ and G₂, `e: G₁ × G₂ → G_T` the optimal-Ate pairing, and `H_TE: {0,1}* → G₁` the hash-to-curve operation with the TE domain tag above.
+
+**Setup** (output of DKG specified in section 8; for testing the cryptographic primitive in isolation, a trusted-dealer Shamir secret sharing produces the same outputs).
+
+- Master secret `s ∈ Z_r` (held collectively, never reconstructed)
+- Master public key `MPK = g₂^s ∈ G₂`
+- Validator shares `s_i ∈ Z_r` via Shamir secret sharing over `Z_r`, threshold `t`
+- Public share verification keys `PK_i = g₂^{s_i} ∈ G₂` (published; allow verification of decryption shares)
+
+**Encapsulate(MPK, identity, randomness) → (header, key)**:
+
+1. `Q = H_TE(identity) ∈ G₁`
+2. Sample `ρ ← Z_r` from the supplied randomness
+3. `U = g₂^ρ ∈ G₂`  (the ciphertext header, transmitted alongside the AEAD ciphertext)
+4. `K = KDF(e(Q, MPK)^ρ, U, identity)` — 32-byte symmetric key
+5. Return `(U, K)`
+
+**DecryptionShare(s_i, identity) → D_i ∈ G₁**:
+
+`D_i = s_i · H_TE(identity)`
+
+This is structurally identical to a BLS signature under the TE DST. Validators compute and broadcast `D_i` as part of consensus.
+
+**VerifyDecryptionShare(PK_i, identity, D_i) → bool**:
+
+`e(D_i, g₂) ≟ e(H_TE(identity), PK_i)`
+
+Validators discard malformed shares before combination. This check is consensus-critical: a single malformed share fed into Lagrange interpolation produces an incorrect combined value that decrypts to garbage.
+
+**Combine({(i, D_i) : i ∈ S}) → D ∈ G₁**, where `|S| ≥ t`:
+
+`D = Σ_{i ∈ S} λ_i(0) · D_i ∈ G₁`
+
+where `λ_i(0)` is the Lagrange coefficient at `x=0` for index `i` over the set `S`, computed in `Z_r`. The result satisfies `D = s · H_TE(identity)` by the algebraic property of Shamir reconstruction in the exponent.
+
+**Decapsulate(D, header U, identity) → key**:
+
+`K = KDF(e(D, U), U, identity)`
+
+Correctness follows from bilinearity: `e(D, U) = e(s·Q, g₂^ρ) = e(Q, g₂)^{s·ρ} = e(Q, g₂^s)^ρ = e(Q, MPK)^ρ`, matching the value the encapsulator computed.
+
+**Key derivation function (KDF).** The KDF uses tagged-SHAKE-256 per the BIP-340 tagged-hash construction in section 3.3.1, with a dedicated registry tag:
+
+```
+ADAMANT-v1-threshold-kdf
+```
+
+Input absorbed: `serialise(GT_value) || serialise(U) || identity`. Output squeezed: 32 bytes. The 32-byte output is used directly as a ChaCha20-Poly1305 key (section 3.5) to encrypt and authenticate the transaction payload.
+
+The choice of GT-value serialisation follows the standard compressed encoding for BLS12-381 GT elements (576 bytes). The choice of U serialisation is the compressed G₂ encoding (96 bytes). Identity is the consensus epoch number (8 bytes, big-endian) concatenated with a per-transaction salt (32 bytes).
+
+### 3.6.2 Distributed key generation
+
+At each epoch boundary, validators run a Pedersen-style DKG to establish the new master public key and individual key shares. The DKG protocol itself is specified in section 8 alongside consensus. The specification of DKG primitives (commitment, verification) is built on KZG commitments (section 3.7.2) over BLS12-381. Phase 1 of the reference implementation provides a trusted-dealer Shamir splitter for testing the cryptographic primitive in isolation; this splitter is explicitly marked as test-only and is replaced by the production DKG when consensus is implemented.
+
+### 3.6.3 Quantum vulnerability
+
+Threshold encryption based on BLS12-381 is vulnerable to a quantum adversary, in the same way as BLS signatures. The protocol accepts this for the same reason: encrypted mempool envelopes are short-lived. A transaction is encrypted, ordered, and decrypted within a single epoch. After the epoch closes, the transaction is in the chain (in either shielded or transparent form) and the ephemeral encryption is no longer security-relevant. A quantum adversary in 2040 cannot retroactively decrypt transactions from 2030 in any meaningful sense — those transactions are already public knowledge or already finalised in zero-knowledge proofs that do not depend on the original encryption.
+
+### 3.6.4 Long-term threshold encryption
+
+If, at some future point, post-quantum threshold encryption schemes mature into production-ready form, they may be adopted via specification revision under the procedure in section 12. The protocol does not attempt to anticipate which scheme that will be.
 
 ## 3.7 Zero-knowledge proofs
 
