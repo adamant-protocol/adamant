@@ -65,6 +65,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "adamant-vm"
+version = "0.0.1"
+dependencies = [
+ "adamant-crypto",
+ "adamant-types",
+ "bcs",
+ "hex",
+ "hex-literal",
+ "serde",
+ "serde-big-array",
+]
+
+[[package]]
 name = "aead"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

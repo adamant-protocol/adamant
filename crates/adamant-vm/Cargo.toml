@@ -1,0 +1,23 @@
+[package]
+name = "adamant-vm"
+description = "Adamant Move virtual machine. Phase 5's first deliverable: the canonical Transaction format and TxHash derivation per whitepaper sections 6.0 and 6.0.7. Subsequent commits will add the bytecode format, the AVM runtime, multi-dimensional gas accounting, module deployment, and the parallel execution scheduler per whitepaper section 6."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+adamant-crypto = { path = "../adamant-crypto" }
+adamant-types = { path = "../adamant-types" }
+serde = { workspace = true }
+serde-big-array = { workspace = true }
+bcs = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }
+hex-literal = { workspace = true }
+
+[lints]
+workspace = true

@@ -120,8 +120,8 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Five confirmed instances during Phases 1,
-2, and 4:
+sources before proceeding. Seven confirmed instances during Phases
+1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
   original "fixed-length domain tag" text admitted prefix collisions
@@ -167,6 +167,40 @@ sources before proceeding. Five confirmed instances during Phases 1,
   inline comment to pin Mutability-stays / Lifecycle-changes, and
   amending §5.6.2 to specify lifecycle and version preservation
   across archival round-trips (commit 91ca61d).
+- **Transaction format** (whitepaper 6.0, 5.1.1 amendment) — Phase
+  5's first deliverable proposal surfaced eight related gaps: §4.3,
+  §5.1.1, §6.2.2, §6.3, and §6.4 all referenced "transaction"
+  informally without any section pinning the `Transaction` struct's
+  fields, encoding, or derived `TxHash`. The gaps spanned the
+  Transaction structure (no canonical fields), `TxHash` derivation
+  (no formula or domain tag), the body / auth-evidence split (no
+  pinned signature carriage), the read/write/created-objects
+  declaration format, the authorising account and fee-payer naming,
+  the gas budget structure (per-dimension vs combined), the
+  privacy-mode declaration, and module deployment as a transaction
+  kind (special variant or regular call). Resolved by spec revision
+  adding §6.0 ("Transactions: the input to execution") with §6.0.1
+  body/evidence split, §6.0.2 body fields including version-pinned
+  read sets and explicit `created_objects`, §6.0.3 auth evidence
+  shape, §6.0.4 `TxHash = sha3_256_tagged(TX_HASH, BCS(body))` with
+  new domain tag `b"ADAMANT-v1-tx-hash"`, §6.0.5 implicit privacy
+  from function annotation, and §6.0.6 BCS canonicality and
+  hard-fork-fixedness; and amending §5.1.1 to forward-reference
+  §6.0.4 and §6.0.2 explicitly (commit 869112a).
+- **Inner-type canonical encodings** (whitepaper 6.0.7) — §6.0
+  referenced inner types (`Signature`, `Witness`, `StealthCommitment`,
+  `ModuleRef`, `FunctionId`, `Value`) by name without pinning their
+  canonical encodings — six related sub-gaps surfaced during Phase
+  5's re-proposal cycle. Resolved by spec revision adding §6.0.7
+  ("Inner-type canonical encodings"), which pins each type's BCS
+  wire format (variant tags, fixed sizes, length bounds) while
+  deferring the cryptographic construction of `StealthCommitment`
+  and the contents of `Witness` to §7 (privacy layer) and the
+  layout of any specific user-defined struct value to §6.2.1
+  (bytecode format). The encoding/construction split is deliberate:
+  the wire format is consensus-critical and pinnable now; the
+  construction semantics belong in the sections that define each
+  type's cryptographic or runtime role (commit 41ddb41).
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol

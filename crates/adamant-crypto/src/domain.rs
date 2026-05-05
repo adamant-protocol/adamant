@@ -29,14 +29,14 @@
 //!
 //! # Status of tags
 //!
-//! Whitepaper v0.1 fully names five canonical tags so far: BLS
+//! Whitepaper v0.1 fully names six canonical tags so far: BLS
 //! hash-to-curve (section 3.4.3), threshold-encryption hash-to-curve
 //! (section 3.6.1), the threshold-encryption KDF tag (section 3.6.1),
-//! the account-address derivation tag (section 4.2), and the
-//! `ObjectId` derivation tag (section 5.1.1). Other sections
-//! reference a `domain_tag` placeholder for protocol contexts whose
-//! exact byte string is to be specified when those sections are
-//! implemented:
+//! the account-address derivation tag (section 4.2), the
+//! `ObjectId` derivation tag (section 5.1.1), and the transaction-hash
+//! derivation tag (section 6.0.4). Other sections reference a
+//! `domain_tag` placeholder for protocol contexts whose exact byte
+//! string is to be specified when those sections are implemented:
 //!
 //! | Context                         | Whitepaper section | Status |
 //! |---------------------------------|--------------------|--------|
@@ -45,6 +45,7 @@
 //! | Threshold-encryption KDF        | 3.6.1              | [`THRESHOLD_KDF`]. |
 //! | Account address derivation      | 4.2                | [`ACCOUNT_ADDRESS`]. |
 //! | `ObjectId` derivation           | 5.1.1              | [`OBJECT_ID`]. |
+//! | Transaction-hash derivation     | 6.0.4              | [`TX_HASH`]. |
 //! | Nullifier (Poseidon, in-circuit)| 7                  | Tag string deferred to Phase 6 (`adamant-privacy`). |
 //! | Stealth-address shared secret   | 7                  | Tag string deferred to Phase 6 (`adamant-privacy`). |
 //! | Memo key derivation             | 7                  | Tag string deferred to Phase 6 (`adamant-privacy`). |
@@ -197,6 +198,23 @@ pub static ACCOUNT_ADDRESS: DomainTag = DomainTag::new(b"ADAMANT-v1-account-addr
 /// The byte string was anticipated by the worked example in
 /// whitepaper section 3.3.1.
 pub static OBJECT_ID: DomainTag = DomainTag::new(b"ADAMANT-v1-object-id");
+
+/// Transaction-hash derivation domain tag, per whitepaper section 6.0.4.
+///
+/// Used with the BIP-340 tagged-SHA3-256 construction
+/// ([`crate::hash::sha3_256_tagged`]) to derive a transaction's
+/// 32-byte `TxHash` from the BCS-encoded `TxBody`:
+///
+/// `TxHash = tagged_hash_sha3(tag, BCS(body))`
+///
+/// The hash covers the body alone (per section 6.0.1's body /
+/// auth-evidence split); auth evidence is excluded so signatures
+/// can sign `BCS(body)` without circular dependency. Same
+/// composition as [`ACCOUNT_ADDRESS`] and [`OBJECT_ID`] with a
+/// distinct tag — see CONTRIBUTING.md "Derivation discipline" for
+/// the four invariants every protocol-level identifier derivation
+/// must hold.
+pub static TX_HASH: DomainTag = DomainTag::new(b"ADAMANT-v1-tx-hash");
 
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and

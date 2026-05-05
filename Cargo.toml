@@ -18,6 +18,7 @@ members = [
     "crates/adamant-crypto-blst-extra",
     "crates/adamant-state",
     "crates/adamant-types",
+    "crates/adamant-vm",
 ]
 
 [workspace.package]
