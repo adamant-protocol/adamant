@@ -1,0 +1,27 @@
+[package]
+name = "enum-compat-util"
+description = "Vendored from Sui-Move per whitepaper §6.2.1.2 (mainnet-v1.66.2). Backwards-compatibility helper consumed by move-core-types and move-proc-macros. See PROVENANCE.md for the upstream tag and audit posture."
+version.workspace = true
+authors = ["Mysten Labs <build@mystenlabs.com>"]
+repository = "https://github.com/MystenLabs/sui"
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+serde_yaml.workspace = true
+
+# Lint posture for vendored upstream code.
+# `unsafe_code` is set per-crate based on empirical upstream
+# inspection (forbid for crates without unsafe; allow for crates
+# carrying upstream unsafe blocks per SECURITY.md "Vendored
+# upstream surface").
+# Clippy lints are deferred to upstream's CI: running our
+# workspace clippy posture against byte-identical upstream code
+# produces noise rather than signal. Style lints belong in
+# upstream's process; we trust the tag.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "allow"

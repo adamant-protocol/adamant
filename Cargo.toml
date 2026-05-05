@@ -20,10 +20,14 @@ members = [
     "crates/adamant-types",
     "crates/adamant-vm",
     # Vendored upstream code per whitepaper §6.2.1.1 and vendor/README.md.
-    # Scaffold stage: placeholder lib.rs files; actual Sui code copied in
-    # a follow-up commit.
+    # Sourced from Sui mainnet-v1.66.2 (commit
+    # a9a6825eaf6273cc819ee3bcf65fd4909f7624a9, released 25 Feb 2026).
+    # See each crate's PROVENANCE.md for full audit posture.
+    "vendor/enum-compat-util",
+    "vendor/move-abstract-interpreter",
     "vendor/move-binary-format",
     "vendor/move-core-types",
+    "vendor/move-proc-macros",
 ]
 
 [workspace.package]
@@ -144,6 +148,55 @@ serde = { version = "=1.0.228", features = ["derive"] }
 serde-big-array = "=0.5.1"
 
 # Testing
-proptest = "1.5"
-hex = "0.4"
+# proptest bumped from "1.5" to "1.6.0" to satisfy Sui-Move's pin at
+# mainnet-v1.66.2 while remaining compatible with our existing usage.
+proptest = "1.6.0"
+# hex bumped from "0.4" to "0.4.3" matching Sui-Move's pin at
+# mainnet-v1.66.2; backward-compatible with our existing dev-dep usage.
+hex = "0.4.3"
 hex-literal = "0.4"
+
+# ---------------------------------------------------------------------------
+# Sui-Move bytecode dependencies (whitepaper §6.2.1.1; vendored from
+# Sui mainnet-v1.66.2 per vendor/README.md).
+#
+# Version pins below are taken verbatim from Sui's
+# external-crates/move/Cargo.toml at the vendored tag. Loose pins
+# (e.g. `anyhow = "1.0.52"`) match Sui's syntax; the lockfile pins
+# the exact resolved version. Bumping the vendored Sui tag is an
+# audit-trail commit per vendor/README.md; bumping these pins
+# requires the same discipline.
+# ---------------------------------------------------------------------------
+
+# Generic Cargo dependencies (Sui-Move pins, mainnet-v1.66.2)
+anyhow = "1.0.52"
+arbitrary = { version = "1.1.7", features = ["derive", "derive_arbitrary"] }
+ethnum = "1.0.4"
+getrandom = "0.2.9"
+indexmap = "2.8.0"
+insta = "1.42.0"
+itertools = "0.10.0"
+leb128 = "0.2.5"
+num = "0.4.0"
+primitive-types = { version = "0.10.1", features = ["impl-serde"] }
+proptest-derive = "0.5"
+quote = "1.0.9"
+rand = "0.8.0"
+ref-cast = "1.0.6"
+regex = "1.5.5"
+serde_bytes = "0.11.5"
+serde_json = "1.0.64"
+serde_with = "3.9.0"
+serde_yaml = "0.8.26"
+syn = { version = "1.0.64", features = ["derive"] }
+thiserror = "1.0.24"
+uint = "0.9.4"
+variant_count = "1.1.0"
+
+# Vendored Sui-Move crates (path entries enable per-crate
+# `<crate>.workspace = true` inheritance from upstream's Cargo.tomls)
+move-binary-format = { path = "vendor/move-binary-format" }
+move-core-types = { path = "vendor/move-core-types" }
+enum-compat-util = { path = "vendor/enum-compat-util" }
+move-proc-macros = { path = "vendor/move-proc-macros" }
+move-abstract-interpreter = { path = "vendor/move-abstract-interpreter" }

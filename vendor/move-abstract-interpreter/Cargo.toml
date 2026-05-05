@@ -1,0 +1,30 @@
+[package]
+name = "move-abstract-interpreter"
+description = "Vendored from Sui-Move per whitepaper §6.2.1.2 (mainnet-v1.66.2). Move abstract-interpretation framework consumed by move-binary-format. See PROVENANCE.md for the upstream tag and audit posture."
+version.workspace = true
+authors = ["The Move Contributors"]
+repository = "https://github.com/MystenLabs/sui"
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+
+[dev-dependencies]
+itertools.workspace = true
+
+[features]
+default = []
+
+# Lint posture for vendored upstream code.
+# `unsafe_code` is set per-crate based on empirical upstream
+# inspection (forbid for crates without unsafe; allow for crates
+# carrying upstream unsafe blocks per SECURITY.md "Vendored
+# upstream surface").
+# Clippy lints are deferred to upstream's CI: running our
+# workspace clippy posture against byte-identical upstream code
+# produces noise rather than signal. Style lints belong in
+# upstream's process; we trust the tag.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "allow"

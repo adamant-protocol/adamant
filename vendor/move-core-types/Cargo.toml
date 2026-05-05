@@ -1,12 +1,58 @@
 [package]
 name = "move-core-types"
-description = "Placeholder for Sui-Move's move-core-types crate, vendored per whitepaper §6.2.1.2 as a transitive dependency of move-binary-format. Actual upstream code lands in a follow-up commit per vendor/README.md."
+description = "Vendored from Sui-Move per whitepaper §6.2.1.2 (mainnet-v1.66.2) as a transitive dependency of move-binary-format. See PROVENANCE.md for the upstream tag and audit posture."
 version.workspace = true
-edition.workspace = true
-license = "Apache-2.0"
+authors = ["Diem Association <opensource@diem.com>", "The Move Contributors", "Mysten Labs <build@mystenlabs.com>"]
 repository = "https://github.com/MystenLabs/sui"
-authors = ["Sui contributors (vendored by Adamant)"]
+license = "Apache-2.0"
+edition = "2024"
 publish = false
 
-[lints]
-workspace = true
+[dependencies]
+anyhow.workspace = true
+hex.workspace = true
+proptest = { workspace = true, optional = true }
+proptest-derive = { workspace = true, optional = true }
+rand.workspace = true
+ref-cast.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true
+primitive-types.workspace = true
+uint.workspace = true
+num.workspace = true
+ethnum.workspace = true
+arbitrary = { workspace = true, optional = true }
+enum-compat-util.workspace = true
+move-proc-macros.workspace = true
+bcs.workspace = true
+leb128.workspace = true
+thiserror.workspace = true
+serde_with.workspace = true
+indexmap.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+proptest-derive.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+arbitrary = { workspace = true, features = ["derive_arbitrary"] }
+insta.workspace = true
+
+[features]
+default = []
+fuzzing = ["proptest", "proptest-derive", "arbitrary"]
+
+# Lint posture for vendored upstream code.
+# `unsafe_code` is set per-crate based on empirical upstream
+# inspection (forbid for crates without unsafe; allow for crates
+# carrying upstream unsafe blocks per SECURITY.md "Vendored
+# upstream surface").
+# Clippy lints are deferred to upstream's CI: running our
+# workspace clippy posture against byte-identical upstream code
+# produces noise rather than signal. Style lints belong in
+# upstream's process; we trust the tag.
+[lints.rust]
+unsafe_code = "allow"  # carries upstream unsafe in src/identifier.rs (one pub unsafe fn + one unsafe block)
+
+[lints.clippy]
+all = "allow"

@@ -132,17 +132,27 @@ The two named categories of `unsafe` in this workspace are:
 
 ### Vendored crates
 
-| Crate | Source | Tag | Lint exceptions | Audit notes |
-|-------|--------|-----|-----------------|-------------|
-| `move-binary-format` | github.com/MystenLabs/sui, `external-crates/move/crates/move-binary-format` | *scaffold-stage; tag pending* | *scaffold-stage; pending upstream inspection at copy* | Inherits Sui's binary-format invariants. Reviewed at the actual-vendoring commit when the upstream code is copied in; this scaffold row is a placeholder. |
-| `move-core-types` | github.com/MystenLabs/sui, `external-crates/move/crates/move-core-types` | *scaffold-stage; tag pending* | *scaffold-stage; pending upstream inspection at copy* | Foundational types, hard dependency of `move-binary-format`. Vendored as a coherent pair from the same Sui release. Same scaffold-stage caveat. |
+All five crates below are vendored from the same Sui release —
+**`mainnet-v1.66.2`**, commit
+`a9a6825eaf6273cc819ee3bcf65fd4909f7624a9`, released 25 February
+2026 — chosen per the eight-week-cushion policy in
+`vendor/README.md`. Each crate's `vendor/<crate>/PROVENANCE.md`
+records the tarball SHA-256, vendoring date, and any local
+modifications (limited to `Cargo.toml` workspace-integration
+adjustments; no `.rs` file is modified in any vendored crate).
 
-The placeholder rows are filled in concretely at the
-actual-vendoring commit when the Sui release tag is chosen and any
-upstream `unsafe` surface is observed empirically. Until then, the
-vendored crates are stub libraries with no Sui code; the rows
-above name the destination so the audit table grows in step with
-the work.
+| Crate | Source path within Sui | Lint exceptions | Audit notes |
+|-------|------------------------|-----------------|-------------|
+| `move-binary-format` | `external-crates/move/crates/move-binary-format` | None — `[lints] workspace = true` | Crate-level `#![forbid(unsafe_code)]` upstream; consistent with workspace policy. Largest vendored crate (~18,000 LOC). |
+| `move-core-types` | `external-crates/move/crates/move-core-types` | `unsafe_code = "allow"` | Carries upstream `unsafe` (one `pub unsafe fn new_unchecked` and one `unsafe { ... }` reborrow block in `src/identifier.rs`). Per-crate `[lints.rust]` and `[lints.clippy]` mirror the workspace lint table, relaxed only on `unsafe_code`. Same pattern as `adamant-crypto-blst-extra`. |
+| `enum-compat-util` | `external-crates/move/crates/enum-compat-util` | None — `[lints] workspace = true` | 53 LOC; backwards-compatibility helper consumed by `move-core-types` and `move-proc-macros`. Unsafe-free. |
+| `move-proc-macros` | `external-crates/move/crates/move-proc-macros` | None — `[lints] workspace = true` | 113 LOC proc-macro crate. Pins `syn = "2"` directly (not via workspace inheritance) while the rest of Sui's tree uses `syn = "1.0.64"`; both major versions coexist in the lockfile. Unsafe-free. |
+| `move-abstract-interpreter` | `external-crates/move/crates/move-abstract-interpreter` | None — `[lints] workspace = true` | 601 LOC abstract-interpretation framework. Zero runtime dependencies (only `itertools` as dev-dep). Unsafe-free. |
+
+The unsafe surface inherited from this vendoring is bounded to
+`move-core-types::identifier`'s two usages. The remaining four
+vendored crates inherit `unsafe_code = "forbid"` from the
+workspace lint table.
 
 ## RustCrypto ecosystem skew
 
