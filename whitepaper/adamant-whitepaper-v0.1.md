@@ -1400,6 +1400,74 @@ A single transaction targets a single function; a transaction cannot mix transpa
 
 Like every consensus-critical type, the `Transaction` and its sub-types are BCS-encoded canonically per section 5.1.8. Field ordering in this subsection's struct definitions is the canonical encoding order; reordering fields is a hard fork. Adding fields is also a hard fork — the transaction format is genesis-fixed in the same sense as the gas table (section 6.3.2) and the bytecode format (section 6.2.1). Validators reject transactions whose BCS encoding contains unknown fields or non-canonical ordering.
 
+### 6.0.7 Inner-type canonical encodings
+
+Several types referenced in sections 6.0.1 / 6.0.2 / 6.0.3 are themselves consensus-critical in their canonical encoding (because they appear inside `BCS(body)` bytes that flow into the `TxHash`) but their *semantic* or *cryptographic* construction is specified elsewhere or in later sections. This subsection pins the canonical encoding of each — what bytes each type produces under BCS — without specifying the construction of the underlying value. The two concerns are separable: the encoding boundary is what consensus validators depend on, while the construction of the underlying value is the concern of the section that defines the cryptographic or semantic role.
+
+**`Version`.** Type alias for `u64`, matching the `version` field on `Object` per section 5.1.6. Encoded as a little-endian 8-byte integer.
+
+**`Signature`.** A discriminated union over the protocol's signature schemes (sections 3.4.1 / 3.4.2):
+
+```
+Signature {
+    Ed25519([u8; 64]),       // BCS variant tag 0x00
+    MlDsa65([u8; 3309]),     // BCS variant tag 0x01
+    MlDsa87([u8; 4627]),     // BCS variant tag 0x02
+}
+```
+
+The variant set is fixed at genesis. Adding a new signature scheme is a hard fork. The fixed sizes match the signature outputs of the schemes specified in section 3.4. Validators decode signatures by reading the variant tag, then the appropriate fixed-size byte array.
+
+**`StealthCommitment`.** A 32-byte fixed-size value used in `AccountRef::Shielded(StealthCommitment)` per section 6.0.2. The cryptographic construction — what the bytes mean as a stealth-address commitment — is specified in section 7 (privacy layer). Section 6.0.7 pins only the encoding: `[u8; 32]`. Validators that hash a `TxBody` containing `AccountRef::Shielded(_)` produce a `TxHash` over those 32 bytes; the interpretation of the bytes (as a curve point, as a Pedersen commitment, etc.) is section 7's concern but does not affect the encoding.
+
+**`Witness`.** A length-prefixed byte vector used in `AuthEvidence.witnesses` per section 6.0.3. Encoded as `Vec<u8>` (ULEB128 length prefix followed by raw bytes). The contents — a zero-knowledge proof, a signature witness, an authentication tag, etc. — are specified in section 7. Section 6.0.7 pins only that the encoding is a BCS-canonical byte vector; the contents are opaque to the encoding layer.
+
+Implementation note: because `Witness` is part of `AuthEvidence` (excluded from the `TxHash` per section 6.0.4), changing the contents-level interpretation of `Witness` bytes in a future revision does not alter `TxHash` values for transactions whose witnesses are byte-identical. This decoupling is a deliberate consequence of the body/evidence split.
+
+**`ModuleRef`.** A newtype wrapping `ObjectId`:
+
+```
+ModuleRef(ObjectId)
+```
+
+per section 6.4.1's framing of modules as first-class objects. Encoded as the wrapped `ObjectId` (32 bytes, no additional discriminator).
+
+**`FunctionId`.** A UTF-8 string, length-bounded to 255 bytes:
+
+```
+FunctionId(String)
+```
+
+with the constraint that the byte length of the string's UTF-8 encoding is at most 255. Functions are identified by name within their containing module, not by integer index. This decouples transaction encoding from the module's internal function table layout — a module upgrade that re-orders its functions does not invalidate pending transactions referencing those functions, because the transaction names them. The 255-byte bound is a structural constraint enforced at decode time; transactions exceeding the bound are rejected. Encoded as `Vec<u8>` containing the UTF-8 bytes (ULEB128 length prefix followed by bytes).
+
+**`Value`.** A discriminated union covering Adamant Move's value taxonomy:
+
+```
+Value {
+    U8(u8),                      // BCS variant tag 0x00
+    U16(u16),                    // BCS variant tag 0x01
+    U32(u32),                    // BCS variant tag 0x02
+    U64(u64),                    // BCS variant tag 0x03
+    U128(u128),                  // BCS variant tag 0x04
+    U256([u8; 32]),              // BCS variant tag 0x05, big-endian
+    Bool(bool),                  // BCS variant tag 0x06
+    Address(Address),            // BCS variant tag 0x07
+    Vector(Vec<Value>),          // BCS variant tag 0x08
+    Struct(StructValue),         // BCS variant tag 0x09
+}
+
+StructValue {
+    type_id: TypeId,
+    fields: Vec<Value>,
+}
+```
+
+The `Value` enum's variant set covers Adamant Move's primitive types, addresses, the polymorphic `vector<T>` constructor (encoded recursively as `Vector(Vec<Value>)`), and user-defined structs. The variant tags are fixed at genesis. Adding a new primitive type is a hard fork.
+
+For `Struct(StructValue)`, the `type_id` identifies the struct type per section 5.1.2, and `fields` carries the struct's field values in the canonical order specified by the type's definition. The mapping from `fields` ordering to the struct's named fields is a property of the type definition (section 6.2.1), not the `Value` encoding. Two struct values with the same `type_id` and byte-identical `fields` BCS encoding are equal by definition; their semantic interpretation (which field is which) requires the type definition.
+
+**Summary.** This subsection's encodings are genesis-fixed and consensus-critical. The cryptographic construction of `StealthCommitment` (section 7), the contents of `Witness` (section 7), the structural layout of any specific user-defined struct value (section 6.2.1), and the semantic interpretation of any field at the application layer are all out of scope here. The encoding pinned here is what `BCS(body)` and `BCS(witnesses)` produce when validators flow these types through canonical serialisation.
+
 ## 6.1 The Adamant Move language
 
 The protocol's smart-contract language is **Adamant Move**, a derivative of the Move language originally developed by Facebook (Diem project, 2018–2022) and now maintained as an open standard by the Move community, with significant production deployment in Sui and Aptos.
