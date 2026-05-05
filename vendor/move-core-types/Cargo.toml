@@ -1,0 +1,12 @@
+[package]
+name = "move-core-types"
+description = "Placeholder for Sui-Move's move-core-types crate, vendored per whitepaper §6.2.1.2 as a transitive dependency of move-binary-format. Actual upstream code lands in a follow-up commit per vendor/README.md."
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+repository = "https://github.com/MystenLabs/sui"
+authors = ["Sui contributors (vendored by Adamant)"]
+publish = false
+
+[lints]
+workspace = true

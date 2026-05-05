@@ -110,6 +110,40 @@ Reviewers should grep the workspace for `allow(unsafe_code)` and
 verify each occurrence is in `adamant-crypto-blst-extra` (or in a
 crate documented in the table above).
 
+## Vendored upstream surface
+
+This workspace vendors specific Move-language crates from the Sui
+ecosystem at a pinned release tag, per whitepaper section 6.2.1.1
+and `vendor/README.md`. The vendored code is part of the audit
+surface. Each entry below names the crate, its provenance, and
+any per-crate lint relaxation (typically `unsafe_code = "allow"`
+for crates that carry upstream `unsafe` blocks Adamant inherits
+unchanged).
+
+The two named categories of `unsafe` in this workspace are:
+
+1. **Authored containment** — `adamant-crypto-blst-extra`,
+   carrying Adamant-authored SAFETY discipline around BLS12-381
+   FFI. Documented in the "Adamant-authored `unsafe` surface"
+   section above.
+
+2. **Vendored containment** — Sui-Move crates, carrying upstream
+   invariants pinned at the vendored tag. Documented below.
+
+### Vendored crates
+
+| Crate | Source | Tag | Lint exceptions | Audit notes |
+|-------|--------|-----|-----------------|-------------|
+| `move-binary-format` | github.com/MystenLabs/sui, `external-crates/move/crates/move-binary-format` | *scaffold-stage; tag pending* | *scaffold-stage; pending upstream inspection at copy* | Inherits Sui's binary-format invariants. Reviewed at the actual-vendoring commit when the upstream code is copied in; this scaffold row is a placeholder. |
+| `move-core-types` | github.com/MystenLabs/sui, `external-crates/move/crates/move-core-types` | *scaffold-stage; tag pending* | *scaffold-stage; pending upstream inspection at copy* | Foundational types, hard dependency of `move-binary-format`. Vendored as a coherent pair from the same Sui release. Same scaffold-stage caveat. |
+
+The placeholder rows are filled in concretely at the
+actual-vendoring commit when the Sui release tag is chosen and any
+upstream `unsafe` surface is observed empirically. Until then, the
+vendored crates are stub libraries with no Sui code; the rows
+above name the destination so the audit table grows in step with
+the work.
+
 ## RustCrypto ecosystem skew
 
 The Adamant cryptographic dependency tree currently spans two

@@ -19,6 +19,11 @@ members = [
     "crates/adamant-state",
     "crates/adamant-types",
     "crates/adamant-vm",
+    # Vendored upstream code per whitepaper §6.2.1.1 and vendor/README.md.
+    # Scaffold stage: placeholder lib.rs files; actual Sui code copied in
+    # a follow-up commit.
+    "vendor/move-binary-format",
+    "vendor/move-core-types",
 ]
 
 [workspace.package]
