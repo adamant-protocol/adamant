@@ -26,6 +26,7 @@
 //! | Module             | Whitepaper section | Types                                  |
 //! |--------------------|--------------------|----------------------------------------|
 //! | [`address`]        | 4.1, 4.2           | [`Address`] (32-byte account identifier) |
+//! | [`tx_hash`]        | 4.2                | [`TxHash`] (32-byte transaction hash, input to address derivation) |
 //! | [`object_id`]      | 5.1.1              | [`ObjectId`] (32-byte object identifier) |
 //! | [`type_id`]        | 5.1.2              | [`TypeId`] (32-byte content-addressed hash of a type definition) |
 //! | [`ownership`]      | 5.1.3              | [`Ownership`] enum                     |
@@ -33,6 +34,14 @@
 //! | [`object`]         | 5.1, 5.1.5, 5.1.6  | [`Object`] struct, [`Contents`]        |
 //! | [`metadata`]       | 5.1.7              | [`ObjectMetadata`], [`ProofCommitment`] |
 //! | [`lifecycle`]      | 5.4                | [`Lifecycle`] enum                     |
+//!
+//! [`TxHash`] carries only the type at this stage; the
+//! transaction-hashing logic that produces a [`TxHash`] from a
+//! transaction lands in `adamant-vm` (Phase 5) where the transaction
+//! format itself is specified. Defining [`TxHash`] now lets
+//! `adamant-account`'s address-derivation function (Phase 3, per
+//! whitepaper section 4.2) accept a typed input rather than a bare
+//! `[u8; 32]`.
 //!
 //! `Transaction` is deliberately absent — its concrete fields are
 //! specified in whitepaper section 6 alongside the VM, and the type
@@ -47,6 +56,7 @@ pub mod mutability;
 pub mod object;
 pub mod object_id;
 pub mod ownership;
+pub mod tx_hash;
 pub mod type_id;
 
 pub use address::Address;
@@ -56,4 +66,5 @@ pub use mutability::{BasisPoints, Mutability};
 pub use object::{Contents, Object, MAX_CONTENTS_BYTES};
 pub use object_id::ObjectId;
 pub use ownership::Ownership;
+pub use tx_hash::TxHash;
 pub use type_id::TypeId;

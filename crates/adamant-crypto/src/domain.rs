@@ -29,19 +29,20 @@
 //!
 //! # Status of tags
 //!
-//! Whitepaper v0.1 fully names three canonical tags so far: BLS
+//! Whitepaper v0.1 fully names four canonical tags so far: BLS
 //! hash-to-curve (section 3.4.3), threshold-encryption hash-to-curve
-//! (section 3.6.1), and the threshold-encryption KDF tag
-//! (section 3.6.1). Other sections reference a `domain_tag` placeholder
-//! for protocol contexts whose exact byte string is to be specified
-//! when those sections are implemented:
+//! (section 3.6.1), the threshold-encryption KDF tag (section 3.6.1),
+//! and the account-address derivation tag (section 4.2). Other
+//! sections reference a `domain_tag` placeholder for protocol
+//! contexts whose exact byte string is to be specified when those
+//! sections are implemented:
 //!
 //! | Context                         | Whitepaper section | Status |
 //! |---------------------------------|--------------------|--------|
 //! | BLS signature hash-to-curve     | 3.4.3              | [`BLS_SIG_HASH_TO_CURVE`]. |
 //! | Threshold-encryption hash-to-curve | 3.6.1           | [`BLS_TE_HASH_TO_CURVE`]. |
 //! | Threshold-encryption KDF        | 3.6.1              | [`THRESHOLD_KDF`]. |
-//! | Account address derivation      | 4                  | Tag string deferred to Phase 3 (`adamant-account`). |
+//! | Account address derivation      | 4.2                | [`ACCOUNT_ADDRESS`]. |
 //! | `ObjectId` derivation           | 5                  | Tag string deferred to Phase 4 (`adamant-state`). |
 //! | Nullifier (Poseidon, in-circuit)| 7                  | Tag string deferred to Phase 6 (`adamant-privacy`). |
 //! | Stealth-address shared secret   | 7                  | Tag string deferred to Phase 6 (`adamant-privacy`). |
@@ -160,6 +161,22 @@ pub static BLS_TE_HASH_TO_CURVE: BlsDst =
 /// key from the encapsulator's pairing-output transcript:
 /// `K = tagged_shake_256(tag, serialise(GT_value) || serialise(U) || identity, 32)`.
 pub static THRESHOLD_KDF: DomainTag = DomainTag::new(b"ADAMANT-v1-threshold-kdf");
+
+/// Account-address derivation domain tag, per whitepaper section 4.2.
+///
+/// Used with the BIP-340 tagged-SHA3-256 construction
+/// ([`crate::hash::sha3_256_tagged`]) to derive an account's 32-byte
+/// address from the BCS-encoded tuple
+/// `(creation_tx_hash, creator_address, index)`:
+///
+/// `Address = tagged_hash_sha3(tag, BCS(input))`
+///
+/// where `input` is the `DerivationInput` struct in `adamant-account`.
+/// The BCS encoding (whitepaper section 5.1.8) makes the input byte
+/// string consensus-canonical across implementations; the tagged-hash
+/// construction (whitepaper 3.3.1) makes the derivation domain-separated
+/// from every other protocol-level hash.
+pub static ACCOUNT_ADDRESS: DomainTag = DomainTag::new(b"ADAMANT-v1-account-address");
 
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and

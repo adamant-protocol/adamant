@@ -1,0 +1,22 @@
+[package]
+name = "adamant-account"
+description = "Account-level operations for the Adamant protocol. Phase 3 surface: address derivation per whitepaper section 4.2 (SHA3-256 tagged-hash over BCS-encoded inputs). Validation logic, key rotation, view keys, and recovery patterns are deferred to later phases per the phase-implementation order in CLAUDE.md."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+adamant-crypto = { path = "../adamant-crypto" }
+adamant-types = { path = "../adamant-types" }
+serde = { workspace = true }
+bcs = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }
+hex-literal = { workspace = true }
+
+[lints]
+workspace = true
