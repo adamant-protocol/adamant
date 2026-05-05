@@ -25,7 +25,7 @@ The protocol delivers properties that no existing programmable chain delivers in
 - **Encrypted mempool.** Threshold encryption integrated into consensus, eliminating MEV and validator-level censorship at the protocol layer.
 - **Post-quantum from genesis.** ML-DSA alongside Ed25519.
 - **Mutability as a declared property.** Every contract declares its mutability rules at creation; declarations are protocol-enforced.
-- **Fair launch.** Zero premine, zero founder allocation, zero VC round.
+- **Fair distribution at launch.** Zero premine, zero founder allocation, zero VC round. The 100,000,000 ADM genesis pool is a protocol-level construct, not held by any party; it drains via two public acquisition paths (burn-to-mint and validator block rewards) per §10.2.3.
 
 The contribution is the synthesis. Each property exists somewhere in production. **No chain combines them.** That gap is the project's reason to exist.
 
@@ -295,11 +295,19 @@ This order is deliberate. Cryptography first because everything depends on it. T
 
 ## Section 10: Current status
 
-**Phase**: 1 — beginning the reference implementation.
-**Specification**: complete v0.1 draft. All 12 sections done.
-**Code**: nothing yet. The next session opens by scaffolding the Cargo workspace and beginning `adamant-crypto`.
+**Phase**: 5 — execution VM. Phases 1–4 (crypto, types, account, state structural+lifecycle) complete. Phase 5 first deliverable (Transaction format + TxHash) shipped. Phase 5 second deliverable (AdamantBytecode extension types) shipped. Phase 5 third deliverable (bytecode wire encoding) in progress; proposal drafted and held pending review.
+
+**Specification**: complete v0.1 draft, ten spec-first verification instances landed and recorded in CONTRIBUTING.md. The §10/§11 launch model was rewritten in May 2026 to use a 100,000,000 ADM genesis pool with burn-to-mint and validator-reward acquisition paths, replacing the prior pure burn-launch mechanism. The design proposal lives at `/whitepaper/proposals/genesis-pool-mechanism.md` and records the deliberation history; the whitepaper amendment lives in §10 and §11.
+
+**Code**: 11 workspace members. 7 Adamant-authored crates (`adamant-account`, `adamant-crypto`, `adamant-crypto-blst-extra`, `adamant-state`, `adamant-types`, `adamant-vm`) plus 5 vendored Sui-Move crates (`move-binary-format`, `move-core-types`, `enum-compat-util`, `move-proc-macros`, `move-abstract-interpreter`) at tag mainnet-v1.66.2. 489 unit tests passing.
+
+**Vendoring posture**: vendored Sui code stays byte-faithful with six documented doc-marker patches enumerated in `vendor/move-binary-format/PROVENANCE.md`. Wire encoding implementation is Option II (re-implement instruction-level serialization in `adamant-vm`) rather than Option I (patch vendored Sui to expose internals) — this preserves the byte-faithfulness audit anchor.
+
 **Mainnet**: years away. This is a long project. Pace accordingly.
+
 **Pace**: Ryan is also building Core Buddy. Expect inconsistent session frequency. Long gaps between sessions are normal. Always re-read this file at session start to reload context.
+
+**Calibration work pending**: the genesis pool mechanism in §10 has several parameters flagged as "subject to calibration prior to mainnet" (pool size, partition ratio, cap schedule, time cap, conversion rates, validator reward sizing). These are reference values; final calibration via simulation analysis happens before genesis. After genesis, all values are immutable per §11. The calibration is a separate workstream from the implementation work that Claude Code is doing.
 
 ---
 
@@ -311,7 +319,7 @@ This order is deliberate. Cryptography first because everything depends on it. T
 
 - **Standard cryptography only.** If a task seems to need exotic crypto, it almost certainly needs standard crypto used cleverly. Ask before improvising.
 
-- **The fair launch is non-negotiable.** Zero premine. The only way the implementers (Ryan, you helping Ryan) get ADM is by burning into the genesis distribution alongside everyone else. Anything that contradicts this destroys the project.
+- **The fair launch is non-negotiable.** Zero premine, zero implementer allocation. The only way the implementers (Ryan, you helping Ryan) get ADM is by participating in the launch-phase acquisition paths (burn-to-mint or validator block rewards per §10.2.3) on the same terms as everyone else, or by acquiring ADM through normal market activity after the launch phase ends. Anything that contradicts this destroys the project.
 
 - **Bug fixes after genesis require hard forks.** This is a real cost. Take quality seriously now, because we cannot patch later.
 
