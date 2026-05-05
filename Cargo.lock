@@ -6,6 +6,7 @@ version = 4
 name = "adamant-crypto"
 version = "0.0.1"
 dependencies = [
+ "adamant-crypto-blst-extra",
  "blake3",
  "blst",
  "chacha20poly1305",
@@ -19,6 +20,13 @@ dependencies = [
  "sha3 0.10.9",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "adamant-crypto-blst-extra"
+version = "0.0.1"
+dependencies = [
+ "blst",
 ]
 
 [[package]]

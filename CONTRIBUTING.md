@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Two confirmed instances during Phase 1:
+sources before proceeding. Three confirmed instances during Phase 1:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
   original "fixed-length domain tag" text admitted prefix collisions
@@ -130,6 +130,16 @@ sources before proceeding. Two confirmed instances during Phase 1:
   3293-byte figure was the CRYSTALS-Dilithium round 3 number,
   superseded by the FIPS 204 final 3309-byte figure; resolved by
   spec revision (commit 30bf5ac).
+- **Threshold-encryption construction** (whitepaper 3.6) — the
+  original wording named "Boneh-Lynn-Shacham IBE combined with
+  Shamir secret sharing" without specifying group orientation, KEM
+  vs PKE shape, hash-to-curve DST, KDF construction, or
+  decryption-share verification equation; the spec was incomplete
+  enough that implementing it required design decisions beyond the
+  whitepaper's text. Resolved by spec revision adding §3.6.1
+  ("Cryptographic construction") with full algorithm specification
+  including the `BLS_TE_…` DST and the `ADAMANT-v1-threshold-kdf`
+  KDF tag (commit db4341c).
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
@@ -145,6 +155,61 @@ matches a spec change Ryan has approved in conversation. The audit
 trail for constitutional changes is shorter when Ryan's hand is on
 every commit, and the marginal cost of one round-trip is acceptable
 to preserve that property.
+
+### Unsafe-containment architecture
+
+Adamant maintains workspace-wide `unsafe_code = "forbid"` for every
+Adamant-authored crate. The single exception is
+`adamant-crypto-blst-extra`, which exists specifically to wrap
+`blst`'s lower-level FFI (pairings, hash-to-curve, Z_r arithmetic,
+G₂ scalar multiplication on a known generator) behind a safe Rust
+API. `adamant-crypto::threshold` (whitepaper 3.6) consumes that safe
+API and itself contains no `unsafe`.
+
+The shape of the rule, in priority order:
+
+1. **Default: forbid.** New crates inherit `[workspace.lints]` via
+   `[lints] workspace = true` in their `Cargo.toml`, which sets
+   `unsafe_code = "forbid"`. This is the workspace's structural
+   guarantee: every Adamant-authored crate is statically verified to
+   contain no `unsafe` blocks, `unsafe fn`, or `unsafe impl`.
+2. **Containment for FFI.** If a new crate genuinely needs to call
+   into an audited cryptographic library's raw FFI for operations
+   the library's safe surface does not expose, the unsafe goes into
+   a single-purpose containment crate (`adamant-crypto-<lib>-extra`
+   or similar) that wraps the FFI behind a safe API. The containment
+   crate's `Cargo.toml` sets `[lints.rust]` directly (which means
+   duplicating the rest of the workspace lint configuration; cargo
+   does not permit mixing `workspace = true` with per-crate
+   overrides). The containment crate's lib.rs documents the
+   architecture, the SAFETY discipline, and the surface it exposes.
+3. **No relaxation in consumer crates.** Crates that consume the
+   containment crate keep `forbid`. They get to call a safe API; they
+   never use `#[allow(unsafe_code)]` themselves.
+4. **Inventory in `SECURITY.md`.** Every containment crate has an
+   audit-ready entry in `SECURITY.md` "Adamant-authored `unsafe`
+   surface". Adding a new containment crate without an inventory
+   entry is a review blocker.
+5. **Lint-table sync on workspace lint changes.** When workspace
+   lints are modified (`[workspace.lints.rust]` or
+   `[workspace.lints.clippy]` in the root `Cargo.toml`), every
+   containment crate's per-crate lint table MUST be updated to
+   mirror the change. Verify by checking that
+   `cargo clippy --workspace --all-targets` produces identical lint
+   output before and after. This catches the maintenance failure
+   mode where a workspace lint update silently leaves a containment
+   crate with stale configuration — cargo does not permit mixing
+   `workspace = true` with per-crate overrides, so containment
+   crates carry a duplicated copy of the rest of the workspace lint
+   configuration that drifts out of sync if not maintained.
+
+The `adamant-crypto-blst-extra` crate is the canonical example. New
+containment crates (if ever needed) should follow the same shape.
+
+Reviewers should grep the workspace for `allow(unsafe_code)` and
+verify each occurrence is in a containment crate listed in
+`SECURITY.md`. The grep should never return a hit in
+`adamant-crypto/`, `adamant-types/`, or any other consumer crate.
 
 ## Pre-publication checks
 

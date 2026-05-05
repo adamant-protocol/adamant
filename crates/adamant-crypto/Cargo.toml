@@ -14,6 +14,14 @@ blake3 = { workspace = true }
 ed25519-dalek = { workspace = true }
 ml-dsa = { workspace = true }
 blst = { workspace = true }
+# Safe Rust API over blst's lower-level operations (pairings,
+# hash-to-curve, scalar arithmetic, G₂ scalar multiplication on a known
+# generator) used by `threshold` (whitepaper 3.6). The split exists
+# specifically to contain the `unsafe` FFI surface required by those
+# operations behind a safe API; this crate retains the workspace
+# `unsafe_code = forbid` lint. See `SECURITY.md` "Adamant-authored
+# `unsafe` surface" for the architecture.
+adamant-crypto-blst-extra = { path = "../adamant-crypto-blst-extra" }
 chacha20poly1305 = { workspace = true }
 rand_core = { workspace = true }
 subtle = { workspace = true }

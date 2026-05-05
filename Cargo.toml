@@ -14,6 +14,7 @@
 resolver = "2"
 members = [
     "crates/adamant-crypto",
+    "crates/adamant-crypto-blst-extra",
 ]
 
 [workspace.package]

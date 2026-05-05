@@ -29,13 +29,18 @@
 //!
 //! # Status of tags
 //!
-//! Whitepaper v0.1 fully names exactly one canonical tag, for BLS
-//! hash-to-curve (section 3.4.3). Other sections reference a `domain_tag`
-//! placeholder for protocol contexts whose exact byte string is to be
-//! specified when those sections are implemented:
+//! Whitepaper v0.1 fully names three canonical tags so far: BLS
+//! hash-to-curve (section 3.4.3), threshold-encryption hash-to-curve
+//! (section 3.6.1), and the threshold-encryption KDF tag
+//! (section 3.6.1). Other sections reference a `domain_tag` placeholder
+//! for protocol contexts whose exact byte string is to be specified
+//! when those sections are implemented:
 //!
 //! | Context                         | Whitepaper section | Status |
 //! |---------------------------------|--------------------|--------|
+//! | BLS signature hash-to-curve     | 3.4.3              | [`BLS_SIG_HASH_TO_CURVE`]. |
+//! | Threshold-encryption hash-to-curve | 3.6.1           | [`BLS_TE_HASH_TO_CURVE`]. |
+//! | Threshold-encryption KDF        | 3.6.1              | [`THRESHOLD_KDF`]. |
 //! | Account address derivation      | 4                  | Tag string deferred to Phase 3 (`adamant-account`). |
 //! | `ObjectId` derivation           | 5                  | Tag string deferred to Phase 4 (`adamant-state`). |
 //! | Nullifier (Poseidon, in-circuit)| 7                  | Tag string deferred to Phase 6 (`adamant-privacy`). |
@@ -73,14 +78,6 @@ impl DomainTag {
     /// Private constructor. Every tag MUST be declared in this module.
     /// Per whitepaper 3.3.1, "Adding, removing, or renaming a tag is a
     /// consensus rule change."
-    ///
-    /// In non-test builds at this point in Phase 1, the only callers are
-    /// the `#[cfg(test)] test_tags` static block — production tags
-    /// (account, object-id, nullifier, …) arrive in later phases. The
-    /// dead-code warning is therefore suppressed here; once Phase 3 or
-    /// Phase 4 lands a non-test `DomainTag` static, this attribute can
-    /// be removed.
-    #[cfg_attr(not(test), allow(dead_code))]
     const fn new(bytes: &'static [u8]) -> Self {
         Self {
             bytes,
@@ -141,6 +138,28 @@ impl BlsDst {
 /// over G1.
 pub static BLS_SIG_HASH_TO_CURVE: BlsDst =
     BlsDst::new(b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_ADAMANT_v1");
+
+/// Threshold-encryption hash-to-curve domain tag, per whitepaper
+/// section 3.6.1.
+///
+/// Distinct from [`BLS_SIG_HASH_TO_CURVE`] to prevent cross-protocol
+/// attacks: a decryption share is computationally identical to a BLS
+/// signature on the same identity under the same key share, so without
+/// domain separation a value valid as a signature could be substituted
+/// as a decryption share. The TE-specific suite name (`BLS_TE_…` rather
+/// than `BLS_SIG_…`) cryptographically separates the two operations.
+/// See whitepaper 3.6.1 "Domain separation" for the construction-level
+/// rationale.
+pub static BLS_TE_HASH_TO_CURVE: BlsDst =
+    BlsDst::new(b"BLS_TE_BLS12381G1_XMD:SHA-256_SSWU_RO_ADAMANT_v1");
+
+/// Threshold-encryption KDF domain tag, per whitepaper section 3.6.1.
+///
+/// Used with the BIP-340 tagged-SHAKE-256 construction
+/// ([`crate::hash::shake_256_tagged`]) to derive the 32-byte symmetric
+/// key from the encapsulator's pairing-output transcript:
+/// `K = tagged_shake_256(tag, serialise(GT_value) || serialise(U) || identity, 32)`.
+pub static THRESHOLD_KDF: DomainTag = DomainTag::new(b"ADAMANT-v1-threshold-kdf");
 
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and

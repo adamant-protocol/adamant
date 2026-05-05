@@ -7,9 +7,17 @@ before a new cryptographic dependency may be added to any `Cargo.toml`.
 
 ## Policy
 
-- **No `unsafe` in Adamant-authored crates.** Every workspace member
-  inherits `unsafe_code = "forbid"` from the workspace lints. Crates that
-  need to drop the lint must justify it explicitly; none currently do.
+- **No `unsafe` in Adamant-authored crates.** The workspace lint is
+  `unsafe_code = "forbid"`. The single exception is
+  `adamant-crypto-blst-extra`, which exists specifically to contain
+  the `unsafe` FFI surface required to expose `blst`'s lower-level
+  operations (pairings, hash-to-curve, Z_r arithmetic, G₂ scalar
+  multiplication on a known generator) behind a safe Rust API. New
+  crates default to `forbid` by inheriting `[workspace.lints]`;
+  relaxing the lint requires the same justification (and structural
+  isolation) `adamant-crypto-blst-extra` has and an entry in the
+  "Adamant-authored `unsafe` surface" inventory below. See
+  `CONTRIBUTING.md` "Unsafe-containment architecture" for the rule.
 - **Upstream `unsafe` is permitted only in audited cryptographic libraries
   named in whitepaper section 3.** New dependencies must be entered into
   the table below before they are referenced from any `Cargo.toml`.
@@ -62,6 +70,45 @@ justification, and the audit / deployment signal Adamant relies on.
 `pending first-use` means the dependency is declared in
 `[workspace.dependencies]` but not yet imported by any module; the version
 pin is finalised in the commit that imports it.
+
+## Adamant-authored `unsafe` surface
+
+Adamant maintains a single workspace-wide containment crate for any
+`unsafe` operations the protocol requires. Every other Adamant-authored
+crate inherits `[workspace.lints]` and therefore `unsafe_code = "forbid"`.
+
+| Crate | Whitepaper section | Surface exposed | Justification |
+|-------|--------------------|-----------------|---------------|
+| `adamant-crypto-blst-extra` | 3.6 (consumer); algorithms underlying 3.4.3 and 3.6 | Safe Rust API over `blst`'s lower-level operations: G₁ hash-to-curve, G₁/G₂ compressed encoding parse/serialise with subgroup validation, G₂ scalar multiplication, pairings as `blst_fp12`, Z_r scalar arithmetic (`Scalar` type with `add`/`sub`/`mul`/`inverse`, `from_u32`/`zero`/`one`, `to_bytes_le`/`to_bytes_be`, `from_bytes_be`). Public types (`G1Point`, `G2Point`, `GtElement`, `Scalar`) are opaque newtypes; the `blst` raw types do not leak across the API boundary. | The threshold-encryption construction (whitepaper 3.6, implemented in `adamant-crypto::threshold`) requires operations that `blst`'s safe `min_sig`/`min_pk`/`Pairing`/`MultiPoint` surface does not expose — only the raw FFI bindings in `blst::*` do. Rather than drop the workspace `unsafe_code = forbid` lint to enable in-place FFI calls, the FFI is contained in this single-purpose wrapper crate. The split lets `adamant-crypto` (and every higher crate) preserve `forbid`. The hot paths in threshold encryption (decryption-share generation and per-share verification) reuse `blst::min_sig::SecretKey::sign` and `blst::min_sig::PublicKey::verify` from blst's own safe surface and never touch this crate, keeping the contained surface focused on the encapsulator and Lagrange-combination paths. |
+
+**Discipline rules for this crate:**
+
+- Each `unsafe` block contains exactly one FFI call (or a tightly
+  coupled group, e.g. `from_affine` + `mult` + `to_affine`) and is
+  preceded by a `// SAFETY:` comment naming the invariants the FFI
+  relies on.
+- Public types are opaque newtypes around `blst` raw types. Callers
+  cannot acquire a `blst_p1_affine` etc. through this crate's API.
+- The crate's lint configuration in its own `Cargo.toml` mirrors the
+  workspace lint table except for `unsafe_code` (set to `allow`).
+  Cargo does not permit mixing `[lints] workspace = true` with
+  per-crate overrides, so the workspace lint table must be kept in
+  sync manually; the `Cargo.toml` carries a comment noting this.
+
+**Discipline rule for new crates:**
+
+New crates default to `forbid` via `[lints] workspace = true`.
+Relaxing the lint requires:
+
+1. A justification documented in this section (single-purpose
+   FFI wrapper for an audited cryptographic library, with the
+   surface enumerated and bounded).
+2. An audit-ready row added to the table above.
+3. A discussion with project maintainers before the override lands.
+
+Reviewers should grep the workspace for `allow(unsafe_code)` and
+verify each occurrence is in `adamant-crypto-blst-extra` (or in a
+crate documented in the table above).
 
 ## RustCrypto ecosystem skew
 

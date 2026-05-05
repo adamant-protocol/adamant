@@ -1,0 +1,38 @@
+[package]
+name = "adamant-crypto-blst-extra"
+description = "Safe Rust API over blst's lower-level pairing, hash-to-curve, and scalar arithmetic operations not exposed by blst's signatures surface. Exists to contain the unsafe FFI surface so that adamant-crypto and all higher-level crates can preserve unsafe_code = forbid."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+blst = { workspace = true }
+
+# This crate is the workspace's `unsafe` containment boundary. The
+# workspace lint `unsafe_code = "forbid"` is in effect for every other
+# Adamant-authored crate; this crate overrides it because its job is to
+# wrap blst's raw FFI (pairings, hash-to-curve, Z_r arithmetic, G₂
+# scalar multiplication on a known generator) behind a safe Rust API.
+#
+# Cargo does not permit mixing `[lints] workspace = true` with
+# `[lints.rust]` overrides — once we override one lint, we must
+# duplicate the entire workspace lint configuration. Keep this in sync
+# with `[workspace.lints]` in the root `Cargo.toml`. The discipline is
+# documented in `CONTRIBUTING.md` "Unsafe-containment architecture";
+# the inventory of `unsafe`-permitting crates is in `SECURITY.md`
+# "Adamant-authored `unsafe` surface".
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+multiple_crate_versions = "warn"
+module_name_repetitions = "allow"

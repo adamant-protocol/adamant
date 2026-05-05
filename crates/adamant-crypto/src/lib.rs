@@ -8,8 +8,16 @@
 //!
 //! - No hand-rolled cryptography. Every primitive is implemented by an
 //!   upstream library named in the whitepaper.
-//! - No `unsafe` in this crate. Upstream `unsafe` surface is documented in
-//!   `SECURITY.md` at the workspace root.
+//! - No `unsafe` in this crate. The crate inherits the workspace
+//!   `unsafe_code = "forbid"` lint. The threshold-encryption module
+//!   (whitepaper 3.6) needs operations not exposed by `blst`'s safe
+//!   API; those are wrapped in the sibling crate
+//!   `adamant-crypto-blst-extra`, which is the workspace's only
+//!   `unsafe`-permitting crate. See `SECURITY.md` "Adamant-authored
+//!   `unsafe` surface" for the architecture and `CONTRIBUTING.md`
+//!   "Unsafe-containment architecture" for the discipline rule.
+//!   Upstream `unsafe` surface in transitive dependencies is also
+//!   documented in `SECURITY.md`.
 //! - All operations on secret material are constant-time.
 //! - Every domain-separated operation references a tag from [`domain`].
 //!

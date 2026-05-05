@@ -29,6 +29,7 @@ Created on demand as each primitive's wrapper is implemented.
 | `ml-dsa/` | NIST FIPS 204 KATs |
 | `bls/` | IRTF `draft-irtf-cfrg-bls-signature` vectors; Ethereum consensus-spec vectors |
 | `chacha20poly1305/` | RFC 8439 test vectors |
+| `threshold/` | No standardised vectors exist; coverage is via inline self-consistency tests in the wrapper. See `threshold/README.md`. |
 | `kzg/` | Ethereum consensus-spec KZG vectors |
 
 ## Policy
