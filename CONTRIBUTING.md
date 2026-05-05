@@ -120,7 +120,8 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Three confirmed instances during Phase 1:
+sources before proceeding. Four confirmed instances during Phase 1
+and Phase 2:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
   original "fixed-length domain tag" text admitted prefix collisions
@@ -140,6 +141,16 @@ sources before proceeding. Three confirmed instances during Phase 1:
   ("Cryptographic construction") with full algorithm specification
   including the `BLS_TE_…` DST and the `ADAMANT-v1-threshold-kdf`
   KDF tag (commit db4341c).
+- **Canonical serialisation and proof-commitment encoding**
+  (whitepaper 5.1.7, 5.1.8) — Phase 2 surfaced two related gaps:
+  (a) the canonical byte encoding for every value flowing through
+  consensus was unspecified, and (b) the `proof_commitment` field
+  in `ObjectMetadata` was named without specifying its size or
+  encoding. Resolved by spec revision adding §5.1.8 pinning
+  **BCS** (Binary Canonical Serialization, the format used by Sui
+  and Aptos) as the canonical encoding, and clarifying §5.1.7 that
+  `proof_commitment` is a 48-byte compressed-G₁ KZG commitment on
+  BLS12-381 (commit 3579655).
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol

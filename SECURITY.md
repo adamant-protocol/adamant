@@ -277,3 +277,23 @@ entry: name, current state, trigger to revisit.
 This document tracks the cryptographic dependency surface specifically.
 Build-tooling and test-only dependencies (`proptest`, `hex`, `hex-literal`,
 etc.) are not tracked here unless they handle secret material.
+
+**Canonical-encoding infrastructure — `bcs`, `serde`, `serde_derive`,
+`serde-big-array`, `thiserror`, `proc-macro2`, `quote`, `syn`,
+`unicode-ident`** — introduced in Phase 2 by `adamant-types`. `bcs`
+is consensus-critical in that every value flowing through hashes or
+signatures first serialises to BCS bytes (whitepaper 5.1.8), but it
+is not a cryptographic primitive: it is a deterministic byte encoder
+and upstream sets `#![forbid(unsafe_code)]`. `serde-big-array` is
+the canonical solution for `Serialize` / `Deserialize` on
+fixed-size byte arrays beyond `serde 1.x`'s 32-element ceiling
+(used on `Address`, `ObjectId`, `TypeId`, `ProofCommitment`); it is
+maintained by `dtolnay` (the same author as `serde` itself), is
+single-purpose, depends only on `serde`, and forbids `unsafe`
+upstream. `serde` and the proc-macro crates beneath it carry no
+`unsafe` in our compiled paths; they are build-time and
+trait-surface scaffolding rather than primitives. None of these
+enter the table above. Pinning is enforced at
+`[workspace.dependencies]` (exact version pins for `bcs`, `serde`,
+and `serde-big-array`); a lockfile drift check before mainnet is
+the appropriate audit, not a SECURITY.md row.

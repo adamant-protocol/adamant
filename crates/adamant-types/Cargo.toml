@@ -1,0 +1,21 @@
+[package]
+name = "adamant-types"
+description = "Core data types for the Adamant protocol. Implements whitepaper sections 4 (identity & accounts) and 5 (object model & state). Types and BCS canonical serialisation only; behaviour (creation, validation, state-transition logic) lives in adamant-account, adamant-state, and adamant-vm."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde-big-array = { workspace = true }
+bcs = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }
+hex-literal = { workspace = true }
+
+[lints]
+workspace = true

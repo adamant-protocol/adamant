@@ -15,6 +15,7 @@ resolver = "2"
 members = [
     "crates/adamant-crypto",
     "crates/adamant-crypto-blst-extra",
+    "crates/adamant-types",
 ]
 
 [workspace.package]
@@ -105,6 +106,34 @@ subtle = "=2.6.1"
 # rand_core: workspace-level default has only the trait surface enabled.
 # Per-crate dev-deps enable `getrandom` when an OS RNG is needed in tests.
 rand_core = { version = "0.6", default-features = false }
+
+# Canonical serialisation (whitepaper 5.1.8). BCS — Binary Canonical
+# Serialization — is the consensus-critical encoding for every value
+# that flows through hashes, signatures, or state commitments.
+# Different version pins are not acceptable here: a bcs version skew
+# could produce different canonical encodings of the same logical
+# value and break consensus on a multi-implementation network. Pinned
+# exactly. Feature surface is minimal; the crate has no optional
+# features that affect encoding semantics.
+bcs = "=0.1.6"
+# serde provides the derive macros bcs consumes. Pinned to the exact
+# version already present transitively (verified via Cargo.lock at
+# first use) so promoting it to a direct dep does not introduce a
+# duplicate. Default features (std) enable the const-generic
+# `[T; N]` impls for arbitrary `N` (compressed-G₁ proof commitments
+# and other 48-byte / 96-byte byte newtypes need N > 32, which the
+# `no_std` build does not provide); the "derive" feature gates the
+# proc-macro derive crate that BCS consumes.
+serde = { version = "=1.0.228", features = ["derive"] }
+# serde-big-array provides Serialize/Deserialize for fixed-size byte
+# arrays beyond the 32-element ceiling of `serde 1.x`'s hand-written
+# impls. Used via `#[serde(with = "BigArray")]` on the byte newtypes
+# (`Address`, `ObjectId`, `TypeId`, `ProofCommitment`). The crate is
+# `dtolnay`-maintained (same author as `serde`), `forbid(unsafe_code)`
+# upstream, single-purpose, and depends only on `serde` itself — no
+# additional transitives. Pinned exactly because the canonical
+# encoding it produces is consensus-critical.
+serde-big-array = "=0.5.1"
 
 # Testing
 proptest = "1.5"
