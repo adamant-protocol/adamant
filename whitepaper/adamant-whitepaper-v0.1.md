@@ -960,7 +960,10 @@ enum Mutability {
     },
     UpgradeableUntilFrozen {
         owner: AccountId,
-        // becomes Immutable after `freeze` is called
+        // The Mutability field itself does not change after `freeze`;
+        // the object's Lifecycle field transitions to Frozen, and the
+        // (UpgradeableUntilFrozen, Frozen) combination is what blocks
+        // upgrades at the consensus layer. See section 5.4.1.
     },
     Custom {
         upgrade_validator: TypeId,  // type of validator object that authorises upgrades
@@ -1124,13 +1127,40 @@ An object passes through a defined lifecycle:
 
 2. **Active.** The object exists and is subject to mutation per its rules. State transitions produced by valid transactions update its `contents`, `owner`, or other fields, increment its version, and update its commitments and metadata.
 
-3. **Frozen** (only for `UpgradeableUntilFrozen`). The owner has called the `freeze` operation. The object's mutability is now effectively `Immutable`; no further upgrades are permitted. State transitions per the existing rules continue to be valid.
+3. **Frozen** (only for `UpgradeableUntilFrozen`). The owner has called the `freeze` operation. The object's `Mutability` field remains `UpgradeableUntilFrozen`; the object's `Lifecycle` field changes to `Frozen`. The combination — `UpgradeableUntilFrozen` + `Frozen` — is what blocks further upgrades at the consensus layer; the `Mutability` field itself is never mutated post-creation. State transitions per the existing rules continue to be valid: contents may be updated through the type's existing logic, the object may be archived if rent is not maintained (lifecycle step 4), and the object may be destroyed through the type's existing destroy-logic (lifecycle step 5). What freeze prohibits is rule upgrades, not contents-evolution or termination through pre-existing rules.
 
-4. **Archived.** If the object's storage rent (section 5.6) is not maintained, the object enters an archived state. Archived objects' contents are pruned from validator working storage; only their commitment hash is retained. Archived objects cannot be referenced by new transactions until restored. Restoration requires paying the accumulated rent and submitting a proof (provided by archival nodes) of the object's most recent active contents.
+4. **Archived.** If the object's storage rent (section 5.6) is not maintained, the object enters an archived state. Archival applies regardless of the object's `Mutability` field and regardless of whether the object is `Active` or `Frozen` at the time of rent depletion: rent is mutability-independent and freeze-independent. Archived objects' contents are pruned from validator working storage; only their commitment hash is retained. Archived objects cannot be referenced by new transactions until restored. Restoration requires paying the accumulated rent and submitting a proof (provided by archival nodes) of the object's most recent active contents.
 
-5. **Destroyed.** Some objects are explicitly destroyed by their type's logic — for example, a redeemed coupon, a fulfilled escrow, a settled bet. Destruction is a state transition that removes the object from the active state set. Destroyed objects are pruned from working storage but their existence is permanently recorded in the chain's history; their `ObjectId` cannot be reused.
+5. **Destroyed.** Some objects are explicitly destroyed by their type's logic — for example, a redeemed coupon, a fulfilled escrow, a settled bet. Destruction is a state transition that removes the object from the active state set. Destroyed objects are pruned from working storage but their existence is permanently recorded in the chain's history; their `ObjectId` cannot be reused. Destroyed is terminal: no further lifecycle transitions occur from this state, and any subsequent reference to the `ObjectId` is invalid at the consensus layer.
 
 The lifecycle is enforced by the protocol; type-specific logic determines which transitions occur, but cannot violate the lifecycle's structural properties.
+
+### 5.4.1 The transition graph
+
+The legal transitions between non-`Creation` lifecycle states are:
+
+| From → To       | Active                           | Frozen                          | Archived                         | Destroyed                        |
+|-----------------|----------------------------------|---------------------------------|----------------------------------|----------------------------------|
+| **Active**      | Self (in-rules contents update)  | `freeze` op; only `UpgradeableUntilFrozen` | Rent depletion        | Type-logic destruction           |
+| **Frozen**      | **Forbidden** (freeze is one-way per §5.1.4) | Self (in-rules contents update; freeze is one-way) | Rent depletion        | Type-logic destruction           |
+| **Archived**    | Restoration (preserves pre-archival lifecycle — see below) | n/a (cannot be referenced while archived) | Self                  | **Forbidden** (must restore first) |
+| **Destroyed**   | n/a (terminal)                   | n/a (terminal)                  | n/a (terminal)                   | Self                             |
+
+Several properties of this graph deserve explicit statement:
+
+- **`Active → Frozen` occurs exclusively through the freeze operation.** No other path produces lifecycle-`Frozen` state. The freeze operation is invoked only on objects with `Mutability::UpgradeableUntilFrozen`; objects with any other mutability cannot reach `Lifecycle::Frozen` through valid protocol operations.
+
+- **`Frozen → Active` is forbidden.** Per section 5.1.4, freeze is one-way "even by a future fork, even by the protocol itself." No protocol operation un-freezes an object.
+
+- **`Frozen → Destroyed` is permitted via the type's pre-existing destroy-logic.** The freeze operation locks rule changes, not the object's existence. A frozen escrow that becomes ready to settle, for example, is destroyed through the same logic that would destroy an active escrow; freeze does not strand the object.
+
+- **Restoration preserves the pre-archival lifecycle.** When an object is archived from `Active`, restoration returns it to `Active`. When an object is archived from `Frozen`, restoration returns it to `Frozen`. This is required by section 5.1.4's freeze-is-one-way invariant: any restoration semantics that landed Frozen objects in `Active` would constitute a backdoor un-freeze through the archival round-trip, contradicting the freeze guarantee.
+
+- **`Archived → Destroyed` is forbidden.** Type-logic operates on an object's contents; archived objects have no contents in working storage; therefore type-logic-driven destruction cannot execute on an archived object. To destroy an archived object, an actor must first restore it (paying accumulated rent and providing the contents proof per section 5.6.2), at which point the object becomes destructible through normal type-logic. This preserves the property that destruction is always an explicit, content-driven decision rather than a side effect of rent depletion.
+
+- **Restoration is not a version-incrementing transition.** A restored object resumes at the version it held at archival time. Causal ordering (section 5.2.1) requires version continuity across the archival round-trip; treating restoration as a version increment would invalidate every reference held by other objects to the pre-archival object.
+
+- **Destroyed is terminal.** No transition out of `Destroyed` exists. Any transaction referencing a destroyed `ObjectId` is invalid at the consensus layer.
 
 ## 5.5 Object derivation: forks, copies, and references
 
@@ -1163,7 +1193,7 @@ When an object is archived, its `contents` are pruned from validator working sto
 - The object's `proof_commitment` remains in the chain's recursive proof.
 - The object's `ObjectId` cannot be reassigned to a new object.
 - The object's contents are retained by *archival nodes* — voluntary participants who store full historical state for cryptographic or social reasons. Archival nodes are not part of consensus and are not required by the protocol; they are a community resource.
-- The object can be *restored* to active state by paying accumulated rent plus a restoration fee, and submitting a proof (provided by an archival node) that the object's pre-archival contents are unchanged.
+- The object can be *restored* by paying accumulated rent plus a restoration fee, and submitting a proof (provided by an archival node) that the object's pre-archival contents are unchanged. Restoration returns the object to its pre-archival lifecycle state — `Active` if it was `Active` at archival time, `Frozen` if it was `Frozen` at archival time. The restored object resumes at its pre-archival `version`; restoration is not a version-incrementing transition. (See section 5.4.1 for the lifecycle-transition graph these properties are part of.)
 
 This model ensures that state size is bounded by *active* state, not total state ever created. Inactive state is preserved for historical and forensic purposes but does not impose ongoing cost on consensus participants.
 
