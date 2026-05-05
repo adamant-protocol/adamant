@@ -53,6 +53,7 @@
 //! shape ([`TxBody`]).
 
 pub mod bytecode;
+pub mod bytecode_wire;
 pub mod transaction;
 pub mod tx_hash;
 pub mod value;
@@ -66,6 +67,9 @@ pub use move_binary_format::file_format::{Bytecode, FunctionHandleIndex};
 
 pub use bytecode::{
     AdamantBytecode, AdamantOpcodeKind, BytecodeInstruction, CircuitId, GasDimension,
+};
+pub use bytecode_wire::{
+    deserialize_function_body, serialize_function_body, DeserializeError, SerializeError,
 };
 pub use transaction::{
     AccountRef, AuthEvidence, CallParams, CreatedObject, GasBudget, Transaction, TxBody, Witness,

@@ -17,6 +17,11 @@ adamant-types = { path = "../adamant-types" }
 # extension variants compose with per §6.2.1.4. See vendor/README.md
 # and SECURITY.md "Vendored upstream surface".
 move-binary-format = { workspace = true }
+# move-core-types provides U256 used by the bytecode wire format
+# (`Bytecode::LdU256` operand). Re-exported transitively via
+# move-binary-format but referenced directly here for the
+# little-endian U256 encoding per §6.2.1.5 amendment 83bb1e9.
+move-core-types = { workspace = true }
 serde = { workspace = true }
 serde-big-array = { workspace = true }
 bcs = { workspace = true }
@@ -24,6 +29,7 @@ bcs = { workspace = true }
 [dev-dependencies]
 hex = { workspace = true }
 hex-literal = { workspace = true }
+proptest = { workspace = true }
 
 [lints]
 workspace = true

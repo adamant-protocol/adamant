@@ -74,6 +74,8 @@ dependencies = [
  "hex",
  "hex-literal",
  "move-binary-format",
+ "move-core-types",
+ "proptest",
  "serde",
  "serde-big-array",
 ]
