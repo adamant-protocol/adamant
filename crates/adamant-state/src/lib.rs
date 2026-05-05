@@ -6,22 +6,23 @@
 //!   from whitepaper section 5.1.1
 //!   (`ObjectId = sha3_256_tagged(OBJECT_ID, BCS(creation_tx_hash, creator_address, creation_index))`).
 //! - [`rules`] — protocol-level structural rules for object state
-//!   transitions (whitepaper sections 5.3 and 5.4). These functions
-//!   answer the consensus-layer question "is this operation
-//!   structurally permitted given the object's current state?"
+//!   transitions (whitepaper sections 5.3, 5.4, and 5.4.1). These
+//!   functions answer the consensus-layer question "is this
+//!   operation structurally permitted given the object's current
+//!   state?"
 //!
 //! Subsequent commits in Phase 4 will add object storage, version
-//! tracking, lifecycle-transition logic (pending the spec gap on
-//! the full transition graph — see Phase 4 work tracking), and the
-//! global note-commitment-tree (GNCT) skeleton per CLAUDE.md
+//! tracking, transition application (mutating an `Object`'s fields
+//! when a validator returns `Ok`; this layer only validates), and
+//! the global note-commitment-tree (GNCT) skeleton per CLAUDE.md
 //! section 6.
 //!
 //! # Module map
 //!
-//! | Module      | Whitepaper section | Surface                                             |
-//! |-------------|--------------------|-----------------------------------------------------|
-//! | (root)      | 5.1.1              | [`derive_object_id`], `DerivationInput` (private)   |
-//! | [`rules`]   | 5.3, 5.4, 5.1.4    | [`can_modify_contents`], [`can_upgrade_rules`], [`can_freeze`], [`RuleViolation`] |
+//! | Module      | Whitepaper section      | Surface                                             |
+//! |-------------|-------------------------|-----------------------------------------------------|
+//! | (root)      | 5.1.1                   | [`derive_object_id`], `DerivationInput` (private)   |
+//! | [`rules`]   | 5.3, 5.4, 5.4.1, 5.1.4  | [`can_modify_contents`], [`can_upgrade_rules`], [`can_freeze`], [`can_archive`], [`can_destroy`], [`can_restore`], [`RuleViolation`] |
 //!
 //! Derivation logic and structural-rule checks are deliberately in
 //! separate modules: the derivation surface implements
@@ -42,7 +43,10 @@
 
 pub mod rules;
 
-pub use rules::{can_freeze, can_modify_contents, can_upgrade_rules, RuleViolation};
+pub use rules::{
+    can_archive, can_destroy, can_freeze, can_modify_contents, can_restore, can_upgrade_rules,
+    RuleViolation,
+};
 
 use adamant_crypto::{domain, hash::sha3_256_tagged};
 use adamant_types::{Address, ObjectId, TxHash};

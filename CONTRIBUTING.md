@@ -120,8 +120,8 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Four confirmed instances during Phase 1
-and Phase 2:
+sources before proceeding. Five confirmed instances during Phases 1,
+2, and 4:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
   original "fixed-length domain tag" text admitted prefix collisions
@@ -151,6 +151,22 @@ and Phase 2:
   and Aptos) as the canonical encoding, and clarifying §5.1.7 that
   `proof_commitment` is a 48-byte compressed-G₁ KZG commitment on
   BLS12-381 (commit 3579655).
+- **Lifecycle transition graph** (whitepaper 5.4, 5.4.1) — Phase 4
+  surfaced seven related gaps: §5.4 enumerated the lifecycle states
+  (Active, Frozen, Archived, Destroyed) but did not pin the
+  transition graph between them, leaving Frozen → Archived and
+  Frozen → Destroyed legality, the target lifecycle of restoration
+  (Active or Frozen?), Destroyed terminality, Active → Frozen
+  exclusivity, Archived → Destroyed legality, and restoration
+  version semantics all under-specified. The §5.1.4 inline comment
+  on `UpgradeableUntilFrozen` further mis-suggested that the
+  `Mutability` field mutates post-freeze, contradicting §5.1.4's
+  own "the declaration is itself immutable" rule. Resolved by spec
+  revision adding §5.4.1 ("The transition graph") with the full
+  4×4 matrix plus seven explicit properties, correcting the §5.1.4
+  inline comment to pin Mutability-stays / Lifecycle-changes, and
+  amending §5.6.2 to specify lifecycle and version preservation
+  across archival round-trips (commit 91ca61d).
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
