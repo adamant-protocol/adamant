@@ -1,14 +1,33 @@
 //! Object model and state management for the Adamant protocol.
 //!
-//! Phase 4 of the implementation lands [`derive_object_id`] —
-//! the [`ObjectId`] derivation specified in whitepaper section 5.1.1:
+//! Phase 4 surface so far:
 //!
-//! `ObjectId = SHA3-256(domain_tag || creation_tx_hash || creator_address || creation_index)`
+//! - [`derive_object_id`] — the [`ObjectId`] derivation formula
+//!   from whitepaper section 5.1.1
+//!   (`ObjectId = sha3_256_tagged(OBJECT_ID, BCS(creation_tx_hash, creator_address, creation_index))`).
+//! - [`rules`] — protocol-level structural rules for object state
+//!   transitions (whitepaper sections 5.3 and 5.4). These functions
+//!   answer the consensus-layer question "is this operation
+//!   structurally permitted given the object's current state?"
 //!
-//! Subsequent commits in Phase 4 will add object storage, state
-//! transitions, version tracking, and the global note-commitment-tree
-//! (GNCT) skeleton per CLAUDE.md section 6 and whitepaper section 5
-//! at large.
+//! Subsequent commits in Phase 4 will add object storage, version
+//! tracking, lifecycle-transition logic (pending the spec gap on
+//! the full transition graph — see Phase 4 work tracking), and the
+//! global note-commitment-tree (GNCT) skeleton per CLAUDE.md
+//! section 6.
+//!
+//! # Module map
+//!
+//! | Module      | Whitepaper section | Surface                                             |
+//! |-------------|--------------------|-----------------------------------------------------|
+//! | (root)      | 5.1.1              | [`derive_object_id`], `DerivationInput` (private)   |
+//! | [`rules`]   | 5.3, 5.4, 5.1.4    | [`can_modify_contents`], [`can_upgrade_rules`], [`can_freeze`], [`RuleViolation`] |
+//!
+//! Derivation logic and structural-rule checks are deliberately in
+//! separate modules: the derivation surface implements
+//! consensus-canonical hashing, while the rules surface implements
+//! consensus-layer structural enforcement. They will compose at
+//! consensus integration (Phase 8) but they are distinct concerns.
 //!
 //! # Discipline reference
 //!
@@ -20,6 +39,10 @@
 //! 4.2); this module mirrors its shape with a different domain tag
 //! ([`adamant_crypto::domain::OBJECT_ID`]) and a different output
 //! type ([`ObjectId`]).
+
+pub mod rules;
+
+pub use rules::{can_freeze, can_modify_contents, can_upgrade_rules, RuleViolation};
 
 use adamant_crypto::{domain, hash::sha3_256_tagged};
 use adamant_types::{Address, ObjectId, TxHash};
