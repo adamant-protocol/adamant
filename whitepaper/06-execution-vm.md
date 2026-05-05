@@ -305,7 +305,7 @@ Adamant Move preserves Move's core semantics unchanged. Specifically:
 - The linear type system, including the `key` and `store` ability constraints
 - Module structure, function visibility, and abilities
 - Generic types and phantom type parameters
-- Bytecode format (Adamant Move bytecode is a strict superset of standard Move bytecode, with the additional protocol-specific instructions documented in subsection 6.3)
+- Bytecode format. Adamant Move bytecode is a strict superset of Sui-Move bytecode, with the additional protocol-specific instructions and metadata documented in subsection 6.2.1. The Sui-Move dialect is the substrate; the protocol-specific extensions are additive.
 - The Move Prover specification language for formal verification
 - Standard library types (vectors, options, strings, etc.)
 
@@ -329,17 +329,162 @@ The Adamant Virtual Machine (AVM) is the runtime that executes Adamant Move byte
 
 ### 6.2.1 Bytecode format
 
-AVM bytecode is a register-based instruction set with the following classes of instructions:
+The AVM executes **Adamant Move bytecode**, a strict superset of Sui-Move bytecode with protocol-specific extensions for privacy operations, recursive proof primitives, and Adamant's gas-accounting model. This subsection specifies the bytecode at the level of detail required for an independent implementation: the dialect choice and its rationale, the module file format, the privacy and mutability annotations at bytecode level, the instruction set, operand encoding, the validation rules, and the per-instruction gas costs.
 
-- **Stack and register operations.** Move values, copy primitive values, swap, drop.
-- **Arithmetic and logical operations.** Integer arithmetic (with overflow checks by default), bitwise operations, comparison.
-- **Object operations.** Read object field, write object field, transfer ownership, create object, destroy object.
-- **Control flow.** Conditional branches, function calls, loops with bounded iteration.
-- **Privacy operations.** Invoke shielded function, invoke transparent function, generate proof, verify proof, release sub-view-key.
-- **Cryptographic primitives.** Hash, signature verification, KZG operations, Halo 2 circuit invocation.
-- **Resource operations.** Charge gas, query remaining gas, raise out-of-gas error.
+#### 6.2.1.1 Dialect choice: Sui-Move
 
-The instruction set is finite and frozen at genesis. New instructions cannot be added without a hard fork (section 11).
+Three Move dialects exist in production with meaningful differences:
+
+- **Diem-Move** (the original, maintained at github.com/move-language/move). Has no native object model; objects are represented through global storage primitives (`move_to`, `move_from`, `borrow_global`).
+- **Sui-Move** (Mysten Labs' fork, maintained at github.com/MystenLabs/sui). Replaces Diem's global storage with a first-class object model where objects have unique IDs, ownership types (`Address`-owned, `Shared`, `Immutable`), and are passed by reference between transactions.
+- **Aptos-Move** (Aptos Labs' fork, maintained at github.com/aptos-labs/aptos-core). Retains Diem's global storage model and adds resource accounts and table abstractions.
+
+The protocol selects **Sui-Move as the bytecode substrate**. The reasoning is structural: section 5's object model is itself Sui-derived, and Sui-Move bytecode integrates with that object model at the bytecode level — instructions for object packing, transfer, and freezing operate directly on object references rather than through global storage. Building Adamant on Diem-Move would require us to extend Diem-Move with object-model integration that already exists in Sui-Move; building on Aptos-Move would inherit Aptos's global storage model that conflicts with section 5's "all state is an object" position.
+
+The dialect choice is genesis-fixed. Migrating to a different Move dialect post-genesis would be a hard fork affecting every deployed module.
+
+**What "strict superset" means.** Every valid Sui-Move module that respects Adamant's tightened verifier rules (section 6.2.1.6) is a valid Adamant Move module: same instruction set, same module file format, same type system, same verifier rules. Adamant adds:
+
+- New instruction opcodes for privacy operations, recursive proof primitives, and protocol-specific cryptographic operations (specified in section 6.2.1.4).
+- Module-level metadata fields encoding mutability declarations per section 5.1.4 and section 6.1.2 (specified in section 6.2.1.3).
+- Function-level metadata fields encoding privacy annotations per section 6.1.2 (specified in section 6.2.1.3).
+- Tightened verifier rules excluding the constructs listed in section 6.1.4 (specified in section 6.2.1.6).
+
+A program that uses none of Adamant's extensions, carries the required metadata, and respects Adamant's tighter verifier rules is bytecode-identical to its Sui-Move equivalent.
+
+**Implementation note.** This subsection treats Sui-Move's `move-binary-format` and `move-bytecode-verifier` crates as the authoritative reference for the inherited substrate. A conforming Adamant implementation may vendor those crates; the protocol's behaviour on the inherited subset is defined by Sui's reference implementation as of the binary-format version specified in section 6.2.1.2.
+
+#### 6.2.1.2 Module file format
+
+A deployed module is stored in `Object.contents` (per section 5.1.5 and section 6.4.1) as a byte string whose interior structure is the **CompiledModule** format defined by Sui-Move (`move-binary-format` crate). The format is itself a stable subset of the Move bytecode binary format originally specified by Diem.
+
+The module structure consists of a four-byte magic number `0xA1, 0x1C, 0xEB, 0x0B` (the Move file format magic, inherited unchanged across Diem, Sui, and Aptos), a `u32` version number, and pools of definitions and references. The pools are, in canonical order: `module_handles` (modules this module imports), `struct_handles` and `field_handles` (struct types and their fields), `function_handles` (function signatures), `friend_decls` (friend module declarations), generic instantiation tables (`struct_def_instantiations`, `function_instantiations`, `field_instantiations`), `signatures` (parameter and return type lists; this is Move's bytecode-format-internal type-list type, distinct from the cryptographic `Signature` of section 6.0.7), `identifiers` (string pool for names), `address_identifiers` (address pool), `constant_pool` (typed constants), `metadata` (Sui-Move metadata entries plus Adamant extensions per section 6.2.1.3), `struct_defs` (struct definitions), and `function_defs` (function definitions, including bytecode bodies).
+
+The structure inside each entry follows Sui-Move's binary format exactly. Genesis modules use the Sui-Move binary format version current at the time of Adamant genesis; future format revisions are hard forks.
+
+**What's stored per function.** Each `FunctionDefinition` carries: a reference to the function's signature in the module's signature pool, the function's bytecode body as a list of instructions (the `Bytecode` enum specified in section 6.2.1.4), local-variable type information, an acquires-list for global resources (always empty in Adamant, since global storage is excluded per section 6.2.1.6), visibility (`public`, `private`, or `friend`), and an Adamant-specific privacy annotation byte (per section 6.2.1.3).
+
+**Encoding boundary.** The CompiledModule bytes themselves are opaque to BCS — they are stored inside the `contents` field of a Module object, and the `contents` field's BCS encoding is a length-prefixed byte vector per section 5.1.5. The bytecode's internal structure is not BCS; it is Sui-Move's binary format. This is consistent with the encoding/construction split established in section 6.0.7: the protocol's BCS-canonical envelope carries the module bytes, and the bytes' internal interpretation is the bytecode format's concern.
+
+#### 6.2.1.3 Annotations at bytecode level
+
+Adamant Move's source-level annotations (per section 6.1.2) round-trip into bytecode through metadata entries.
+
+**Mutability declarations** are module-level metadata. The compiler emits a `Metadata` entry on each module with the key `b"adamant.mutability"` and value being the BCS encoding of the `Mutability` enum (per section 5.1.4). The validator (section 6.2.1.6) requires every Adamant module to carry exactly one such metadata entry; modules without it are rejected at deployment.
+
+**Privacy annotations** are function-level metadata. Each `FunctionDefinition` carries an Adamant-specific privacy byte appended to Sui-Move's standard function definition layout:
+
+```
+PrivacyAnnotation: u8
+    0x00 = #[transparent]
+    0x01 = #[shielded]
+```
+
+Public functions without an explicit annotation are rejected by the verifier (matching the source-level requirement in section 6.1.2 that compilers reject unannotated public functions). Private (internal) functions may omit the annotation; they inherit the privacy mode of the calling context, and the AVM rejects mixed-mode call chains per section 6.0.5 and the verifier rule in section 6.2.1.6.
+
+**Backward compatibility with Sui-Move.** A standard Sui-Move module without these annotations cannot be deployed on Adamant — the validator rejects it for missing the mutability metadata. This is intentional: Adamant requires explicit mutability and privacy choices on every module, and a Sui module that hasn't made those choices is not yet an Adamant module. Porting a Sui module to Adamant is a one-line change at the module level (adding the mutability declaration) plus per-public-function privacy annotations.
+
+#### 6.2.1.4 Instruction set
+
+The AVM's instruction set is **Sui-Move's bytecode instruction set** (the `Bytecode` enum defined in `move-binary-format::file_format`) plus Adamant-specific extensions. The architecture is **stack-based** — operands are pushed onto an operand stack, instructions consume and produce stack values, and the abstract machine state per function frame is `(stack, locals, pc)`. (Pre-revision drafts of this section described the AVM as register-based; that was a drafting error inconsistent with section 6.1.3's "strict superset of Sui-Move bytecode" claim. Move's bytecode has been stack-based across all three lineages — Diem, Sui, Aptos — and Adamant inherits this architecture.)
+
+**Inherited instruction set.** The protocol inherits the full Sui-Move instruction set as of the binary-format version specified in section 6.2.1.2. The categories below are illustrative for orientation; the authoritative enumeration with opcodes, operand formats, and stack effects is the `Bytecode` enum in Sui's `move-binary-format` crate.
+
+- *Stack and locals:* `Pop`, `Ret`, `BrTrue`, `BrFalse`, `Branch`, `LdU8` through `LdU256`, `CastU8` through `CastU256`, `LdConst`, `LdTrue`, `LdFalse`, `CopyLoc`, `MoveLoc`, `StLoc`.
+- *References:* `MutBorrowLoc`, `ImmBorrowLoc`, `MutBorrowField`, `ImmBorrowField`, `ReadRef`, `WriteRef`, `FreezeRef`.
+- *Function calls:* `Call`, `CallGeneric`.
+- *Struct operations:* `Pack`, `Unpack`, `PackGeneric`, `UnpackGeneric`.
+- *Arithmetic and logic:* `Add`, `Sub`, `Mul`, `Mod`, `Div`, `BitOr`, `BitAnd`, `Xor`, `Or`, `And`, `Not`, `Eq`, `Neq`, `Lt`, `Gt`, `Le`, `Ge`, `Shl`, `Shr`.
+- *Vector operations:* `VecPack`, `VecLen`, `VecImmBorrow`, `VecMutBorrow`, `VecPushBack`, `VecPopBack`, `VecUnpack`, `VecSwap`.
+- *Object operations (Sui-derived):* packing and unpacking of types with the `key` ability, transfer through Sui's object-transfer instructions.
+- *Abort:* `Abort`.
+
+**Adamant-specific extensions.** Adamant adds the following instructions in a reserved opcode range above Sui-Move's last opcode, allowing future Sui-Move additions without collision:
+
+- `InvokeShielded(FunctionHandleIndex)` — invoke a `#[shielded]` function. The runtime asserts the caller's privacy context is shielded; if not, the transaction aborts. Stack effect matches `Call`.
+- `InvokeTransparent(FunctionHandleIndex)` — invoke a `#[transparent]` function. The runtime asserts the caller's privacy context is transparent; if not, aborts. Stack effect matches `Call`.
+- `GenerateProof(CircuitId)` — emit a Halo 2 proof witness for the current shielded execution context. Operand is an index into the module's circuit-reference pool. Pops circuit inputs from the stack; pushes a `Witness` value (per section 6.0.7).
+- `VerifyProof(CircuitId)` — verify a Halo 2 proof. Pops `Witness` and public inputs from the stack; pushes a `bool`.
+- `ReleaseSubViewKey` — produce a sub-view-key per section 4.4 and section 7. Pops the parent view key; pushes the derived sub-key.
+- `KzgCommit` — produce a KZG commitment over a vector of field elements per section 3.7.2. Pops the vector; pushes a 48-byte commitment.
+- `KzgVerify` — verify a KZG opening proof. Pops the commitment, the opening, and the claimed value; pushes a `bool`.
+- `RecursiveVerify` — verify a recursive Halo 2 proof per section 8's recursive verification. Pops the proof and the public inputs; pushes a `bool`.
+- `Sha3_256` — SHA3-256 hash of a byte vector (per section 3.3.1). Pops a `vector<u8>`; pushes `[u8; 32]`.
+- `Blake3` — BLAKE3 hash of a byte vector (per section 3.3.2). Pops a `vector<u8>`; pushes `[u8; 32]`.
+- `Ed25519Verify` — verify an Ed25519 signature (per section 3.4.1). Pops public key, message, signature; pushes `bool`.
+- `MlDsaVerify65` and `MlDsaVerify87` — verify ML-DSA signatures (per section 3.4.2).
+- `BlsVerify` — verify a BLS12-381 signature (per section 3.4.3).
+- `ChargeGas(GasDimension)` — charge a specified amount across one of the six gas dimensions (per section 6.0.7's `GasBudget` and section 6.3.1). Pops the amount as `u64`.
+- `RemainingGas(GasDimension)` — push the remaining budget for a specified dimension as `u64`. Used by stdlib functions that adapt behaviour based on remaining budget.
+- `OutOfGas` — abort the transaction with the out-of-gas error. Used by stdlib functions that detect dimension exhaustion.
+
+The Adamant-specific extensions are documented as a separate enum (`AdamantBytecode`) that the bytecode format includes alongside the Sui-Move base set; the bytecode body of a function is a sequence of instructions where each instruction is either an inherited Sui-Move opcode or an Adamant extension, distinguished by opcode value.
+
+The complete instruction set — inherited and extension — is genesis-fixed. Adding new instructions (whether by Sui-Move upstream additions we choose to incorporate or by Adamant-specific additions) is a hard fork.
+
+#### 6.2.1.5 Operand encoding
+
+Sui-Move's bytecode uses variable-length operand encoding: the opcode byte is followed by zero or more operand bytes whose layout depends on the opcode. Most operands are indices (into the local-variable table, function-handle table, struct-handle table, signature pool, constant pool, etc.) encoded as ULEB128; immediate values are encoded as little-endian fixed-width integers (`LdU64` is followed by 8 little-endian bytes; `LdU128` is followed by 16; `LdU256` is followed by 32 big-endian bytes matching section 6.0.7's `Value::U256` encoding).
+
+Adamant inherits this encoding unchanged for the Sui-Move base set. Adamant-specific instructions follow the same encoding rules: opcode byte followed by ULEB128 indices or fixed-width immediates as appropriate.
+
+The bytecode stream itself is not BCS-encoded — it is Move's native binary format, opaque to BCS at the protocol layer. BCS canonicality (section 5.1.8) applies to the protocol's consensus types (Transaction, Object, etc.); the bytecode stored inside a Module object is consensus-critical only insofar as the *bytes* are stored and hashed faithfully, not insofar as those bytes follow BCS rules.
+
+#### 6.2.1.6 Validator (bytecode verification)
+
+Before a module is deployed, its bytecode must pass validation. The validator is a static analyser that runs over the module and rejects modules that violate any required property. Deployment is denied for invalid modules; a module that is accepted is guaranteed by the consensus layer to have the validated properties.
+
+The validator runs the **inherited Sui-Move bytecode verifier** (the `move-bytecode-verifier` crate) plus **Adamant-specific additional checks**.
+
+**Inherited checks (from Sui-Move's verifier).** These pass through unchanged:
+
+- *Type safety:* every operand on the stack matches the type expected by the consuming instruction.
+- *Reference safety:* borrowed references do not outlive the values they reference; mutable references are not aliased.
+- *Linearity:* values without the `copy` ability are never duplicated; values without the `drop` ability are never implicitly discarded.
+- *Stack discipline:* stack depth is statically bounded; no stack underflow or runaway growth.
+- *Control-flow integrity:* every `Branch` target is a valid instruction within the function; no jumps into the middle of multi-byte instructions.
+- *Function-call ABI:* arguments and return values match the function's declared signature.
+- *Generic instantiation:* type arguments satisfy the abilities required by the generic parameters (`copy`, `drop`, `key`, `store`).
+- *Friend visibility:* friend calls only reach declared friends.
+
+**Adamant-specific additional checks.**
+
+1. **Mutability metadata required.** Every module must carry exactly one `b"adamant.mutability"` metadata entry per section 6.2.1.3. Modules without it are rejected.
+
+2. **Privacy annotation required on public functions.** Every public function must carry a `PrivacyAnnotation` byte (`0x00` for transparent, `0x01` for shielded). Public functions without it are rejected. Private functions may omit the annotation.
+
+3. **Privacy consistency.** A `#[shielded]` function may not contain any `InvokeTransparent` instruction; a `#[transparent]` function may not contain any `InvokeShielded` instruction. The verifier statically checks the entire call graph reachable from each public function and rejects modules where the privacy mode would be violated.
+
+4. **No native functions.** The native-function flag on a function definition (Sui-Move marks runtime-implemented natives this way) must not be set on any function. Per section 6.1.4, every function in Adamant Move is implemented in bytecode. Performance-critical primitives are exposed through Adamant-specific instructions (section 6.2.1.4), not through bytecode-bypass natives.
+
+5. **No global storage instructions.** The Diem-Move global storage instructions (`MoveTo`, `MoveFrom`, `BorrowGlobal`, `Exists`, etc.) must not appear in the bytecode. Per section 6.1.4, all storage access goes through object references. Sui-Move itself phases out these instructions in favour of objects; this rule formalises that policy and rejects any module attempting the legacy patterns.
+
+6. **No dynamic dispatch.** Sui-Move's dynamic-field operations are restricted: a function may use them only if its module carries a metadata entry `b"adamant.allows_dynamic"` whose value is `true`. The default is to disallow them per section 6.1.4. Most Sui-Move modules don't use dynamic fields; those that do typically rely on them for collection types that have first-class object equivalents in Adamant.
+
+7. **Privacy-circuit instructions in shielded context only.** `GenerateProof`, `VerifyProof`, `RecursiveVerify`, and `ReleaseSubViewKey` may appear only in the body of `#[shielded]` functions or their internal callees. Calling these from a transparent context is rejected at verification time.
+
+8. **Bounded loops.** Every loop in the bytecode must have a static iteration bound provable from the function signature and constants in scope. The verifier uses Sui-Move's existing loop-bound analysis as a starting point and tightens it: any loop whose bound is not provable is rejected. This is required by section 6.2.4's determinism guarantee — unbounded loops produce divergence on adversarial inputs.
+
+A module that passes all inherited and Adamant-specific checks is **valid** and may be deployed. A module that fails any check is rejected with an error indicating which check failed; the deployment transaction aborts and no rent is consumed for the module that would not have been accepted.
+
+#### 6.2.1.7 Per-instruction gas costs
+
+Per section 6.3.2, gas costs are fixed at genesis and not modifiable post-genesis. Every bytecode instruction has a fixed cost across the six dimensions of the `GasBudget` (per section 6.0.7 and section 6.3.1). Most instructions consume only the `computation` dimension and zero in the others; cryptographic and proof-related instructions consume `computation` plus one or more other dimensions reflecting their resource profile.
+
+The complete cost table is large (≥ 200 instructions × 6 dimensions, mostly zero in five of six dimensions for any given instruction); the table is published as a separate normative appendix to this whitepaper. Reference values across cost categories, illustrative only:
+
+- *Pure stack operations* (`Pop`, `CopyLoc`, `MoveLoc`, `StLoc`): 1–10 computation units; zero in all other dimensions.
+- *Arithmetic and logic* (`Add`, `Mul`, `Lt`, `Eq`): width-proportional in computation (u8 cheaper than u256); zero elsewhere.
+- *References and field access* (`MutBorrowField`, `ReadRef`, `WriteRef`): computation plus `bandwidth` for references that cross object boundaries.
+- *Function calls* (`Call`, `CallGeneric`): computation plus a per-call frame-setup overhead.
+- *Object operations* (`Pack` of `key`-bearing types, transfer instructions): computation plus `storage` for any new object created and `rent` for the object's rent prepayment.
+- *Cryptographic primitives* (`Sha3_256`, `Ed25519Verify`, `BlsVerify`): computation, proportional to input size and primitive cost. SHA3-256 over n bytes is roughly `100 + 0.5 · n` computation units; Ed25519 verification is roughly 50,000 units; BLS verification is roughly 100,000 units.
+- *Privacy operations* (`GenerateProof`, `VerifyProof`, `RecursiveVerify`): consume `proof_generation` and `proof_verification` heavily. A single Halo 2 proof generation is on the order of 10⁹ proof_generation units; verification is on the order of 10⁵ proof_verification units, reflecting the asymmetric cost profile of zero-knowledge proofs.
+- *Resource operations* (`ChargeGas`, `RemainingGas`, `OutOfGas`): a flat 1 computation unit; their purpose is to manipulate the gas budget rather than to perform work.
+
+The reference values above are illustrative; the genesis-fixed table in the appendix supplies the exact values. Implementations must match those values exactly. Deviation produces consensus disagreement: validators on different cost tables would diverge on which transactions exhaust their budgets.
+
+The total instruction set is finite and frozen at genesis. New instructions cannot be added without a hard fork (section 11).
 
 ### 6.2.2 Execution model
 
