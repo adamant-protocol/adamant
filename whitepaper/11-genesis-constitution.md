@@ -110,12 +110,16 @@ The consensus mechanism specified in section 8:
 
 The economic model specified in section 10:
 
-- The fair-launch mining mechanism
-- The 6-month genesis distribution period
-- The issuance schedule (4% Y1-5, 3% Y6-10, 2% Y11-20, 1% perpetual)
+- The genesis pool mechanism (100,000,000 ADM, 70% burn-allocated / 30% validator-allocated)
+- The two acquisition paths (burn-to-mint and validator block rewards)
+- The per-address claim cap schedule for the burn path
+- The phase-transition rules (pool exhaustion or 5-year time cap; unclaimed tokens destroyed)
+- The post-launch issuance schedule (4% Y1-5, 3% Y6-10, 2% Y11-20, 1% perpetual)
 - The EIP-1559-style base fee mechanism
 - The fee burn mechanism
 - The 28-day unbonding period
+
+The launch phase is a one-time event ending in pool exhaustion or the 5-year time cap; the post-launch operational regime governs the chain in perpetuity thereafter.
 
 ### 11.2.8 Genesis state
 
@@ -177,7 +181,7 @@ The original implementers — those of us drafting this specification and writin
 
 1. We will not retain admin keys, hardcoded backdoors, or other privileged access mechanisms in the reference implementation. The implementation, once released, has no special accommodations for our continued involvement.
 
-2. We will not pre-mine, allocate to ourselves, or otherwise position ourselves to receive ADM beyond what we acquire through public participation in fair-launch mining alongside everyone else.
+2. We will not pre-mine, allocate to ourselves, or otherwise position ourselves to receive ADM beyond what we acquire through public participation in the launch-phase acquisition paths (subsection 10.2.3) alongside everyone else, and through normal market acquisition after the launch phase.
 
 3. We will not maintain "official" forks or channels in a way that confers privilege. If we propose changes, we propose them through the same mechanism anyone else does. Our proposals receive no special weight.
 
