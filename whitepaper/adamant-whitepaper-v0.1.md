@@ -910,6 +910,8 @@ Each field is specified below.
 
 The object's unique identifier on the chain. 32 bytes, computed as `SHA3-256(domain_tag || creation_tx_hash || creator_address || creation_index)`. Once assigned, an `ObjectId` never changes. Object identifiers are stable across the object's lifetime: an object that exists at version 1 has the same `ObjectId` at version 1,000,000.
 
+The `creation_tx_hash` is the `TxHash` of the transaction that created this object, computed per section 6.0.4. The `creator_address` and `creation_index` are declared in the transaction's `created_objects` list per section 6.0.2.
+
 This is in contrast to UTXO models, where each "version" of a piece of state has a distinct identifier. Stable identifiers make programs easier to write (a contract holds a reference to a specific object across many transactions) and make the privacy model simpler (one anonymity set per long-lived object, rather than a fresh anonymity set per output).
 
 ### 5.1.2 TypeId
@@ -1270,6 +1272,133 @@ The protocol's execution model is governed by three requirements:
 2. **Parallel execution.** The VM must support deterministic parallel execution at scale, exploiting the causal-independence property of the object model (section 5.2.1). Sequential execution as in Ethereum's EVM is incompatible with the throughput targets in Principle IV.
 
 3. **Privacy compatibility.** The language must integrate cleanly with the privacy layer (section 7). Shielded execution — running a contract while keeping its inputs, intermediate state, and outputs encrypted — must be a first-class concept, not an afterthought.
+
+## 6.0 Transactions: the input to execution
+
+This subsection specifies the canonical `Transaction` data type — the input the rest of section 6 operates on. Every other subsection (the language, the runtime, gas, deployment) consumes Transactions; pinning the type's fields, encoding, and derived `TxHash` here is therefore prerequisite to specifying any of them precisely.
+
+A `Transaction` is the protocol's unit of state-change request. It is created off-chain (typically by a wallet), signed off-chain by the authorising account, submitted to the network, and either executed (advancing chain state) or rejected (with no effect on chain state). Transactions are the only mechanism by which users cause state to change.
+
+### 6.0.1 The body / evidence split
+
+A `Transaction` has two parts:
+
+```
+Transaction {
+    body: TxBody,
+    auth: AuthEvidence,
+}
+```
+
+The **body** carries the operation payload — what the transaction is asking to do. The **authorisation evidence** carries the signatures, witnesses, and other non-body data that authorise the body's execution. The split exists to solve the signature-signs-itself problem: signatures cover `BCS(body)` and live in `auth`, so the body's canonical encoding does not depend on the signatures it produces.
+
+The `TxHash` (section 6.0.4) is computed over the body alone, not the full Transaction. This means two Transactions with identical bodies but different auth evidence produce the same `TxHash`. That property is intentional: it ensures the `TxHash` identifies the *operation* a user committed to, not the particular signature instance carrying that commitment. Replay protection is the body's responsibility (via nonces or version-pinned read sets), not the hash's.
+
+### 6.0.2 The body
+
+```
+TxBody {
+    authorising_account: AccountRef,
+    fee_payer: Option<AccountRef>,
+    read_set: Vec<(ObjectId, Version)>,
+    write_set: Vec<ObjectId>,
+    created_objects: Vec<CreatedObject>,
+    gas_budget: GasBudget,
+    call: CallParams,
+    nonce: u64,
+}
+```
+
+**`authorising_account`.** The account whose validation logic (per section 4.3) is invoked at execution-pipeline step 1. For transparent transactions, `AccountRef::Cleartext(Address)` names the account directly. For shielded transactions, `AccountRef::Shielded(StealthCommitment)` names it via a stealth-address commitment (section 4.7), preserving privacy of the authorising account while still enabling validation-logic dispatch.
+
+**`fee_payer`.** Optional. When `None`, the fee payer is the `authorising_account`. When `Some(account)`, the fee payer is a different account whose own authorisation must also appear in `AuthEvidence` (per the sponsored-transaction model in section 6.3.4). The same shielded/cleartext options apply.
+
+**`read_set`.** The objects this transaction reads, declared as `(ObjectId, Version)` pairs. The version pin protects against read-write conflicts: if any read object's version has advanced beyond the declared version at execution time, the transaction is rejected without execution. Wildcards are forbidden — the read set must be a statically declared list, both for the parallel scheduler (section 6.2.3) and for the privacy layer (section 7) which requires the read set to be circuit-encoded for shielded transactions.
+
+**`write_set`.** The pre-existing objects this transaction modifies, declared as `ObjectId`s. Modification requires the object to be in the read set as well (read-then-write); the write set is therefore a subset of the read set's `ObjectId`s. Objects whose contents are read but not modified appear only in the read set.
+
+**`created_objects`.** Objects to be created within this transaction, declared explicitly so their ObjectIds are derivable per section 5.1.1. Each `CreatedObject` carries:
+
+```
+CreatedObject {
+    creator: Address,
+    creation_index: u64,
+    type_id: TypeId,
+    initial_owner: Ownership,
+    initial_mutability: Mutability,
+}
+```
+
+The `(creator, creation_index)` pair, combined with this transaction's `TxHash` (computed over the body, which contains this declaration), produces the new `ObjectId` per the section 5.1.1 formula. This is well-defined despite the apparent circularity: the `TxHash` is computed over the body bytes, and the body's bytes are fixed before hashing — the body declares its created objects by `(creator, creation_index)` only, and the `ObjectId` is derived from the resulting `TxHash` afterward. No object's `ObjectId` appears in the body's declaration of itself.
+
+**`gas_budget`.** A six-dimension cap matching section 6.3.1's gas dimensions:
+
+```
+GasBudget {
+    computation: u64,
+    storage: u64,
+    rent: u64,
+    bandwidth: u64,
+    proof_verification: u64,
+    proof_generation: u64,
+}
+```
+
+The transaction aborts on the first dimension exhausted; the user cannot trade unused budget in one dimension for additional consumption in another. This preserves section 6.3.1's motivation for multi-dimensional pricing: dimensions correspond to distinct validator resources, and a single combined cap would obscure which resource a transaction actually stresses.
+
+**`call`.** The operation payload — which function to invoke, on which target, with which arguments:
+
+```
+CallParams {
+    target_module: ModuleRef,
+    target_function: FunctionId,
+    type_arguments: Vec<TypeId>,
+    arguments: Vec<Value>,
+}
+```
+
+Module deployment is not a special transaction variant. To deploy a new module, a transaction calls the standard-library function `adamant::module::deploy` (section 6.5) with the module's bytecode as an argument. This keeps `TxBody` shape uniform — every transaction is a function call — and matches the standard-library pattern where protocol-level operations are exposed as system-function calls rather than as kernel discriminators.
+
+**`nonce`.** A monotonic counter scoped to the `authorising_account`, ensuring distinct transactions from the same account have distinct bodies (and therefore distinct `TxHash`es) even when their other fields match. The nonce also defends against replay across forks of the chain. The protocol-enforced rule is that a transaction's `nonce` must equal one greater than the highest nonce previously executed for `authorising_account`; gaps are not permitted.
+
+### 6.0.3 The auth evidence
+
+```
+AuthEvidence {
+    signatures: Vec<Signature>,
+    witnesses: Vec<Witness>,
+}
+```
+
+The evidence is a flat list of signatures and witnesses. The structure is deliberately simple: validation logic in the authorising account interprets them according to the account's declared scheme (single-sig, dual-sig, threshold-sig, etc., per section 4.3). The protocol does not impose a fixed signature scheme on transactions — the account's validation logic does.
+
+For sponsored transactions (section 6.3.4) where `fee_payer` is set, the fee payer's authorisation must also appear in `signatures`. The fee payer's account validation logic runs alongside the authorising account's during the execution pipeline.
+
+For shielded transactions, the authorising account's signature is replaced (or accompanied) by zero-knowledge witnesses proving authority without revealing the account. Section 7 specifies the construction.
+
+The auth evidence is excluded from the `TxHash`. Modifying signatures or witnesses does not change the `TxHash`; only modifying the body does. This property simplifies the signature-signs-itself problem and matches standard practice across the field.
+
+### 6.0.4 TxHash derivation
+
+The transaction hash is computed over the canonical BCS encoding of the body alone:
+
+```
+TxHash = sha3_256_tagged(TX_HASH, BCS(body))
+```
+
+where `TX_HASH` is the registered domain tag `b"ADAMANT-v1-tx-hash"` per section 3.3.1, and `BCS(body)` is the canonical encoding per section 5.1.8. The `TxHash` is the protocol-level identifier of a transaction's *operation*; two transactions with byte-identical bodies have the same `TxHash` regardless of how they were authorised.
+
+This `TxHash` value is what flows into `ObjectId` derivation per section 5.1.1, into chain-history records, into the read/write conflict detector, and into recursive proof aggregation per section 8.
+
+### 6.0.5 Privacy mode is implicit
+
+A transaction's privacy mode (transparent or shielded) is determined by the annotation on its target function (`#[transparent]` or `#[shielded]` per section 6.1.2), not by an explicit field on the `Transaction` itself. A transaction whose `call.target_function` is a `#[shielded]` function is a shielded transaction; one targeting a `#[transparent]` function is a transparent transaction. The bytecode validator (section 6.2.2 step 3) rejects transactions whose target function's annotation conflicts with the validator's static analysis of read/write set contents — for example, a transparent function attempting to read a shielded object.
+
+A single transaction targets a single function; a transaction cannot mix transparent and shielded annotations within itself. Composite operations that span multiple functions are achieved by decomposition into multiple transactions, not by mixed-annotation calls.
+
+### 6.0.6 Canonical encoding and consensus
+
+Like every consensus-critical type, the `Transaction` and its sub-types are BCS-encoded canonically per section 5.1.8. Field ordering in this subsection's struct definitions is the canonical encoding order; reordering fields is a hard fork. Adding fields is also a hard fork — the transaction format is genesis-fixed in the same sense as the gas table (section 6.3.2) and the bytecode format (section 6.2.1). Validators reject transactions whose BCS encoding contains unknown fields or non-canonical ordering.
 
 ## 6.1 The Adamant Move language
 

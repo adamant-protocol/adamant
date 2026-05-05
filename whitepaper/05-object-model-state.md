@@ -36,6 +36,8 @@ Each field is specified below.
 
 The object's unique identifier on the chain. 32 bytes, computed as `SHA3-256(domain_tag || creation_tx_hash || creator_address || creation_index)`. Once assigned, an `ObjectId` never changes. Object identifiers are stable across the object's lifetime: an object that exists at version 1 has the same `ObjectId` at version 1,000,000.
 
+The `creation_tx_hash` is the `TxHash` of the transaction that created this object, computed per section 6.0.4. The `creator_address` and `creation_index` are declared in the transaction's `created_objects` list per section 6.0.2.
+
 This is in contrast to UTXO models, where each "version" of a piece of state has a distinct identifier. Stable identifiers make programs easier to write (a contract holds a reference to a specific object across many transactions) and make the privacy model simpler (one anonymity set per long-lived object, rather than a fresh anonymity set per output).
 
 ### 5.1.2 TypeId
