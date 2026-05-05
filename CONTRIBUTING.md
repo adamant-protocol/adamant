@@ -158,6 +158,61 @@ cannot be patched. Implementers who hit a question against the
 whitepaper should stop, document the question, and surface it for
 spec review before continuing.
 
+### Derivation discipline
+
+Protocol-level identifiers (`Address`, `ObjectId`, and others to come)
+are derived from canonical inputs via a registered domain tag. Four
+invariants hold for any new derivation:
+
+1. **The domain tag is registered in `adamant-crypto::domain`** as
+   a `pub static DomainTag` — never inlined as a string literal at
+   the call site. Adding, renaming, or removing a tag is a
+   consensus rule change (whitepaper 3.3.1).
+
+2. **The input is canonically encoded** before hashing, in a way
+   that is byte-identical across every conforming implementation.
+   For non-circuit derivations this means BCS (whitepaper 5.1.8);
+   for in-circuit derivations the encoding follows the circuit's
+   constraints (whitepaper 7, when implemented). The encoding must
+   not be an ad-hoc concatenation lacking a referenceable spec.
+
+3. **The hash function follows whitepaper 3.3.1's tagged-hash
+   construction** — `sha3_256_tagged(&TAG, &encoded_input)` for
+   non-circuit derivations, the Poseidon equivalent inside circuits
+   (whitepaper 3.3.3). Raw SHA3-256 is not used for
+   consensus-critical hashes.
+
+4. **A known-answer regression test pins the wire format.** Generate
+   the expected output once with documented fixed inputs; commit
+   the byte string. When the regression test fails on unchanged
+   inputs, the wire format has drifted — which is a consensus rule
+   change requiring whitepaper revision, not a test fix.
+
+These four are what every conforming implementation across the
+protocol's lifetime must agree on. Implementation specifics —
+input struct shape, function signature, test names, error handling
+for BCS encode failures — vary per derivation as the shape of the
+input data dictates.
+
+**Reference implementations:**
+
+- `adamant-account::derive_address` (whitepaper 4.2) — input is a
+  three-field tuple (`creation_tx_hash`, `creator_address`, `index`).
+- `adamant-state::derive_object_id` (whitepaper 5.1.1) — same input
+  shape with the `creation_index` field name and a different domain
+  tag.
+
+Future derivations with different input shapes (e.g., a
+transaction-hash derivation that consumes an entire serialised
+transaction rather than a small input tuple) follow the same four
+invariants while taking the input shape the spec section dictates.
+
+This discipline applies to derivations of protocol-level
+identifiers. Cryptographic primitives that use registered tags for
+other purposes (e.g., the threshold-encryption KDF in
+`adamant-crypto::threshold`) follow the spec section that defines
+them, not these rules.
+
 ### Whitepaper commits are Ryan's
 
 Whitepaper revisions are committed exclusively by Ryan. Claude Code

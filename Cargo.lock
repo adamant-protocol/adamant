@@ -42,6 +42,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "adamant-state"
+version = "0.0.1"
+dependencies = [
+ "adamant-crypto",
+ "adamant-types",
+ "bcs",
+ "hex",
+ "hex-literal",
+ "serde",
+]
+
+[[package]]
 name = "adamant-types"
 version = "0.0.1"
 dependencies = [

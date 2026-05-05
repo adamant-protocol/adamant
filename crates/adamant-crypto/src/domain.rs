@@ -29,13 +29,14 @@
 //!
 //! # Status of tags
 //!
-//! Whitepaper v0.1 fully names four canonical tags so far: BLS
+//! Whitepaper v0.1 fully names five canonical tags so far: BLS
 //! hash-to-curve (section 3.4.3), threshold-encryption hash-to-curve
 //! (section 3.6.1), the threshold-encryption KDF tag (section 3.6.1),
-//! and the account-address derivation tag (section 4.2). Other
-//! sections reference a `domain_tag` placeholder for protocol
-//! contexts whose exact byte string is to be specified when those
-//! sections are implemented:
+//! the account-address derivation tag (section 4.2), and the
+//! `ObjectId` derivation tag (section 5.1.1). Other sections
+//! reference a `domain_tag` placeholder for protocol contexts whose
+//! exact byte string is to be specified when those sections are
+//! implemented:
 //!
 //! | Context                         | Whitepaper section | Status |
 //! |---------------------------------|--------------------|--------|
@@ -43,15 +44,15 @@
 //! | Threshold-encryption hash-to-curve | 3.6.1           | [`BLS_TE_HASH_TO_CURVE`]. |
 //! | Threshold-encryption KDF        | 3.6.1              | [`THRESHOLD_KDF`]. |
 //! | Account address derivation      | 4.2                | [`ACCOUNT_ADDRESS`]. |
-//! | `ObjectId` derivation           | 5                  | Tag string deferred to Phase 4 (`adamant-state`). |
+//! | `ObjectId` derivation           | 5.1.1              | [`OBJECT_ID`]. |
 //! | Nullifier (Poseidon, in-circuit)| 7                  | Tag string deferred to Phase 6 (`adamant-privacy`). |
 //! | Stealth-address shared secret   | 7                  | Tag string deferred to Phase 6 (`adamant-privacy`). |
 //! | Memo key derivation             | 7                  | Tag string deferred to Phase 6 (`adamant-privacy`). |
 //!
-//! The whitepaper's worked example in section 3.3.1 uses the illustrative
-//! string `b"ADAMANT-v1-object-id"`. That string is exposed only to tests
-//! (see `test_tags::WORKED_EXAMPLE_OBJECT_ID` below) until Phase 4 makes
-//! the formal `ObjectId` tag decision.
+//! The whitepaper's worked example in section 3.3.1 anticipated the
+//! [`OBJECT_ID`] tag string `b"ADAMANT-v1-object-id"`; Phase 4 makes
+//! that anticipation official and the formerly test-only constant
+//! collapses into the production registry.
 
 use std::sync::OnceLock;
 
@@ -178,18 +179,36 @@ pub static THRESHOLD_KDF: DomainTag = DomainTag::new(b"ADAMANT-v1-threshold-kdf"
 /// from every other protocol-level hash.
 pub static ACCOUNT_ADDRESS: DomainTag = DomainTag::new(b"ADAMANT-v1-account-address");
 
+/// `ObjectId` derivation domain tag, per whitepaper section 5.1.1.
+///
+/// Used with the BIP-340 tagged-SHA3-256 construction
+/// ([`crate::hash::sha3_256_tagged`]) to derive an object's 32-byte
+/// identifier from the BCS-encoded tuple
+/// `(creation_tx_hash, creator_address, creation_index)`:
+///
+/// `ObjectId = tagged_hash_sha3(tag, BCS(input))`
+///
+/// where `input` is the `DerivationInput` struct in `adamant-state`.
+/// Same composition as [`ACCOUNT_ADDRESS`] with a distinct tag and a
+/// different output type — see CONTRIBUTING.md "Derivation
+/// discipline" for the four invariants every protocol-level
+/// identifier derivation must hold.
+///
+/// The byte string was anticipated by the worked example in
+/// whitepaper section 3.3.1.
+pub static OBJECT_ID: DomainTag = DomainTag::new(b"ADAMANT-v1-object-id");
+
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and
 /// test-vector regressions.
+///
+/// **These are deliberately test-only tags for verifying
+/// domain-separation invariants; they MUST NOT be promoted to
+/// production tags.** For tags awaiting Phase-N promotion, see the
+/// deferred-tags status table at the top of this file.
 #[cfg(test)]
 pub(crate) mod test_tags {
     use super::DomainTag;
-
-    /// The illustrative tag from the worked example in whitepaper section
-    /// 3.3.1. Used for the worked-example regression test. The actual
-    /// `ObjectId` derivation tag (section 5) is decided in Phase 4 and
-    /// may or may not equal this byte string.
-    pub(crate) static WORKED_EXAMPLE_OBJECT_ID: DomainTag = DomainTag::new(b"ADAMANT-v1-object-id");
 
     /// Generic test tag A — used to verify domain-separation, cache
     /// behaviour, and construction matching against the spec formula.

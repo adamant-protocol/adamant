@@ -434,7 +434,13 @@ mod tests {
         input.extend_from_slice(&creator_address);
         input.extend_from_slice(&creation_index.to_be_bytes());
 
-        let tag = &test_tags::WORKED_EXAMPLE_OBJECT_ID;
+        // Phase 4 promoted the worked-example byte string to the
+        // production `OBJECT_ID` tag (whitepaper section 5.1.1); the
+        // test-only `WORKED_EXAMPLE_OBJECT_ID` constant was removed
+        // when production took the same string. Verifying the
+        // construction here against the production tag is exactly
+        // what the test was always doing — the indirection is gone.
+        let tag = &crate::domain::OBJECT_ID;
         let prefix: [u8; 32] = Sha3_256::digest(tag.as_bytes()).into();
         let mut hasher = Sha3_256::new();
         hasher.update(prefix);

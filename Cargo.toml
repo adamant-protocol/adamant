@@ -16,6 +16,7 @@ members = [
     "crates/adamant-account",
     "crates/adamant-crypto",
     "crates/adamant-crypto-blst-extra",
+    "crates/adamant-state",
     "crates/adamant-types",
 ]
 
