@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Twenty confirmed instances during Phases
+sources before proceeding. Twenty-one confirmed instances during Phases
 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -594,6 +594,70 @@ sources before proceeding. Twenty confirmed instances during Phases
   + serializer; 5/5b module-level passes; 5/5c per-function
   passes; 5/5d cross-validation infrastructure against the
   vendored reference) (commits 0de50d8, 2401227).
+- **§6.2.1 + §6.2.1.8 resistant-proof posture** (whitepaper
+  6.2.1, 6.2.1.8) — Phase 5/5b restructured-proposal review
+  surfaced the question of whether vendored Sui-Move crates
+  should remain on the deploy-time hot path during the 5/5b →
+  5/5c transitional window. Initial Claude Code proposal kept a
+  transitional Sui-verifier bridge for module-level passes
+  during 5/5b; review escalated the architectural commitment in
+  two stages: first to "close the verification gap entirely"
+  (full Adamant-native verifier coverage at the moment we drop
+  the Sui bridge, with per-function passes promoted from old
+  5/5c into 5/5b), then to "Adamant must work fully
+  independently of Sui's codebase — resistant-proof against
+  upstream changes, shutdowns, vulnerabilities, and governance
+  shifts." The escalation extended the prior re-amendment's
+  "fully Adamant-native verifier" commitment (instance 20) from
+  a verifier-only property to a deploy-time-and-runtime
+  property: vendored Sui crates do not appear in the production
+  binary's dependency graph at all, with test-only,
+  build-tooling-only, and CI-only dependencies explicitly carved
+  out as permitted. Resolved by amending §6.2.1.8 in four
+  locations: opening paragraph to introduce the resistant-proof
+  posture and the carve-out language; cross-validation
+  paragraphs to nail down that vendor refresh surfacing
+  divergence is a development-time signal, not a consensus
+  event; closing implementation note to fix the production-build
+  dependency posture alongside the externally observable
+  accept/reject behaviour. §6.2.1's implementation note also
+  amended at the same commit: protocol behaviour on the
+  inherited subset is defined by sections 6.2.1.1–6.2.1.8 of
+  the specification, with Sui's reference implementation
+  consulted at test time to confirm semantic parity rather than
+  relied on as the binding source of truth — a semantic shift
+  from "Sui defines the inherited subset's behaviour" to
+  "Adamant's spec is self-contained; Sui is a cross-validation
+  tool." The architectural escalation drove a Phase 5/5
+  restructure: from 4 sub-deliverables (5/5a closed; 5/5b
+  module-level passes; 5/5c per-function passes; 5/5d
+  cross-validation) to 3 sub-deliverables (5/5a closed; 5/5b
+  full Adamant-native verifier covering both module-level and
+  per-function passes plus Rules 2, 3, 6, 7; 5/5c
+  cross-validation infrastructure formalization) with 5/5b
+  further split into 6 sub-arcs (5/5b.1a foundation fork of
+  constants + readers + AbilitySet + Identifier into a new
+  `adamant-bytecode-format` crate; 5/5b.1b 25 type-definition
+  fork; 5/5b.2 small/medium module-level passes + Rule 2; 5/5b.3
+  large module-level passes + partial pipeline integration;
+  5/5b.4 per-function passes infrastructure + Rule 3; 5/5b.5
+  type-safety + reference-safety per-function passes + Rules 6,
+  7 + final pipeline integration with Sui-verifier bridge fully
+  removed). Phase 5/5b LOC estimate revised to ~10,600-14,950
+  LOC; total Phase 5/5 ~19,000-27,000 LOC against the original
+  ~5,500-9,000 estimate (3-4x), reflecting the empirical cost of
+  mirroring Sui's verifier for the full Adamant superset. Phase
+  5/5b.5 introduces a build-system independence check
+  (`tests/no_sui_in_production_deps.rs`) that walks the resolved
+  dependency tree of the production-binary target via `cargo
+  metadata` and asserts no `move-*` crate appears, mechanically
+  enforcing the resistant-proof posture rather than relying on
+  convention. Without this escalation, the implementation would
+  have shipped a transitional Sui-verifier bridge that lasted
+  multiple months and produced code we'd later throw away when
+  5/5c landed; the escalation reframes the work to lay down full
+  coverage in one architectural arc with no transitional gap
+  (commits 19d744b, 0651e2f).
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
