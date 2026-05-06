@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Nineteen confirmed instances during Phases
+sources before proceeding. Twenty confirmed instances during Phases
 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -516,6 +516,84 @@ sources before proceeding. Nineteen confirmed instances during Phases
   is identical to `Call`; the verifier and AVM runtime treat
   reference inputs and outputs of these instructions exactly as
   they would for an inherited `Call` (commit 61cec44).
+- **Nop-projection mechanism empirically broken; resolved by
+  fully-Adamant-native verifier architecture** (whitepaper
+  6.2.1.8 re-amended, with cross-reference to 6.2.1.1 also
+  re-amended) — the §6.2.1.8 amendment that landed at commit
+  61cec44 specified a Sui-projection mechanism with
+  `Bytecode::Nop` substitution: each Adamant extension
+  instruction in a function body would be substituted by Sui's
+  `Nop` to produce a Sui-Move `CompiledModule` that Sui's
+  verifier could process, on the claim that Sui's per-instruction
+  passes establish their guarantees over the Sui-base subset of
+  the projection. The Phase 5/5 implementation proposal
+  investigation read the four Sui per-instruction passes
+  empirically against the 17 Adamant extension stack/type/
+  reference effects per §6.2.1.4 and surfaced that the
+  projection mechanism does not actually pass Sui's verifier on
+  non-trivial Adamant code. Empirical citations:
+  `vendor/move-bytecode-verifier/src/stack_usage_verifier.rs:209`
+  shows `Bytecode::Nop` has `(0, 0)` stack effect, while
+  per-instruction effects for the 17 extensions per §6.2.1.4 are
+  nonzero for 16 of them (only `OutOfGas` is exempt as a
+  terminal abort);
+  `vendor/move-bytecode-verifier/src/type_safety.rs:647` shows
+  `Nop` is a no-op for the abstract type stack while extensions
+  change typed stack contents per §6.2.1.4 (e.g., `Sha3_256`
+  pops `vector<u8>` and pushes `[u8; 32]`);
+  `vendor/move-bytecode-verifier/src/locals_safety/mod.rs:97-177`
+  shows `Nop` in the locals-no-op arm and confirms locals_safety
+  is structurally inert to Adamant extensions (none of the 17
+  touch local-variable state);
+  `vendor/move-bytecode-verifier/src/reference_safety/mod.rs:346`
+  shows `Nop` is a borrow-graph no-op while
+  `InvokeShielded`/`InvokeTransparent` with reference signatures
+  perform `Call`-shaped borrow-graph updates per the nineteenth
+  instance's amendment. Concrete trace: function body
+  `[LdU64(5), ChargeGas(Computation), Ret]` balances under
+  Adamant semantics (`+1, -1, 0` running stack increment, ends
+  at 0); projection `[LdU64(5), Nop, Ret]` fails Sui's
+  `POSITIVE_STACK_SIZE_AT_BLOCK_END` check (`+1, 0, 0` running
+  increment, ends at +1). Three of four per-function passes
+  break on Nop projection for non-trivial extension usage:
+  `StackUsageVerifier` (16/17 extensions), `type_safety` (16/17),
+  `reference_safety` (`InvokeShielded`/`InvokeTransparent` with
+  reference signatures); only `locals_safety` is structurally
+  inert. Without resolution, the implementation would have built
+  a ~1500-2000 LOC deserializer + projection mechanism only to
+  discover at integration time that the projection itself fails
+  Sui's verifier on virtually every Adamant module — caught
+  before implementation began rather than after. Resolved by
+  re-amending §6.2.1.8 to fully Adamant-native verifier
+  architecture: Adamant provides its own deserializer,
+  serializer, module-level passes, and per-function passes
+  covering the full Adamant superset; vendored Sui-Move crates
+  serve as a test-time reference implementation against which
+  Adamant's verifier is cross-validated for the inherited
+  subset's semantics. Three architectural considerations drove
+  the resolution: empirical infeasibility of any projection
+  mechanism that preserves Sui's guarantees while avoiding
+  branch-target offset rewrite (alternatives to Nop substitution
+  either re-introduce the offset-rewrite consensus risk that the
+  original investigation ruled out, or surrender Sui's coverage
+  entirely on extension-containing functions, or require
+  patching vendored Sui to expose private per-pass functions —
+  none clean); genesis-fixed posture (verifier accept/reject is
+  consensus-binding and cannot drift with Sui upstream, so
+  binding our hot path to upstream behaviour was structurally
+  wrong); audit surface (a fully-Adamant-native verifier is
+  under Adamant's audit and maintenance, with no
+  "what does Sui do here" hot-path question for auditors).
+  §6.2.1.1 also amended at the same commit: the implementation
+  note moved from "authoritative reference for the inherited
+  substrate" to "reference implementation for the inherited
+  substrate's semantics" — vendored Sui crates no longer on the
+  deploy-time hot path. Phase 5/5 deliverable scope expanded
+  from ~1500-2000 LOC (deserializer + projection) to
+  ~5500-9000 LOC across four sub-deliverables (5/5a deserializer
+  + serializer; 5/5b module-level passes; 5/5c per-function
+  passes; 5/5d cross-validation infrastructure against the
+  vendored reference) (commits 0de50d8, 2401227).
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
