@@ -49,6 +49,7 @@
 //! | [`value`]        | 6.0.7               | [`Value`], [`StructValue`]                                                                                                  |
 //! | [`tx_hash`]      | 6.0.4               | [`derive_tx_hash`]                                                                                                          |
 //! | [`bytecode`]     | 6.2.1.4             | [`AdamantBytecode`], [`AdamantOpcodeKind`], [`BytecodeInstruction`], [`CircuitId`], [`GasDimension`]                        |
+//! | [`module`]       | 6.2.1.8             | [`AdamantCompiledModule`], [`AdamantFunctionDefinition`], [`AdamantCodeUnit`] (Phase 5/5a: types)                           |
 //! | [`validator`]    | 6.2.1.6             | [`validator::verify_module`], [`AdamantVerifierConfig`], [`AdamantValidationError`] (Wave 3a: Rules 1, 4, 5)                |
 //!
 //! # Discipline reference
@@ -65,6 +66,7 @@
 
 pub mod bytecode;
 pub mod bytecode_wire;
+pub mod module;
 pub mod transaction;
 pub mod tx_hash;
 pub mod validator;
@@ -83,6 +85,7 @@ pub use bytecode::{
 pub use bytecode_wire::{
     deserialize_function_body, serialize_function_body, DeserializeError, SerializeError,
 };
+pub use module::{AdamantCodeUnit, AdamantCompiledModule, AdamantFunctionDefinition};
 pub use transaction::{
     AccountRef, AuthEvidence, CallParams, CreatedObject, GasBudget, Transaction, TxBody, Witness,
 };
