@@ -372,7 +372,7 @@ Adamant Move's source-level annotations (per section 6.1.2) round-trip into byte
 
 **Mutability declarations** are module-level metadata. The compiler emits a `Metadata` entry on each module with the key `b"adamant.mutability"` and value being the BCS encoding of the `Mutability` enum (per section 5.1.4). The validator (section 6.2.1.6) requires every Adamant module to carry exactly one such metadata entry; modules without it are rejected at deployment.
 
-**Privacy annotations** are function-level metadata. Each `FunctionDefinition` carries an Adamant-specific privacy byte appended to Sui-Move's standard function definition layout:
+**Privacy annotations** are module-level metadata. The compiler emits a `Metadata` entry on each module with the key `b"adamant.privacy"` and value being the BCS encoding of `Vec<(FunctionDefinitionIndex, u8)>` — a list of (function index, privacy byte) pairs. The privacy byte values are:
 
 ```
 PrivacyAnnotation: u8
@@ -380,7 +380,9 @@ PrivacyAnnotation: u8
     0x01 = #[shielded]
 ```
 
-Public functions without an explicit annotation are rejected by the verifier (matching the source-level requirement in section 6.1.2 that compilers reject unannotated public functions). Private (internal) functions may omit the annotation; they inherit the privacy mode of the calling context, and the AVM rejects mixed-mode call chains per section 6.0.5 and the verifier rule in section 6.2.1.6.
+The metadata-entry storage location (rather than appending the byte to `FunctionDefinition` directly) preserves byte-faithfulness with Sui-Move's bytecode format per section 6.2.1.1's strict-superset commitment. `FunctionDefinition` is inherited unchanged from Sui-Move; Adamant-specific function metadata lives in module-level metadata entries that the validator (section 6.2.1.6) consults.
+
+Public functions without an entry in this metadata table are rejected by the verifier (matching the source-level requirement in section 6.1.2 that compilers reject unannotated public functions). Private (internal) functions may omit the entry; they inherit the privacy mode of the calling context, and the AVM rejects mixed-mode call chains per section 6.0.5 and the verifier rule in section 6.2.1.6.
 
 **Backward compatibility with Sui-Move.** A standard Sui-Move module without these annotations cannot be deployed on Adamant — the validator rejects it for missing the mutability metadata. This is intentional: Adamant requires explicit mutability and privacy choices on every module, and a Sui module that hasn't made those choices is not yet an Adamant module. Porting a Sui module to Adamant is a one-line change at the module level (adding the mutability declaration) plus per-public-function privacy annotations.
 
@@ -468,15 +470,21 @@ The validator runs the **inherited Sui-Move bytecode verifier** (the `move-bytec
 
 3. **Privacy consistency.** A `#[shielded]` function may not contain any `InvokeTransparent` instruction; a `#[transparent]` function may not contain any `InvokeShielded` instruction. The verifier statically checks the entire call graph reachable from each public function and rejects modules where the privacy mode would be violated.
 
+   Privacy consistency is enforced through **defense in depth**: the AVM enforces privacy at runtime as the consensus-binding mechanism (a `#[shielded]` function structurally requires shielded execution context — proof generation infrastructure, encrypted operand stack — and the AVM aborts privacy-mismatched calls at the call boundary regardless of whether deploy-time verification caught the mismatch). The deploy-time static check is the deployer-feedback and gas-trap-prevention layer: it rejects modules whose call graph contains known privacy violations within the limits of what static analysis can prove given the dependencies visible at deploy time. Cross-module call graphs are statically checked at deploy time against the annotations of dependency modules visible on chain at that moment; combined with the upgrade-immutability constraint on privacy annotations (section 6.4.3), this deploy-time guarantee is durable across the lifetime of the deployed module. The runtime check carries the residual binding for any case the static analysis cannot fully verify.
+
 4. **No native functions.** The native-function flag on a function definition (Sui-Move marks runtime-implemented natives this way) must not be set on any function. Per section 6.1.4, every function in Adamant Move is implemented in bytecode. Performance-critical primitives are exposed through Adamant-specific instructions (section 6.2.1.4), not through bytecode-bypass natives.
 
 5. **No global storage instructions.** The Diem-Move global storage instructions (`MoveTo`, `MoveFrom`, `BorrowGlobal`, `Exists`, etc.) must not appear in the bytecode. Per section 6.1.4, all storage access goes through object references. Sui-Move itself phases out these instructions in favour of objects; this rule formalises that policy and rejects any module attempting the legacy patterns.
 
 6. **No dynamic dispatch.** Sui-Move's dynamic-field operations are restricted: a function may use them only if its module carries a metadata entry `b"adamant.allows_dynamic"` whose value is `true`. The default is to disallow them per section 6.1.4. Most Sui-Move modules don't use dynamic fields; those that do typically rely on them for collection types that have first-class object equivalents in Adamant.
 
+   "Dynamic-field operations" are specifically calls to functions whose target module is at address `0x2` and whose module name is either `dynamic_field` or `dynamic_object_field`. This pins the rule's scope at the module level (rather than enumerating individual function names) so that future additions to those Sui standard library modules are automatically captured by the rule without spec amendment. The verifier identifies these calls by inspecting `Call` and `CallGeneric` instructions and resolving their `FunctionHandle` to the target module's `(address, name)` pair via the module's handle tables.
+
 7. **Privacy-circuit instructions in shielded context only.** `GenerateProof`, `VerifyProof`, `RecursiveVerify`, and `ReleaseSubViewKey` may appear only in the body of `#[shielded]` functions or their internal callees. Calling these from a transparent context is rejected at verification time.
 
-8. **Bounded loops.** Every loop in the bytecode must have a static iteration bound provable from the function signature and constants in scope. The verifier uses Sui-Move's existing loop-bound analysis as a starting point and tightens it: any loop whose bound is not provable is rejected. This is required by section 6.2.4's determinism guarantee — unbounded loops produce divergence on adversarial inputs.
+8. **Bounded loops.** Loops in the bytecode are bounded at runtime by the gas mechanism per section 6.2.4 ("All loops must have statically-bounded iteration counts or run within a gas budget that bounds them dynamically"). Static loop-bound verification is not required at deployment time; the gas-budget bound at runtime carries the determinism guarantee.
+
+   (Pre-revision drafts of this rule referenced "Sui-Move's existing loop-bound analysis as a starting point." That was a drafting error: Sui-Move's `move-bytecode-verifier::loop_summary` module performs CFG structural analysis — back-edge identification via Tarjan's loop reducibility — rather than iteration-bound analysis. There is no upstream loop-bound analysis to extend. Determinism is established at runtime via section 6.2.4's gas-budget bound; the verifier-level check is a no-op.)
 
 A module that passes all inherited and Adamant-specific checks is **valid** and may be deployed. A module that fails any check is rejected with an error indicating which check failed; the deployment transaction aborts and no rent is consumed for the module that would not have been accepted.
 
@@ -623,6 +631,10 @@ A module upgrade is a transaction that submits new bytecode to replace the exist
 ### 6.4.3 Compatibility constraints on upgrades
 
 A module upgrade is required to be *compatible* with the previous version, in a specific technical sense: types defined by the module that are referenced by other modules cannot be removed or have their layout changed. Adding new types, new functions, or extending existing functions in backward-compatible ways is permitted.
+
+**Privacy annotations are part of the public API contract.** The privacy annotation on a public function (per section 6.2.1.3) is upgrade-immutable: an upgrade may not change a public function's annotation from `#[transparent]` to `#[shielded]` or vice versa. This is enforced at upgrade time alongside the existing compatibility checks; an upgrade attempting to change a public function's privacy annotation is rejected.
+
+This constraint exists because dependent modules may have been deployed against the original privacy annotation — a `#[shielded]` caller in another module that linked against an upgraded function expecting it to remain `#[shielded]` should not silently find itself calling a `#[transparent]` implementation after the upgrade. Privacy mode is a fundamental property of how a function interacts with the rest of the chain, and changing it across upgrades would invalidate the static deploy-time guarantees that dependent modules rely on (per section 6.2.1.6 rule 3). Internal (non-public) functions may change privacy mode across upgrades freely; only public functions are constrained, since only public functions are part of the cross-module API surface.
 
 This constraint exists to prevent silent breakage of dependent contracts. If module A defines type `T` and module B holds a value of type `T`, an upgrade to module A that removes `T` would render module B's value un-interpretable. The compiler and the chain enforce this constraint at upgrade time.
 
