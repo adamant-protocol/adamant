@@ -13,7 +13,6 @@ The protocol uses standard, peer-reviewed cryptographic primitives — Ed25519 a
 This document specifies the Adamant protocol in full. Section 1 motivates the design through gap analysis of the existing landscape. Section 2 establishes the design principles that constrain all subsequent decisions. Sections 3 through 9 specify the technical architecture from cryptographic primitives through networking. Section 10 specifies the economic and incentive model. Section 11 specifies the genesis state and constitutional commitments. Section 12 discusses open problems and the scope of future work.
 
 The reference implementation is being developed in Rust and is available under the Apache 2.0 license at [github.com/adamant-protocol](https://github.com/adamant-protocol). This whitepaper and the implementation evolve together; specification changes are tracked in this document's version history and reflected in the corresponding code releases.
-
 # 1. Introduction & Motivation
 
 ## 1.1 The state of the art (2026)
@@ -123,7 +122,6 @@ It does include:
 Subsequent sections assume familiarity with elementary blockchain concepts (transactions, validators, consensus, state). Specialist concepts (DAG consensus, zero-knowledge proofs, threshold encryption, post-quantum signatures) are introduced when first used.
 
 The protocol specified here is intended to be implemented exactly once: at genesis. After genesis, the specification is frozen. Section 11 makes this commitment formally.
-
 # 2. Design Principles
 
 This section establishes the principles that constrain every subsequent design decision in this document. These principles are not aspirational; they are normative. Where a technical choice in later sections must be made between alternatives, the alternative more consistent with the principles below `MUST` be chosen, even at the cost of performance, convenience, or developer experience.
@@ -319,7 +317,6 @@ For clarity, these principles exclude the following from the protocol:
 These exclusions are normative. A future revision of this whitepaper that proposes to add any of the above features would, by definition, be specifying a different protocol — not a revised Adamant.
 
 The remainder of this document specifies how a protocol meeting these principles is constructed.
-
 # 3. Cryptographic Foundation
 
 This section specifies every cryptographic primitive used by the Adamant protocol. It is the foundation on which all other sections depend: the consensus mechanism, the privacy layer, the encrypted mempool, the identity system, and the recursive verification all rest on the primitives specified here.
@@ -660,7 +657,6 @@ For clarity, the following are deliberately not specified in this section and ar
 - The genesis state, including the specific Powers of Tau parameters: deferred to section 11 (Genesis & Constitution).
 
 This section establishes the primitives. Subsequent sections specify how they are composed.
-
 # 4. Identity & Accounts
 
 This section specifies how identity is represented on Adamant: how accounts are constructed, how keys authorise transactions, how users delegate visibility through view keys, and how recovery from key loss is handled. The design follows directly from the principles in section 2: privacy by default (II), permissionless participation (VII), and the cryptographic primitives in section 3.
@@ -866,7 +862,6 @@ Reference wallets `SHOULD` make this configuration achievable in approximately t
 This section briefly anticipates section 10 (Economics & Incentives). Account-related operations — creation, key rotation, validation logic invocation — are subject to the protocol's fee mechanism. The fee for account creation is paid by the creator. Validation logic invocation (which occurs for every transaction the account submits) is paid by whichever party the validation logic specifies as fee-payer; this enables sponsored transactions, where an application or paymaster pays fees on behalf of the user.
 
 Section 10 specifies fee structure in detail. The note here is that the smart-account model permits fee abstraction natively: the question of "who pays" is part of the validation logic, not a separate concept.
-
 # 5. Object Model & State
 
 This section specifies how Adamant represents data on the chain. It is the longest technical section in the whitepaper because the object model touches every other component: it determines what transactions can do, what the virtual machine operates on, what the consensus mechanism orders, what the privacy layer shields, and what the recursive verification proves.
@@ -1254,7 +1249,6 @@ A transfer transaction reads the sender's balance object, the recipient's balanc
 This pattern — global supply object plus per-holder balance objects — is the canonical fungible-token implementation on Adamant. It supports parallel processing (transfers between disjoint pairs of accounts do not conflict), it supports privacy (balances are shielded; transfers use stealth addresses; observers see only that *some* account transferred to *some other* account), and it is verifiable by recursive proofs (the chain's recursive proof attests that all balance changes are well-formed across all token types).
 
 Section 6 (the virtual machine) specifies how this pattern is expressed in the protocol's smart-contract language. Section 7 specifies the privacy mechanisms that shield the contents.
-
 # 6. Execution & Virtual Machine
 
 This section specifies how transactions are executed on Adamant: the smart-contract language, the virtual machine, the parallel execution model, and the resource accounting (gas) framework. It builds directly on the object model of section 5 and is the layer at which user-defined logic interacts with chain state.
@@ -1609,7 +1603,7 @@ The dialect choice is genesis-fixed. Migrating to a different Move dialect post-
 
 A program that uses none of Adamant's extensions, carries the required metadata, and respects Adamant's tighter verifier rules is bytecode-identical to its Sui-Move equivalent.
 
-**Implementation note.** This subsection treats Sui-Move's `move-binary-format` and `move-bytecode-verifier` crates as a reference implementation for the inherited substrate's semantics. A conforming Adamant implementation may vendor those crates and use them at test time to cross-validate its own deserializer and verifier on pure-Sui modules; the protocol's behaviour on the inherited subset is defined by Sui's reference implementation as of the binary-format version specified in section 6.2.1.2. The vendored crates are not on the deploy-time hot path — section 6.2.1.8 specifies the Adamant-native deserializer and verifier that own the deploy-time pipeline, with the vendored Sui crates serving as a development-time and test-time reference for the inherited subset's semantics.
+**Implementation note.** This subsection treats Sui-Move's `move-binary-format` and `move-bytecode-verifier` crates as a test-time cross-validation reference for the inherited substrate's semantics. A conforming Adamant implementation may vendor those crates and exercise them at test time to confirm that Adamant's own deserializer and verifier reach the same accept/reject decision as Sui's on pure-Sui modules. The protocol's behaviour on the inherited subset is defined by sections 6.2.1.1 through 6.2.1.8 of this specification; Sui's reference implementation is consulted at test time to confirm semantic parity, not as the binding source of truth. The vendored crates do not appear in the production binary's dependency graph — section 6.2.1.8 specifies the Adamant-native deserializer and verifier that own the deploy-time pipeline and runtime, with the vendored Sui crates serving as test-only cross-validation reference.
 
 The strict-superset property is at the *language* level: every valid Sui-Move module that respects Adamant's tightened verifier rules is a valid Adamant Move module, and an Adamant module that uses no extensions is bytecode-identical to its Sui-Move equivalent. The vendored Sui crates, by contrast, recognise only the Sui-base subset — Sui's `move-binary-format` deserializer rejects any opcode byte outside Sui's instruction set with `UNKNOWN_OPCODE`, and Sui's `move-bytecode-verifier` operates on Sui's `Bytecode` enum which has no representation for Adamant extensions. The Adamant-native deserializer and verifier specified in section 6.2.1.8 handle the full Adamant superset directly; cross-validation against the vendored Sui crates on pure-Sui modules confirms semantic parity for the inherited subset.
 
@@ -1768,7 +1762,7 @@ The total instruction set is finite and frozen at genesis. New instructions cann
 
 #### 6.2.1.8 Module deserializer and verifier architecture
 
-Sections 6.2.1.1 through 6.2.1.7 describe the bytecode language. This subsection describes how a conforming Adamant implementation parses bytecode bytes into an in-memory module representation and runs verification over that representation. The architecture is **fully Adamant-native**: a conforming implementation provides its own deserializer, serializer, and verifier passes covering both the inherited Sui-Move subset and the Adamant extensions; the vendored Sui-Move crates serve as a reference implementation against which Adamant's verifier is cross-validated for the inherited subset, but they are not on the deploy-time hot path.
+Sections 6.2.1.1 through 6.2.1.7 describe the bytecode language. This subsection describes how a conforming Adamant implementation parses bytecode bytes into an in-memory module representation and runs verification over that representation. The architecture is **fully Adamant-native at deploy-time and runtime**: a conforming Adamant implementation runs entirely independently of Sui-Move's codebase in production builds, with the vendored Sui-Move crates serving as test-only cross-validation reference. A conforming implementation provides its own deserializer, serializer, type definitions, constants, helper utilities, and verifier passes covering both the inherited Sui-Move subset and the Adamant extensions; the vendored Sui-Move crates do not appear in the production binary's dependency graph. This posture makes Adamant **resistant-proof** against upstream Sui changes, shutdowns, vulnerabilities, or governance shifts: once a vendored snapshot is exercised at test time, no future Sui-Move change can affect Adamant's deploy-time accept/reject decisions or runtime behaviour. Two implementations that disagree on whether a given module-bytes input is valid for deployment are not both conforming, regardless of whether either consults Sui-Move. No implementation that depends on Sui-Move's logic at deploy-time or runtime is conforming; test-only, build-tooling-only, and CI-only dependencies on vendored Sui-Move are explicitly permitted, but Sui-Move logic must not execute during deploy-time module verification or runtime VM execution.
 
 (Pre-revision drafts of this subsection described a "Sui-projection" mechanism that fed Adamant modules through Sui-Move's vendored verifier with extension instructions substituted by Sui's `Nop` instruction. Empirical investigation surfaced that 3 of Sui-Move's 4 per-instruction verifier passes — `StackUsageVerifier`, `type_safety`, and `reference_safety` — reject the `Nop` projection for any Adamant extension with nonzero stack, type, or reference effect, which is 16 of 17 extensions. The projection mechanism is therefore not viable: Sui's passes would reject perfectly valid Adamant modules at deployment. The Adamant-native verifier architecture below replaces it. The drafting error is acknowledged here rather than silently revised, in keeping with the audit-trail-honesty pattern established at section 6.2.1.4.)
 
@@ -1797,9 +1791,9 @@ The verifier then runs the Adamant-specific rules per section 6.2.1.6.
 
 These guarantees apply uniformly to functions whether or not they contain Adamant extensions. There is no per-function dispatch to different verifier subsets; every function is checked by the full verifier in a single pass.
 
-**Cross-validation against vendored Sui-Move.** The vendored Sui-Move `move-binary-format` and `move-bytecode-verifier` crates serve as a reference implementation for the inherited Sui-base subset's semantics. A conforming Adamant implementation cross-validates its verifier against Sui's verifier on pure-Sui modules (Adamant modules containing no extension instructions) — for any such module, the Adamant verifier and Sui's verifier reach the same accept/reject decision. This cross-validation is a test-time property: it is not run at deployment, but is exercised by the implementation's test suite to confirm semantic parity with Sui for the inherited subset. Divergence from Sui on a pure-Sui module indicates a bug in either the Adamant verifier or in Sui's verifier; the cross-validation surfaces such divergence at development time.
+**Cross-validation against vendored Sui-Move.** The vendored Sui-Move `move-binary-format` and `move-bytecode-verifier` crates serve as a test-only cross-validation reference for the inherited Sui-base subset's semantics. A conforming Adamant implementation exercises Sui's verifier against pure-Sui modules (Adamant modules containing no extension instructions) at test time and confirms that Adamant's verifier reaches the same accept/reject decision — for any such module, the two implementations agree. This cross-validation is strictly a test-time property: it is not run at deployment, and the vendored crates do not appear in the production binary's dependency graph. The cross-validation is exercised by the implementation's test suite to confirm semantic parity with Sui for the inherited subset, surfacing any divergence at development time as a bug in either implementation.
 
-The vendored Sui crates are pinned to the binary-format version specified in section 6.2.1.2; they are not on the deploy-time hot path and may be updated independently of the Adamant verifier (subject to genesis-fixed binary-format compatibility). If a future Sui upstream change diverges from Adamant's behaviour for the inherited subset, the divergence is contained — Adamant's verifier is the binding implementation, and the vendored crates serve as a reference whose agreement is verified at test time.
+The vendored Sui crates are pinned to the binary-format version specified in section 6.2.1.2 and may be refreshed independently of the Adamant verifier (subject to genesis-fixed binary-format compatibility). If a future Sui upstream change diverges from Adamant's behaviour for the inherited subset, the divergence is contained: Adamant's verifier is the binding implementation, and the vendored crates serve as a reference whose agreement is verified at test time. A vendor refresh that surfaces divergence is a development-time signal — it is not a consensus event, since the production-build pipeline never loads the vendored crates.
 
 **Why fully Adamant-native rather than projection-based.** The architectural decision to verify the full Adamant superset directly, rather than projecting Adamant modules into a Sui-only form for Sui's verifier to check, follows from three considerations:
 
@@ -1817,7 +1811,7 @@ The vendored Sui crates are pinned to the binary-format version specified in sec
 
 A module is valid for deployment if and only if all five steps succeed. The order is fixed: each step's preconditions are established by the prior step's success, and the canonical-encoding check (step 2) precedes any verification work to ensure that the bytes the verifier examines are the canonical bytes the deployer submitted.
 
-**Implementation note.** The Adamant-native deserializer, serializer, and verifier passes are protocol-level concerns: a conforming implementation must reach the same accept/reject decision on every module-bytes input as the spec's pipeline. Internal representations, data-structure choices, and pass-orchestration details are implementation-discretionary, but the externally observable accept/reject behaviour is fixed. Two implementations that disagree on whether a given module-bytes input is valid for deployment are not both conforming, regardless of internal choices. The vendored Sui-Move crates are a reference implementation for the inherited subset and are exercised at test time via cross-validation; they are not part of the protocol-level specification.
+**Implementation note.** The Adamant-native deserializer, serializer, type definitions, helpers, and verifier passes are protocol-level concerns: a conforming implementation must reach the same accept/reject decision on every module-bytes input as the spec's pipeline, and the production-build dependency posture is fixed (no vendored Sui-Move crates in the production dependency graph; test-only, build-tooling-only, and CI-only dependencies are explicitly permitted). Internal representations, data-structure choices, and pass-orchestration details are implementation-discretionary, but both the externally observable accept/reject behaviour and the production-dependency posture are fixed. Two implementations that disagree on whether a given module-bytes input is valid for deployment are not both conforming, regardless of internal choices. The vendored Sui-Move crates are a cross-validation reference for the inherited subset and are exercised at test time; they are not part of the protocol-level specification and cannot appear in conforming production builds.
 
 ### 6.2.2 Execution model
 
@@ -2032,7 +2026,6 @@ A few features worth observing:
 - The function body is short because the protocol provides the cryptographic machinery. The contract author writes business logic; the protocol handles cryptography.
 
 This worked example will be revisited in section 7 (Privacy Layer), which specifies the cryptographic mechanisms underlying `#[shielded]` functions.
-
 # 7. Privacy Layer
 
 This section specifies how Adamant achieves privacy by default. It is the longest and most cryptographically dense section in this whitepaper, because privacy that is genuinely usable — private by default, programmable, auditable when the user chooses, and resistant to deanonymisation through chain analysis — requires substantial cryptographic machinery.
@@ -2449,7 +2442,6 @@ The privacy layer is constructed from peer-reviewed primitives composed in well-
 - **Prover markets** for optional outsourcing of proof generation
 
 The contribution is the integration: a system where these primitives compose cleanly with the object model, the smart-contract language, and the consensus mechanism (specified in section 8 next), to deliver a chain that is genuinely private by default and genuinely usable.
-
 # 8. Consensus
 
 This section specifies how Adamant's validators agree on the order of transactions, the state of the chain, and the validity of each state transition. It is the longest technical section in this whitepaper because consensus is where the protocol's correctness, performance, and credible-neutrality properties are simultaneously realised.
@@ -2776,7 +2768,6 @@ For context, here is how Adamant's consensus compares to the alternatives that w
 - **Asynchronous BFT (HoneyBadgerBFT, Dumbo).** Provably safe under arbitrary network conditions but with higher communication overhead. Adamant prefers Mysticeti's partial-synchrony assumption (which requires the network to eventually deliver messages) because it is realistic for internet conditions and enables better performance.
 
 The choice of Mysticeti-derived consensus reflects Adamant's prioritisation of the throughput-finality-decentralisation triangle at production scale.
-
 # 9. Networking & Mempool
 
 This section specifies the network layer of Adamant: how nodes find each other, how transactions reach validators, how messages are propagated, and how network-level metadata is protected. It complements section 8 (Consensus) by specifying the infrastructure on which consensus operates.
@@ -3003,7 +2994,6 @@ What is not observable (without breaking transport encryption):
 - Validator-internal computations
 
 This observability supports the operation of a healthy decentralised network: anyone can monitor the network's health, identify misbehaving nodes, and contribute to community-level abuse mitigation. The same observability is bounded by the encryption protections that prevent it from becoming a surveillance vector.
-
 # 10. Economics & Incentives
 
 This section specifies the protocol's economic model: the native token, the genesis pool and launch mechanics, the post-launch issuance schedule, the fee mechanism, and the staking and reward economy. These specifications are part of the consensus rules; they cannot be modified by any on-chain mechanism (Principle I).
@@ -3438,7 +3428,6 @@ This section does not contain:
 - Investment-related language of any kind
 
 The protocol is a piece of infrastructure. Its economic model is specified in mechanical terms — issuance schedules, fee formulas, burn rates — and the consequences of those mechanics in terms of token supply and validator economics are derivable from the specifications. Predicting market outcomes is outside the scope of a technical specification and is intentionally absent.
-
 # 11. Genesis & Constitution
 
 This section is the protocol's constitutional commitment. It specifies what is fixed forever at genesis, what cannot be changed by any party including the protocol's original implementers, and the precise mechanism by which the protocol may change despite this — through socially-coordinated hard forks in which every node operator individually chooses whether to adopt new client software.
@@ -3687,7 +3676,6 @@ The protocol's constitutional commitment, in the simplest possible terms:
 - A protocol with this property cannot be captured. It can only be replaced by an alternative that participants prefer.
 
 This is what is meant by "the chain you use when you don't trust anyone." The chain itself is what you trust, and it is constructed such that the trust is mechanical, not personal.
-
 # 12. Conclusion & Open Problems
 
 This section closes the whitepaper. It is shorter than the technical sections by design: it does not specify new protocol behaviour but reflects on what has been specified, identifies the open problems that remain, and outlines the path from this document to a running chain.
@@ -3808,4 +3796,3 @@ This whitepaper specifies how to build that chain. The next document — and the
 *This whitepaper is a draft. It is subject to revision based on public review and implementation experience. The v1.0 release will be tagged in the repository when the specification is considered complete and frozen for the genesis implementation.*
 
 *The reference implementation is being developed at [github.com/adamant-protocol/adamant](https://github.com/adamant-protocol/adamant) under the Apache 2.0 license. Issues, pull requests, and substantive review are welcome.*
-
