@@ -1,12 +1,14 @@
 [package]
 name = "move-abstract-stack"
-description = "Placeholder for Sui-Move's move-abstract-stack crate (Batch 2; space-efficient abstract stack for verifier passes), vendored per whitepaper §6.2.1.6 (mainnet-v1.66.2) as a transitive dependency of move-bytecode-verifier. Actual upstream code lands in a follow-up commit per vendor/README.md."
+description = "Vendored from Sui-Move per whitepaper §6.2.1.6 (mainnet-v1.66.2). Space-efficient abstract stack consumed by move-bytecode-verifier passes. See PROVENANCE.md for the upstream tag and audit posture."
 version.workspace = true
-edition.workspace = true
-license = "Apache-2.0"
+authors = ["The Move Contributors"]
 repository = "https://github.com/MystenLabs/sui"
-authors = ["Sui contributors (vendored by Adamant)"]
+license = "Apache-2.0"
+edition = "2024"
 publish = false
+
+[dependencies]
 
 # Lint posture for vendored upstream code.
 # `unsafe_code` is set per-crate based on empirical upstream

@@ -1,12 +1,10 @@
 # Provenance: `move-vm-config`
 
-This crate is part of Batch 2 of the Sui-Move vendoring (whitepaper
-§6.2.1.6) as a direct dependency of `move-bytecode-verifier` and a
-transitive dependency of `move-bytecode-verifier-meter`. It
-provides VM configuration types consumed by the verifier and the
-metering surface. At this scaffold commit the workspace plumbing
-is in place; the actual upstream source-file copy lands in the
-follow-up vendor commit per `vendor/README.md`.
+This crate is vendored from the Sui ecosystem per whitepaper
+section 6.2.1.6 as a direct dependency of `move-bytecode-verifier`
+and a transitive dependency of `move-bytecode-verifier-meter`
+(Batch 2 of the Sui-Move vendoring). It provides VM configuration
+types consumed by the verifier and the metering surface.
 
 ## Upstream
 
@@ -15,15 +13,53 @@ follow-up vendor commit per `vendor/README.md`.
 - **Release tag:** `mainnet-v1.66.2`
 - **Commit SHA at the tagged release:** `a9a6825eaf6273cc819ee3bcf65fd4909f7624a9`
 - **Date of release:** 25 February 2026
-- **Date of vendoring:** *to be filled at the follow-up vendor commit*
+- **Date of vendoring:** 6 May 2026
 - **Upstream license:** Apache-2.0
 - **Tarball SHA-256:** `ff223ce3f08fb36d0e0daf0566cec917d97d987242f7709cd2a89c72826a78ba`
-  (same tarball as Batch 1 commit `4164e7b`)
+  (same tarball as Batch 1 commit `4164e7b`, re-verified at this vendoring)
 
 ## Local modifications
 
-*None at scaffold stage.* At the actual-vendoring commit, this
-section enumerates any changes made to the upstream code.
+The following files differ from upstream:
+
+- **`Cargo.toml`** — workspace-integration only. Specifically:
+  - `version`: changed from upstream's literal `"0.1.0"` to
+    `version.workspace = true`.
+  - `description`: added (upstream had no `description` field);
+    points at this `PROVENANCE.md` and the whitepaper subsection.
+  - `repository`: changed from upstream's
+    `https://github.com/move-language/move` (a historical Move
+    home no longer canonical) to `https://github.com/MystenLabs/sui`
+    (where the vendored copy actually comes from).
+  - `authors`: augmented from upstream's
+    `["Diem Association <opensource@diem.com>"]` to the full
+    historical lineage (Diem Association, The Move Contributors,
+    Mysten Labs).
+  - `publish`: kept as upstream's `false`.
+  - `edition`: kept as upstream's `"2024"`, declared per-crate.
+  - `license`: unchanged (Apache-2.0).
+  - `[dependencies]`: dependency specs preserved verbatim from
+    upstream (already in `<crate>.workspace = true` syntax).
+  - `[features]`: `tracing = []` retained from upstream
+    (upstream's optional feature gating tracing-related macros;
+    not enabled by default).
+  - `[lints]`: added per-crate `[lints.rust]` and `[lints.clippy]`
+    (upstream had no `[lints]` section). The vendored code is
+    unsafe-free upstream; per-crate lint declaration mirrors
+    `unsafe_code = "forbid"` plus `[lints.clippy] all = "allow"`
+    per `vendor/README.md` "Lints" policy.
+
+No `.rs` file is modified. The `src/` content is byte-identical
+to the upstream tag.
+
+### Audit anchor
+
+Byte-identical to
+`external-crates/move/crates/move-vm-config/src/` extracted from
+`sui-mainnet-v1.66.2.tar.gz` (SHA-256
+`ff223ce3f08fb36d0e0daf0566cec917d97d987242f7709cd2a89c72826a78ba`),
+modulo the Cargo.toml workspace integration and PROVENANCE.md
+addition.
 
 ## Audit posture
 
@@ -31,15 +67,12 @@ The vendored code's invariants are inherited from the upstream
 tagged release. Reviewers verifying this crate's vendoring or
 bump check:
 
-1. The vendored content (excluding this `PROVENANCE.md` and any
-   listed modifications) matches the upstream tag byte-for-byte.
-   The audit anchor is the tarball SHA-256 above.
+1. The vendored content (excluding this `PROVENANCE.md` and the
+   `Cargo.toml` modifications listed above) matches the upstream
+   tag byte-for-byte.
 2. The release tag is the same as Batch 1 (`mainnet-v1.66.2`,
-   25 February 2026); the eight-week-cushion policy is already
-   satisfied by Batch 1's selection.
-3. Any local modifications are documented above with rationale
-   and are limited to workspace-integration concerns rather than
-   semantic changes.
-4. The `[lints]` declaration matches workspace policy or, if
-   relaxed, the relaxation is documented in `SECURITY.md`'s
-   "Vendored upstream surface — Batch 2" section.
+   25 February 2026).
+3. Local modifications above are limited to workspace-integration
+   concerns rather than semantic changes.
+4. The `[lints]` declaration matches workspace policy on
+   `unsafe_code = "forbid"`.

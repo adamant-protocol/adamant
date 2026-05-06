@@ -1,12 +1,22 @@
 [package]
 name = "move-symbol-pool"
-description = "Placeholder for Sui-Move's move-symbol-pool crate (Batch 2; static global string-interning pool), vendored per whitepaper §6.2.1.6 (mainnet-v1.66.2) as a transitive dependency of move-command-line-common. Actual upstream code lands in a follow-up commit per vendor/README.md."
+description = "Vendored from Sui-Move per whitepaper §6.2.1.6 (mainnet-v1.66.2). Static global string-interning pool (transitive via move-command-line-common). See PROVENANCE.md for the upstream tag and audit posture."
 version.workspace = true
-edition.workspace = true
-license = "Apache-2.0"
+authors = ["Diem Association <opensource@diem.com>", "The Move Contributors", "Mysten Labs <build@mystenlabs.com>"]
 repository = "https://github.com/MystenLabs/sui"
-authors = ["Sui contributors (vendored by Adamant)"]
+license = "Apache-2.0"
+edition = "2024"
 publish = false
+
+[dependencies]
+serde.workspace = true
+phf.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[features]
+default = []
 
 # Lint posture for vendored upstream code.
 # `unsafe_code` is set per-crate based on empirical upstream
@@ -18,7 +28,7 @@ publish = false
 # produces noise rather than signal. Style lints belong in
 # upstream's process; we trust the tag.
 [lints.rust]
-unsafe_code = "allow"  # carries upstream unsafe (string-interning, servo/string-cache pattern; full enumeration in PROVENANCE.md at vendor commit)
+unsafe_code = "allow"  # carries upstream unsafe (string-interning, servo/string-cache pattern; full enumeration in PROVENANCE.md)
 
 [lints.clippy]
 all = "allow"

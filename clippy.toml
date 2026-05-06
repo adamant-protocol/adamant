@@ -115,32 +115,61 @@
 # §6.2.1.6, see vendor/README.md and SECURITY.md "Vendored upstream
 # surface — Batch 2") brings nine new generic workspace dependencies
 # into the tree (`petgraph`, `datatest-stable`, `colored`,
-# `dirs-next`, `packed_struct`, `sha2`, `vfs`, `walkdir`, `phf`).
-# Several of these have transitive dependencies whose pins differ
-# from versions already in the workspace (RustCrypto generation
-# skew, getrandom/rand-tree skew, etc.), creating new
-# multiple_crate_versions duplicates beyond those listed above.
+# `dirs-next`, `packed_struct`, `sha2`, `vfs`, `walkdir`, `phf`),
+# whose own transitive dependency pins differ in places from
+# versions already in the workspace.
 #
-# **Status at this scaffold commit: entries TBD.** The exact set of
-# new duplicates is empirically determined by `cargo build
-# --workspace` after the actual upstream source-file copy lands in
-# the follow-up vendor commit. This rationale block is in place at
-# scaffold so the entries can be added in the same commit they are
-# discovered, with no further policy framing required.
+# Eight further multi-version duplicates surfaced empirically from
+# `cargo tree --workspace --duplicates` after the source-file copy
+# landed in this commit. Most are narrow ecosystem-skew duplicates
+# (the `bitvec` subtree, the `datatest-stable → clap 3.x` subtree,
+# Windows API tree, etc.). One — `sha2` — adds a third RustCrypto
+# generation alongside the existing two: `sha2 0.10.9` (transitive
+# of `ed25519-dalek`) and now `sha2 0.9.9` (Sui's
+# `move-command-line-common` pins `sha2 = "0.9.3"` directly,
+# resolving to 0.9.9). `sha2 0.9.x` is on the pre-0.10 RustCrypto
+# generation, so it brings the older `digest 0.9.0` and
+# `block-buffer 0.9.0` versions into the lockfile alongside the
+# 0.10.x and 0.11.x lines already allowlisted above. The crate
+# names `digest` and `block-buffer` are already on the allowlist,
+# which transparently accepts the additional version.
 #
-# **Conservative estimate at scaffold time:** 5–10 new entries.
-# Likely candidates: a third `digest` / `block-buffer` /
-# `crypto-common` / `signature` line via `sha2 0.9.3` (Sui's pin
-# predates the RustCrypto 0.10 split); `petgraph`'s tree of
-# `fixedbitset`, `indexmap`, `hashbrown` may pin versions different
-# from those already in scope.
+# Operational implications:
+#   - Three SHA-2 implementations now link in (`sha2 0.10.9` for
+#     the Ed25519 path; `sha2 0.9.9` for Sui's source-file
+#     fingerprinting in `move-command-line-common`). They produce
+#     algorithmically identical outputs; the `sha2 0.9.x` path is
+#     **not** on any consensus-critical hashing path. Adamant's
+#     consensus hashing remains locked to `sha3` per whitepaper
+#     §3.3 — `sha2` is here only for upstream Sui dev tooling.
+#   - The `bitvec` subtree (`bitvec`, `funty`, `radium`, `wyz`)
+#     enters via Sui's `move-binary-format` proptest dev-deps with
+#     pre-1.0 versions; modern crates pull post-1.0. None of the
+#     duplicated crates are cryptographic primitives or
+#     consensus-critical infrastructure.
+#   - Larger binary size and longer compile times. Functional
+#     correctness is unaffected.
 #
-# **Revisit signal (single, applies to all entries added in the
-# vendor commit):** remove the relevant entries when bumping the
-# vendored Sui release tag brings the duplicates into alignment
-# with our tree, or when our own deps move to versions that match
-# Sui's pins. Same posture as the existing two Sui-Move skew
-# blocks above.
+# Entries:
+#   bitflags     : 1.3.2 / 2.11.1 (clap 3.x via datatest-stable
+#                  vs newer crates' bitflags 2.x)
+#   bitvec       : 0.20.4 / 1.0.1 (proptest dev-dep tree skew)
+#   funty        : 1.1.0 / 2.0.0 (transitive of bitvec)
+#   radium       : 0.6.2 / 0.7.0 (transitive of bitvec)
+#   sha2         : 0.9.9 / 0.10.9 (RustCrypto pre-0.10 vs 0.10
+#                  generations — Sui's move-command-line-common
+#                  pins 0.9.3; ed25519-dalek transitively pulls 0.10)
+#   strsim       : 0.10.0 / 0.11.1 (clap 3.x via datatest-stable
+#                  vs newer crates)
+#   windows-sys  : 0.59.0 / 0.61.2 (Windows API binding-tree skew
+#                  via dirs-sys-next vs tempfile)
+#   wyz          : 0.2.0 / 0.5.1 (transitive of bitvec)
+#
+# **Revisit signal (single, applies to all eight entries):**
+# remove the relevant entries when bumping the vendored Sui release
+# tag brings the duplicates into alignment with our tree, or when
+# our own deps move to versions that match Sui's pins. Same posture
+# as the existing two Sui-Move skew blocks above.
 
 allowed-duplicate-crates = [
     "cpufeatures",
@@ -167,4 +196,15 @@ allowed-duplicate-crates = [
     "schemars",
     "syn",
     "wit-bindgen",
+    # Sui-Move bytecode-verifier ecosystem skew from vendoring
+    # `move-bytecode-verifier` and its seven transitive vendored
+    # crates at `mainnet-v1.66.2` (see rationale above):
+    "bitflags",
+    "bitvec",
+    "funty",
+    "radium",
+    "sha2",
+    "strsim",
+    "windows-sys",
+    "wyz",
 ]

@@ -1,12 +1,29 @@
 [package]
 name = "move-regex-borrow-graph"
-description = "Placeholder for Sui-Move's move-regex-borrow-graph crate (Batch 2; regex-based borrow graph for reference safety on regex types), vendored per whitepaper §6.2.1.6 (mainnet-v1.66.2) as a transitive dependency of move-bytecode-verifier. Actual upstream code lands in a follow-up commit per vendor/README.md."
+description = "Vendored from Sui-Move per whitepaper §6.2.1.6 (mainnet-v1.66.2). Regex-based borrow graph consumed by move-bytecode-verifier's regex_reference_safety pass. See PROVENANCE.md for the upstream tag and audit posture."
 version.workspace = true
-edition.workspace = true
-license = "Apache-2.0"
+authors = ["The Move Contributors"]
 repository = "https://github.com/MystenLabs/sui"
-authors = ["Sui contributors (vendored by Adamant)"]
+license = "Apache-2.0"
+edition = "2024"
 publish = false
+
+[dependencies]
+itertools.workspace = true
+proptest.workspace = true
+insta.workspace = true
+
+move-binary-format.workspace = true
+move-core-types.workspace = true
+move-command-line-common.workspace = true
+petgraph.workspace = true
+
+[dev-dependencies]
+datatest-stable.workspace = true
+
+[[test]]
+name = "borrow_graph_tests"
+harness = false
 
 # Lint posture for vendored upstream code.
 # `unsafe_code` is set per-crate based on empirical upstream
