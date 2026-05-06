@@ -23,6 +23,16 @@
 //!   [`Bytecode`] enum and [`FunctionHandleIndex`] operand type
 //!   are re-exported from this crate so consumers don't reach
 //!   into the vendored Sui crate names directly.
+//! - [`validator::verify_module`], [`AdamantVerifierConfig`],
+//!   [`AdamantValidationError`] — whitepaper section 6.2.1.6.
+//!   The wrapper takes module bytes and returns a parsed
+//!   [`Bytecode`]-bearing `CompiledModule` on success, owning
+//!   the deserialize → verify → Adamant-rules pipeline as a
+//!   single deploy-time decision. Wave 3a coverage: Rules 1, 4,
+//!   5 (Rule 5 is enforced at the deserialize stage, where
+//!   Sui's deserializer rejects the 10 deprecated global-storage
+//!   bytecode variants when the locked-down config flag is set);
+//!   Rules 2, 3, 6, 7 land in subsequent waves.
 //!
 //! Subsequent commits in Phase 5 will add the bytecode wire
 //! encoding (extending Sui's serializer/deserializer to interleave
@@ -39,6 +49,7 @@
 //! | [`value`]        | 6.0.7               | [`Value`], [`StructValue`]                                                                                                  |
 //! | [`tx_hash`]      | 6.0.4               | [`derive_tx_hash`]                                                                                                          |
 //! | [`bytecode`]     | 6.2.1.4             | [`AdamantBytecode`], [`AdamantOpcodeKind`], [`BytecodeInstruction`], [`CircuitId`], [`GasDimension`]                        |
+//! | [`validator`]    | 6.2.1.6             | [`validator::verify_module`], [`AdamantVerifierConfig`], [`AdamantValidationError`] (Wave 3a: Rules 1, 4, 5)                |
 //!
 //! # Discipline reference
 //!
@@ -56,6 +67,7 @@ pub mod bytecode;
 pub mod bytecode_wire;
 pub mod transaction;
 pub mod tx_hash;
+pub mod validator;
 pub mod value;
 
 // Re-export inherited Sui-Move types so consumers of adamant-vm
@@ -75,4 +87,12 @@ pub use transaction::{
     AccountRef, AuthEvidence, CallParams, CreatedObject, GasBudget, Transaction, TxBody, Witness,
 };
 pub use tx_hash::derive_tx_hash;
+// Validator (whitepaper §6.2.1.6). The verify_module entry point
+// is intentionally *not* re-exported at the crate root: callers
+// invoke it as `adamant_vm::validator::verify_module(...)` to
+// disambiguate from Sui's `move-bytecode-verifier` functions
+// (per the architectural-pattern decision at the validator-rules
+// deliverable proposal). The error and config types are
+// re-exported because they are unambiguously named.
+pub use validator::{AdamantValidationError, AdamantVerifierConfig};
 pub use value::{StructValue, Value, U256_BYTES};

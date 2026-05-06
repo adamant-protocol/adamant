@@ -21,7 +21,19 @@ move-binary-format = { workspace = true }
 # (`Bytecode::LdU256` operand). Re-exported transitively via
 # move-binary-format but referenced directly here for the
 # little-endian U256 encoding per §6.2.1.5 amendment 83bb1e9.
+# Also provides the `Metadata` type (`metadata::Metadata`) the
+# §6.2.1.6 validator rules consult.
 move-core-types = { workspace = true }
+# Vendored Sui-Move bytecode verifier (Batch 2) per whitepaper
+# §6.2.1.6; the inherited verifier passes (type safety, reference
+# safety, linearity, etc.) run before Adamant-specific rules in
+# `validator::verify_module`. See vendor/move-bytecode-verifier/
+# PROVENANCE.md.
+move-bytecode-verifier = { workspace = true }
+# Provides `VerifierConfig` consumed by the inherited verifier;
+# `AdamantVerifierConfig` wraps it with `deprecate_global_storage_ops`
+# locked to `true` to enforce §6.2.1.6 Rule 5 unconditionally.
+move-vm-config = { workspace = true }
 serde = { workspace = true }
 serde-big-array = { workspace = true }
 bcs = { workspace = true }
