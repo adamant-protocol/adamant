@@ -7,7 +7,8 @@
 //! more than one, or with malformed value bytes are rejected.
 
 use adamant_types::Mutability;
-use move_binary_format::file_format::CompiledModule;
+
+use crate::module::AdamantCompiledModule;
 
 use super::error::AdamantValidationError;
 
@@ -27,7 +28,7 @@ const MUTABILITY_METADATA_KEY: &[u8] = b"adamant.mutability";
 /// - [`AdamantValidationError::MalformedMutabilityMetadata`] if
 ///   the (single) entry's value is not a valid BCS encoding of
 ///   `Mutability`.
-pub(super) fn verify(module: &CompiledModule) -> Result<(), AdamantValidationError> {
+pub(super) fn verify(module: &AdamantCompiledModule) -> Result<(), AdamantValidationError> {
     let entries: Vec<&move_core_types::metadata::Metadata> = module
         .metadata
         .iter()

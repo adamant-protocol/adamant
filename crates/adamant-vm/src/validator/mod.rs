@@ -1,66 +1,66 @@
 //! Adamant bytecode validator (whitepaper §6.2.1.6).
 //!
 //! This module implements the Adamant deploy-time bytecode
-//! validator atop Sui-Move's vendored deserializer and bytecode
-//! verifier. The single public entry point is [`verify_module`],
-//! which takes module **bytes** (rather than a parsed
-//! [`CompiledModule`]) and returns the parsed module on success.
-//! Owning the bytes-to-parsed pipeline inside the wrapper means
-//! Rule 5 enforcement happens at the architecturally correct
-//! pipeline stage and removes a caller-side
-//! deserializer-config footgun.
+//! validator atop the Adamant-native deserializer/serializer
+//! (Phase 5/5a) and Sui-Move's vendored verifier (transitional
+//! bridge until Phase 5/5b–5/5c land Adamant-native verifier
+//! passes). The single public entry point is [`verify_module`],
+//! which takes module **bytes** and returns a parsed
+//! [`AdamantCompiledModule`] on success.
 //!
 //! # Pipeline
 //!
-//! 1. **Deserialize.** Calls
-//!    [`CompiledModule::deserialize_with_config`] using
-//!    [`AdamantVerifierConfig`]'s wrapped
-//!    [`BinaryConfig`][`move_binary_format::binary_config::BinaryConfig`],
-//!    which has `deprecate_global_storage_ops = true`. Sui's
-//!    deserializer rejects the 10 deprecated global-storage
-//!    bytecode variants at parse time
-//!    (`vendor/move-binary-format/src/deserializer.rs:1657`); this
-//!    is the actual enforcement point for §6.2.1.6 Rule 5.
-//! 2. **Canonicality check.** Re-serializes the parsed
-//!    [`CompiledModule`] via Sui's serializer at the module's
-//!    own version and byte-compares against the input. Mismatch
-//!    surfaces as
-//!    [`AdamantValidationError::NonCanonicalBytecode`]. This
-//!    recovers the canonicality posture that
-//!    `check_no_extraneous_bytes = true` in the Sui deserializer
-//!    would otherwise have provided — the wrapper cannot use
-//!    that flag because it also rejects the metadata table
-//!    Adamant needs per §6.2.1.3, so canonicality is enforced
-//!    explicitly here. The check is consistent with §6.0.6 /
-//!    §6.0.7's canonical-encoding posture for transactions.
-//! 3. **Verify (inherited).** Runs Sui-Move's
-//!    `move-bytecode-verifier` passes (type safety, reference
-//!    safety, linearity, stack discipline, control-flow integrity,
-//!    function-call ABI, generic instantiation, friend visibility).
+//! 1. **Deserialize.** Calls [`crate::adamant_deserialize`] in
+//!    strict mode. Per §6.2.1.6 Rule 5, the strict-mode wire
+//!    decoder rejects each of the 10 deprecated global-storage
+//!    bytecode variants at parse time inside
+//!    [`crate::bytecode_wire::deserialize_function_body_from_cursor`];
+//!    that is the enforcement point for Rule 5 post-step-4.
+//! 2. **Canonicality round-trip.** Re-serializes the parsed
+//!    module via [`crate::adamant_serialize`] and byte-compares
+//!    against the input. Mismatch surfaces as
+//!    [`AdamantValidationError::NonCanonicalBytecode`]. Adamant
+//!    requires deployed bytecode to be canonically encoded so
+//!    that two deployments of "the same module" cannot produce
+//!    different `ObjectId`s via trailing-byte smuggling.
+//! 3. **Verify (inherited, transitional).** For modules that
+//!    contain no Adamant extensions per §6.2.1.4, re-parses bytes
+//!    via Sui's [`CompiledModule::deserialize_with_config`] (to
+//!    obtain a [`CompiledModule`] that Sui's verifier can
+//!    consume) and runs Sui-Move's `move-bytecode-verifier`
+//!    passes (type safety, reference safety, linearity, stack
+//!    discipline, control-flow integrity, function-call ABI,
+//!    generic instantiation, friend visibility, plus Sui's
+//!    `BoundsChecker` for cross-pool index validity). Modules
+//!    that *do* contain Adamant extensions skip this step;
+//!    Adamant-native per-instruction verification of the 17
+//!    extensions lands in Phase 5/5c.
 //! 4. **Verify (Adamant).** Runs the Adamant-specific rules from
-//!    §6.2.1.6 in spec order.
+//!    §6.2.1.6 in spec order against the [`AdamantCompiledModule`].
 //!
 //! Eager error semantics: returns the first violation encountered
 //! at any pipeline stage.
 //!
-//! # Wave 3a coverage
+//! # Wave 3a + Phase 5/5a step 4 coverage
 //!
 //! - **Rule 1** ([`rule_01_mutability`]): every module carries
 //!   exactly one `b"adamant.mutability"` metadata entry whose
 //!   value BCS-decodes as [`adamant_types::Mutability`].
 //! - **Rule 4** ([`rule_04_no_natives`]): no function definition
-//!   has `code: None` (Sui's marker for native functions).
-//! - **Rule 5** ([`rule_05_no_global_storage`]): structurally
-//!   enforced at deserialize stage by Sui's deserializer with
-//!   `deprecate_global_storage_ops = true`. The
-//!   `rule_05_no_global_storage` module carries no `verify`
-//!   function — only documentation and tests confirming the
-//!   rejection at the deserialize stage with the
-//!   [`AdamantValidationError::SuiDeserializer`] variant.
+//!   has `code: None`.
+//! - **Rule 5** (no global storage): rejected at parse time by
+//!   [`crate::adamant_deserialize`] via
+//!   [`crate::bytecode_wire::DeserializeConfig::strict`]'s
+//!   deprecated-opcode rejection. The previously-separate
+//!   `rule_05_no_global_storage` module was removed in Phase 5/5a
+//!   step 4 — defense-in-depth at rule-module level became
+//!   cargo-cult once the deserializer became the enforcement
+//!   point. The end-to-end test
+//!   [`tests::rejects_module_with_deprecated_global_storage_opcode`]
+//!   confirms the full-pipeline rejection.
 //!
 //! Rules 2, 3, 6, 7, and 8 (the gas-bound no-op test) land in
-//! subsequent waves per the implementation order approved at the
-//! validator-rules deliverable proposal.
+//! subsequent waves.
 //!
 //! # Discipline reference
 //!
@@ -68,12 +68,14 @@
 //! the single consensus-binding entry point for module deployment
 //! validation. Callers invoke it as `validator::verify_module(...)`
 //! to disambiguate from Sui's verifier functions.
+//!
+//! [`CompiledModule`]: move_binary_format::file_format::CompiledModule
+//! [`CompiledModule::deserialize_with_config`]: move_binary_format::file_format::CompiledModule::deserialize_with_config
 
 mod config;
 mod error;
 mod rule_01_mutability;
 mod rule_04_no_natives;
-mod rule_05_no_global_storage;
 
 #[cfg(test)]
 mod test_fixtures;
@@ -83,25 +85,29 @@ pub use error::AdamantValidationError;
 
 use move_binary_format::{errors::Location, file_format::CompiledModule};
 
+use crate::module::AdamantCompiledModule;
+use crate::module_wire::{adamant_deserialize, adamant_serialize};
+
 /// Verify Adamant module bytes against the validator rules per
 /// whitepaper §6.2.1.6.
 ///
-/// On success, returns the parsed [`CompiledModule`] so callers
-/// can use it (e.g., to read metadata, register the module in
-/// chain state). On failure, returns the first
+/// On success, returns the parsed [`AdamantCompiledModule`] so
+/// callers can use it (e.g., to read metadata, register the module
+/// in chain state). On failure, returns the first
 /// [`AdamantValidationError`] encountered at any pipeline stage.
 ///
 /// # Pipeline ordering
 ///
-/// 1. Deserialize bytes via Sui's
-///    [`CompiledModule::deserialize_with_config`] with the locked-
-///    down [`AdamantVerifierConfig`]'s binary config (Rule 5's
-///    enforcement point).
-/// 2. Canonicality round-trip check (re-serialize and byte-compare
-///    against input).
-/// 3. Inherited Sui verifier passes (covers §6.2.1.6's "inherited
-///    checks" list; the verifier's matching
-///    `deprecate_global_storage_ops` flag is defense in depth).
+/// 1. Adamant-native deserialize via [`adamant_deserialize`] —
+///    strict canonical decoding; Rule 5 enforcement point at
+///    parse time for deprecated global-storage opcodes.
+/// 2. Canonicality round-trip ([`adamant_serialize`] +
+///    byte-compare).
+/// 3. Inherited Sui-Move verifier passes (transitional bridge):
+///    re-deserialize via Sui to obtain a [`CompiledModule`] and
+///    run `move-bytecode-verifier`. Skipped for modules
+///    containing Adamant extensions; per-instruction extension
+///    verification lands in Phase 5/5c.
 /// 4. Adamant Rule 1 (mutability metadata required).
 /// 5. Adamant Rule 4 (no native functions).
 ///
@@ -110,52 +116,51 @@ use move_binary_format::{errors::Location, file_format::CompiledModule};
 ///
 /// # Errors
 ///
-/// - [`AdamantValidationError::SuiDeserializer`] if `module_bytes`
-///   fail to parse (malformed bytes, deprecated global-storage
-///   variants per Rule 5, etc.).
+/// - [`AdamantValidationError::AdamantDeserializer`] if
+///   `module_bytes` fail to parse (malformed bytes, deprecated
+///   global-storage opcodes per Rule 5, etc.).
 /// - [`AdamantValidationError::NonCanonicalBytecode`] if the
-///   bytes are not Sui's canonical re-serialization of the
-///   parsed module (trailing junk bytes, alternate encodings,
-///   etc.).
+///   bytes are not Adamant's canonical re-serialization of the
+///   parsed module.
 /// - [`AdamantValidationError::SuiVerifier`] if the parsed module
-///   fails any inherited verifier pass.
+///   fails any inherited verifier pass (transitional; covers
+///   Sui's `BoundsChecker` and verifier passes).
 /// - Per-rule variants for Adamant-specific rule failures.
 ///
 /// # Panics
 ///
-/// Panics only if Sui's serializer ever fails to re-serialize a
-/// `CompiledModule` that Sui's deserializer just produced — an
-/// invariant violation in the vendored Sui crates that would
-/// indicate a bug in upstream serialise/deserialise symmetry.
-/// In normal operation this branch is unreachable.
+/// Panics only if Adamant's serializer ever fails to re-serialize
+/// an [`AdamantCompiledModule`] that Adamant's deserializer just
+/// produced — an invariant violation in this crate that would
+/// indicate a serialise/deserialise asymmetry. In normal operation
+/// this branch is unreachable. Likewise panics if Sui's
+/// deserializer rejects bytes that Adamant accepted **and** for
+/// which the canonicality round-trip succeeded — that combination
+/// implies a byte-format divergence between the two implementations
+/// that the Phase 5/5a step 2/3 cross-validation tests assert
+/// cannot occur.
 pub fn verify_module(
     module_bytes: &[u8],
     config: &AdamantVerifierConfig,
-) -> Result<CompiledModule, AdamantValidationError> {
-    // Step 1: deserialize. Rule 5 is enforced here — Sui's
-    // deserializer rejects the 10 deprecated global-storage
-    // variants at parse time when `deprecate_global_storage_ops`
-    // is `true` (which AdamantVerifierConfig::new forces).
-    // PartialVMError → VMError via .finish(Location::Undefined)
-    // matches Sui's own pattern (see verifier.rs:106).
-    let module = CompiledModule::deserialize_with_config(module_bytes, config.sui_binary_config())
-        .map_err(|e| AdamantValidationError::SuiDeserializer(e.finish(Location::Undefined)))?;
+) -> Result<AdamantCompiledModule, AdamantValidationError> {
+    // Step 1: Adamant-native deserialize. Rule 5 is enforced
+    // here — bytecode_wire's strict mode rejects the 10 deprecated
+    // global-storage opcodes at parse time. Strict canonical
+    // decoding also rejects trailing bytes, duplicate tables,
+    // version-feature mismatches, and zero-length tables.
+    let module =
+        adamant_deserialize(module_bytes).map_err(AdamantValidationError::AdamantDeserializer)?;
 
-    // Step 2: canonicality round-trip check. Re-serialise the
-    // parsed module via Sui's serializer at the module's own
-    // version and byte-compare against the input. This recovers
-    // the canonicality `check_no_extraneous_bytes = true` would
-    // otherwise have provided in Sui's deserializer config (see
-    // `config.rs` for why we cannot enable that flag). Catches
-    // trailing junk bytes after the documented binary format
-    // and any other non-canonical encoding.
+    // Step 2: canonicality round-trip check. Re-serialize the
+    // parsed module via Adamant's serializer and byte-compare
+    // against the input. Catches any non-canonical encoding the
+    // strict deserializer didn't already reject.
     let mut canonical_bytes = vec![];
-    module
-        .serialize_with_version(module.version, &mut canonical_bytes)
-        .expect(
-            "re-serialising a successfully-deserialised CompiledModule must succeed; \
-             Sui's serializer accepts every module shape its deserializer produces",
-        );
+    adamant_serialize(&module, &mut canonical_bytes).expect(
+        "re-serializing a successfully-deserialized AdamantCompiledModule must succeed; \
+         Adamant's serializer accepts every module shape its deserializer produces \
+         (asserted by the Phase 5/5a round-trip property tests)",
+    );
     if module_bytes != canonical_bytes.as_slice() {
         let byte_offset = module_bytes
             .iter()
@@ -169,12 +174,32 @@ pub fn verify_module(
         });
     }
 
-    // Step 3: inherited Sui-Move verifier passes.
-    move_bytecode_verifier::verifier::verify_module_with_config_unmetered(
-        config.sui_verifier_config(),
-        &module,
-    )
-    .map_err(AdamantValidationError::SuiVerifier)?;
+    // Step 3: inherited Sui-Move verifier passes (transitional
+    // bridge until Phase 5/5b/5/5c). Modules with Adamant
+    // extensions skip this step — Sui's verifier cannot consume
+    // bytecode that includes the 0x80..=0x90 opcode space, and
+    // Adamant-native per-instruction verification of the 17
+    // extensions is in scope for Phase 5/5c.
+    if !module.contains_adamant_extensions() {
+        // Re-deserialize via Sui to obtain a CompiledModule. The
+        // bytes are guaranteed to be Sui's canonical encoding for
+        // any module that just passed steps 1-2 (asserted by the
+        // Phase 5/5a step 2/3 cross-validation tests), so this
+        // call succeeds for every module that reaches it. Rule 5
+        // was already enforced at step 1, but we keep
+        // `deprecate_global_storage_ops = true` in the wrapped
+        // BinaryConfig as defense-in-depth in case a future Sui
+        // upgrade changes Rule-5-equivalent enforcement behavior.
+        let sui_module =
+            CompiledModule::deserialize_with_config(module_bytes, config.sui_binary_config())
+                .map_err(|e| AdamantValidationError::SuiVerifier(e.finish(Location::Undefined)))?;
+
+        move_bytecode_verifier::verifier::verify_module_with_config_unmetered(
+            config.sui_verifier_config(),
+            &sui_module,
+        )
+        .map_err(AdamantValidationError::SuiVerifier)?;
+    }
 
     // Step 4: Adamant-specific rules in spec order.
     rule_01_mutability::verify(&module)?;
@@ -182,19 +207,22 @@ pub fn verify_module(
     // Rule 5 is enforced by step 1; no separate pass.
     // Rules 2, 3, 6, 7 (subsequent waves) slot in here.
     // Rule 8 is a no-op at deployment per §6.2.1.6 amendment
-    // 804d9db (gas budget at runtime carries determinism per
-    // §6.2.4); a single test asserting gas-bound loops aren't
-    // statically rejected lands in the final wave.
+    // 804d9db.
 
     Ok(module)
 }
 
 #[cfg(test)]
 mod tests {
+    use move_binary_format::file_format::{Bytecode, StructDefinitionIndex};
+
     use super::test_fixtures::{
-        module_without_mutability_metadata, serialize_module, valid_module,
+        module_with_function_body_starting, module_without_mutability_metadata, serialize_module,
+        valid_module,
     };
     use super::{verify_module, AdamantValidationError, AdamantVerifierConfig};
+    use crate::bytecode_wire;
+    use crate::module_wire::AdamantDeserializeError;
 
     #[test]
     fn valid_module_passes() {
@@ -204,7 +232,8 @@ mod tests {
         let result = verify_module(&bytes, &config);
         assert!(
             result.is_ok(),
-            "valid_module() must pass verification; failure indicates a fixture or wrapper bug. Got: {:?}",
+            "valid_module() must pass verification; failure indicates a fixture or wrapper bug. \
+             Got: {:?}",
             result.err()
         );
     }
@@ -226,7 +255,7 @@ mod tests {
         assert!(
             from_new.sui_verifier_config().deprecate_global_storage_ops,
             "AdamantVerifierConfig must force deprecate_global_storage_ops = true \
-             in the verifier config (defense in depth for §6.2.1.6 Rule 5)"
+             in the verifier config (defense in depth)"
         );
         assert_eq!(
             from_new.sui_binary_config().deprecate_global_storage_ops,
@@ -237,7 +266,8 @@ mod tests {
         assert!(
             from_new.sui_binary_config().deprecate_global_storage_ops,
             "AdamantVerifierConfig must force deprecate_global_storage_ops = true \
-             in the binary config (Rule 5's primary enforcement point at deserialize)"
+             in the binary config (defense in depth post-step-4; primary enforcement \
+             is now in adamant_deserialize)"
         );
     }
 
@@ -267,6 +297,12 @@ mod tests {
         // re-serialised form has no byte at this position, so
         // canonical_byte is None and input_byte carries the
         // junk byte's value.
+        //
+        // Note: post-step-4, adamant_deserialize itself rejects
+        // trailing bytes with `TrailingBytes` at step 1, so the
+        // canonicality-round-trip branch in step 2 never fires
+        // for the trailing-bytes case. This test now asserts the
+        // step-1 rejection.
         let m = valid_module();
         let canonical = serialize_module(&m);
         let mut bytes = canonical.clone();
@@ -275,36 +311,18 @@ mod tests {
         let config = AdamantVerifierConfig::new();
         let result = verify_module(&bytes, &config);
         match result {
-            Err(AdamantValidationError::NonCanonicalBytecode {
-                byte_offset,
-                canonical_byte,
-                input_byte,
-            }) => {
-                assert_eq!(
-                    byte_offset,
-                    canonical.len(),
-                    "the trailing junk byte sits at the canonical's end-of-stream position"
-                );
-                assert_eq!(
-                    canonical_byte, None,
-                    "the canonical re-serialisation has no byte at this offset"
-                );
-                assert_eq!(
-                    input_byte,
-                    Some(0xAB),
-                    "the input carries the trailing junk byte at this offset"
-                );
+            Err(AdamantValidationError::AdamantDeserializer(
+                AdamantDeserializeError::TrailingBytes,
+            )) => {}
+            other => {
+                panic!("expected AdamantDeserializer(TrailingBytes), got {other:?}")
             }
-            other => panic!("expected NonCanonicalBytecode, got {other:?}"),
         }
     }
 
     #[test]
     fn rejects_module_with_multiple_trailing_junk_bytes() {
-        // Same shape as the single-trailing-byte case; the
-        // first trailing byte is what the diagnostic surfaces
-        // (the wrapper reports the *first* divergence offset,
-        // not all of them).
+        // Same shape as the single-trailing-byte case.
         let m = valid_module();
         let canonical = serialize_module(&m);
         let mut bytes = canonical.clone();
@@ -313,38 +331,65 @@ mod tests {
         let config = AdamantVerifierConfig::new();
         let result = verify_module(&bytes, &config);
         match result {
-            Err(AdamantValidationError::NonCanonicalBytecode {
-                byte_offset,
-                canonical_byte,
-                input_byte,
-            }) => {
-                assert_eq!(byte_offset, canonical.len());
-                assert_eq!(canonical_byte, None);
-                assert_eq!(
-                    input_byte,
-                    Some(0xDE),
-                    "diagnostic reports the first trailing byte, not the whole tail"
-                );
+            Err(AdamantValidationError::AdamantDeserializer(
+                AdamantDeserializeError::TrailingBytes,
+            )) => {}
+            other => {
+                panic!("expected AdamantDeserializer(TrailingBytes), got {other:?}")
             }
-            other => panic!("expected NonCanonicalBytecode, got {other:?}"),
         }
     }
 
     #[test]
     fn rich_canonical_module_round_trips() {
         // A non-trivial fixture (multiple metadata entries plus
-        // a function and a struct from basic_test_module)
-        // round-trips through the canonicality check cleanly.
-        // This guards against regressions where serialise and
-        // deserialise drift on richer module shapes.
+        // a function and a struct) round-trips cleanly through
+        // the wrapper. Guards against regressions where serialise
+        // and deserialise drift on richer module shapes.
         let m = super::test_fixtures::rich_valid_module();
         let bytes = serialize_module(&m);
         let config = AdamantVerifierConfig::new();
         let result = verify_module(&bytes, &config);
         assert!(
             result.is_ok(),
-            "rich_valid_module() must round-trip canonically; failure indicates serialise/deserialise drift or a fixture bug. Got: {:?}",
+            "rich_valid_module() must round-trip canonically; failure indicates serialise/\
+             deserialise drift or a fixture bug. Got: {:?}",
             result.err()
         );
+    }
+
+    // --- Rule 5 enforcement-point shift verification ---
+    //
+    // Replaces the 10 per-opcode tests that previously lived in
+    // the rule_05_no_global_storage module (removed in Phase 5/5a
+    // step 4). Wave 3a's exhaustive per-opcode coverage is now
+    // provided by `bytecode_wire::tests::strict_mode_rejects_each_deprecated_opcode`,
+    // which tests the rejection at the wire level. This test
+    // confirms the full validate-pipeline propagation: a module
+    // containing one deprecated opcode in a function body returns
+    // `AdamantDeserializer(Bytecode(DeprecatedGlobalStorageOpcode(_)))`
+    // from `verify_module`.
+
+    #[test]
+    fn rejects_module_with_deprecated_global_storage_opcode() {
+        let m = module_with_function_body_starting(Bytecode::ExistsDeprecated(
+            StructDefinitionIndex(0),
+        ));
+        let bytes = serialize_module(&m);
+        let config = AdamantVerifierConfig::new();
+        let result = verify_module(&bytes, &config);
+        match result {
+            Err(AdamantValidationError::AdamantDeserializer(
+                AdamantDeserializeError::Bytecode(
+                    bytecode_wire::DeserializeError::DeprecatedGlobalStorageOpcode(_),
+                ),
+            )) => {}
+            other => {
+                panic!(
+                    "expected AdamantDeserializer(Bytecode(DeprecatedGlobalStorageOpcode(_))), \
+                     got {other:?}"
+                )
+            }
+        }
     }
 }

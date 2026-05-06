@@ -9,7 +9,9 @@
 //! ([`crate::AdamantBytecode`] per §6.2.1.4) rather than
 //! through bytecode-bypass natives.
 
-use move_binary_format::file_format::{CompiledModule, FunctionDefinitionIndex};
+use move_binary_format::file_format::FunctionDefinitionIndex;
+
+use crate::module::AdamantCompiledModule;
 
 use super::error::AdamantValidationError;
 
@@ -18,7 +20,7 @@ use super::error::AdamantValidationError;
 /// Returns [`AdamantValidationError::NativeFunctionForbidden`]
 /// for the first function definition with `code: None`; returns
 /// [`Ok`] if every function definition has a bytecode body.
-pub(super) fn verify(module: &CompiledModule) -> Result<(), AdamantValidationError> {
+pub(super) fn verify(module: &AdamantCompiledModule) -> Result<(), AdamantValidationError> {
     for (idx, function_def) in module.function_defs.iter().enumerate() {
         if function_def.code.is_none() {
             return Err(AdamantValidationError::NativeFunctionForbidden {
