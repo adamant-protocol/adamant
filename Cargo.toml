@@ -23,11 +23,22 @@ members = [
     # Sourced from Sui mainnet-v1.66.2 (commit
     # a9a6825eaf6273cc819ee3bcf65fd4909f7624a9, released 25 Feb 2026).
     # See each crate's PROVENANCE.md for full audit posture.
+    # Batch 1 (§6.2.1.4–§6.2.1.5: bytecode format) landed at commit 4164e7b.
+    # Batch 2 (§6.2.1.6: bytecode verifier) is being added in this scaffold;
+    # actual upstream source-file copy follows in a separate vendor commit.
     "vendor/enum-compat-util",
     "vendor/move-abstract-interpreter",
+    "vendor/move-abstract-stack",
     "vendor/move-binary-format",
+    "vendor/move-borrow-graph",
+    "vendor/move-bytecode-verifier",
+    "vendor/move-bytecode-verifier-meter",
+    "vendor/move-command-line-common",
     "vendor/move-core-types",
     "vendor/move-proc-macros",
+    "vendor/move-regex-borrow-graph",
+    "vendor/move-symbol-pool",
+    "vendor/move-vm-config",
 ]
 
 [workspace.package]
@@ -154,7 +165,16 @@ proptest = "1.6.0"
 # hex bumped from "0.4" to "0.4.3" matching Sui-Move's pin at
 # mainnet-v1.66.2; backward-compatible with our existing dev-dep usage.
 hex = "0.4.3"
-hex-literal = "0.4"
+# hex-literal bumped DOWN from "0.4" to "0.3.4" matching Sui-Move's
+# pin at mainnet-v1.66.2 (required for vendoring move-bytecode-verifier
+# and its transitive Sui crates per whitepaper §6.2.1.6 — Sui's
+# move-bytecode-verifier-meter declares hex-literal as a dev-dep and
+# its tree pins 0.3.4). Adamant's own usage is `hex!("AABB")` with
+# literal hex strings (no in-string comments, the only 0.3 → 0.4
+# breaking API change), so the downgrade is semantic-loss-free for
+# first-party callers. Same precedent as the proptest and hex bumps
+# in the prior vendoring batch.
+hex-literal = "0.3.4"
 
 # ---------------------------------------------------------------------------
 # Sui-Move bytecode dependencies (whitepaper §6.2.1.1; vendored from
@@ -168,9 +188,17 @@ hex-literal = "0.4"
 # requires the same discipline.
 # ---------------------------------------------------------------------------
 
-# Generic Cargo dependencies (Sui-Move pins, mainnet-v1.66.2)
+# Generic Cargo dependencies (Sui-Move pins, mainnet-v1.66.2).
+# The first 23 entries (anyhow … variant_count) were added in the
+# prior vendoring batch (commit 4164e7b) for §6.2.1.4–§6.2.1.5
+# bytecode format support. The 9 entries marked NEW were added in
+# this scaffold for §6.2.1.6 bytecode verifier vendoring; pins
+# match Sui's `external-crates/move/Cargo.toml` at the same tag.
 anyhow = "1.0.52"
 arbitrary = { version = "1.1.7", features = ["derive", "derive_arbitrary"] }
+colored = "2.0.0"                                                     # NEW (§6.2.1.6 batch; transitive via move-command-line-common)
+datatest-stable = "0.1.1"                                             # NEW (§6.2.1.6 batch; move-regex-borrow-graph dev-dep)
+dirs-next = "2.0.0"                                                   # NEW (§6.2.1.6 batch; transitive via move-command-line-common)
 ethnum = "1.0.4"
 getrandom = "0.2.9"
 indexmap = "2.8.0"
@@ -178,6 +206,9 @@ insta = "1.42.0"
 itertools = "0.10.0"
 leb128 = "0.2.5"
 num = "0.4.0"
+packed_struct = "0.10.1"                                              # NEW (§6.2.1.6 batch; transitive via move-command-line-common)
+petgraph = "0.8.1"                                                    # NEW (§6.2.1.6 batch; direct dep of move-bytecode-verifier and move-regex-borrow-graph)
+phf = { version = "0.11", features = ["macros"] }                     # NEW (§6.2.1.6 batch; transitive via move-symbol-pool)
 primitive-types = { version = "0.10.1", features = ["impl-serde"] }
 proptest-derive = "0.5"
 quote = "1.0.9"
@@ -188,15 +219,29 @@ serde_bytes = "0.11.5"
 serde_json = "1.0.64"
 serde_with = "3.9.0"
 serde_yaml = "0.8.26"
+sha2 = "0.9.3"                                                        # NEW (§6.2.1.6 batch; transitive via move-command-line-common — non-consensus, used for source-file fingerprinting in dev tooling)
 syn = { version = "1.0.64", features = ["derive"] }
 thiserror = "1.0.24"
 uint = "0.9.4"
 variant_count = "1.1.0"
+vfs = "0.10.0"                                                        # NEW (§6.2.1.6 batch; transitive via move-command-line-common)
+walkdir = "2.3.1"                                                     # NEW (§6.2.1.6 batch; transitive via move-command-line-common)
 
 # Vendored Sui-Move crates (path entries enable per-crate
-# `<crate>.workspace = true` inheritance from upstream's Cargo.tomls)
+# `<crate>.workspace = true` inheritance from upstream's Cargo.tomls).
+# Order: primary crate of each batch first, transitive deps after.
+# Batch 1 (§6.2.1.4–§6.2.1.5: bytecode format, commit 4164e7b):
 move-binary-format = { path = "vendor/move-binary-format" }
 move-core-types = { path = "vendor/move-core-types" }
 enum-compat-util = { path = "vendor/enum-compat-util" }
 move-proc-macros = { path = "vendor/move-proc-macros" }
 move-abstract-interpreter = { path = "vendor/move-abstract-interpreter" }
+# Batch 2 (§6.2.1.6: bytecode verifier, this scaffold + follow-up vendor commit):
+move-bytecode-verifier = { path = "vendor/move-bytecode-verifier" }
+move-borrow-graph = { path = "vendor/move-borrow-graph" }
+move-bytecode-verifier-meter = { path = "vendor/move-bytecode-verifier-meter" }
+move-vm-config = { path = "vendor/move-vm-config" }
+move-abstract-stack = { path = "vendor/move-abstract-stack" }
+move-regex-borrow-graph = { path = "vendor/move-regex-borrow-graph" }
+move-command-line-common = { path = "vendor/move-command-line-common" }
+move-symbol-pool = { path = "vendor/move-symbol-pool" }

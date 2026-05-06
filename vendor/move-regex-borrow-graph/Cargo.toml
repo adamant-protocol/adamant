@@ -1,0 +1,24 @@
+[package]
+name = "move-regex-borrow-graph"
+description = "Placeholder for Sui-Move's move-regex-borrow-graph crate (Batch 2; regex-based borrow graph for reference safety on regex types), vendored per whitepaper §6.2.1.6 (mainnet-v1.66.2) as a transitive dependency of move-bytecode-verifier. Actual upstream code lands in a follow-up commit per vendor/README.md."
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+repository = "https://github.com/MystenLabs/sui"
+authors = ["Sui contributors (vendored by Adamant)"]
+publish = false
+
+# Lint posture for vendored upstream code.
+# `unsafe_code` is set per-crate based on empirical upstream
+# inspection (forbid for crates without unsafe; allow for crates
+# carrying upstream unsafe blocks per SECURITY.md "Vendored
+# upstream surface").
+# Clippy lints are deferred to upstream's CI: running our
+# workspace clippy posture against byte-identical upstream code
+# produces noise rather than signal. Style lints belong in
+# upstream's process; we trust the tag.
+[lints.rust]
+unsafe_code = "forbid"  # matches upstream's own `#![forbid(unsafe_code)]` in src/lib.rs
+
+[lints.clippy]
+all = "allow"

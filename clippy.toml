@@ -107,6 +107,40 @@
 # move to versions that match Sui's pins. Tracked in CONTRIBUTING.md
 # "Verifications on record" and in SECURITY.md "Vendored upstream
 # surface".
+#
+# === Allowlist rationale: Sui-Move bytecode-verifier ecosystem skew ===
+#
+# Vendoring Sui-Move's `move-bytecode-verifier` and its seven
+# transitive vendored crates at `mainnet-v1.66.2` (whitepaper
+# §6.2.1.6, see vendor/README.md and SECURITY.md "Vendored upstream
+# surface — Batch 2") brings nine new generic workspace dependencies
+# into the tree (`petgraph`, `datatest-stable`, `colored`,
+# `dirs-next`, `packed_struct`, `sha2`, `vfs`, `walkdir`, `phf`).
+# Several of these have transitive dependencies whose pins differ
+# from versions already in the workspace (RustCrypto generation
+# skew, getrandom/rand-tree skew, etc.), creating new
+# multiple_crate_versions duplicates beyond those listed above.
+#
+# **Status at this scaffold commit: entries TBD.** The exact set of
+# new duplicates is empirically determined by `cargo build
+# --workspace` after the actual upstream source-file copy lands in
+# the follow-up vendor commit. This rationale block is in place at
+# scaffold so the entries can be added in the same commit they are
+# discovered, with no further policy framing required.
+#
+# **Conservative estimate at scaffold time:** 5–10 new entries.
+# Likely candidates: a third `digest` / `block-buffer` /
+# `crypto-common` / `signature` line via `sha2 0.9.3` (Sui's pin
+# predates the RustCrypto 0.10 split); `petgraph`'s tree of
+# `fixedbitset`, `indexmap`, `hashbrown` may pin versions different
+# from those already in scope.
+#
+# **Revisit signal (single, applies to all entries added in the
+# vendor commit):** remove the relevant entries when bumping the
+# vendored Sui release tag brings the duplicates into alignment
+# with our tree, or when our own deps move to versions that match
+# Sui's pins. Same posture as the existing two Sui-Move skew
+# blocks above.
 
 allowed-duplicate-crates = [
     "cpufeatures",

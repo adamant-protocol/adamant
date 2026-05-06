@@ -130,16 +130,23 @@ The two named categories of `unsafe` in this workspace are:
 2. **Vendored containment** — Sui-Move crates, carrying upstream
    invariants pinned at the vendored tag. Documented below.
 
-### Vendored crates
-
-All five crates below are vendored from the same Sui release —
-**`mainnet-v1.66.2`**, commit
+All vendored crates in both batches below are sourced from the
+same Sui release — **`mainnet-v1.66.2`**, commit
 `a9a6825eaf6273cc819ee3bcf65fd4909f7624a9`, released 25 February
-2026 — chosen per the eight-week-cushion policy in
-`vendor/README.md`. Each crate's `vendor/<crate>/PROVENANCE.md`
-records the tarball SHA-256, vendoring date, and any local
-modifications (limited to `Cargo.toml` workspace-integration
-adjustments; no `.rs` file is modified in any vendored crate).
+2026, tarball SHA-256
+`ff223ce3f08fb36d0e0daf0566cec917d97d987242f7709cd2a89c72826a78ba`
+— chosen per the eight-week-cushion policy in `vendor/README.md`.
+Each crate's `vendor/<crate>/PROVENANCE.md` records the tarball
+hash, vendoring date, and any local modifications (limited to
+`Cargo.toml` workspace-integration adjustments and the targeted
+upstream-marker patches enumerated per crate; no semantic source
+modifications in any vendored crate).
+
+### Vendored crates — Batch 1 (Phase 5 §6.2.1.4–§6.2.1.5: bytecode format)
+
+The five crates in this batch were vendored in commit `4164e7b`
+(5 May 2026), unblocking the AdamantBytecode extension types
+(§6.2.1.4) and bytecode wire encoding (§6.2.1.5) deliverables.
 
 | Crate | Source path within Sui | Lint exceptions | Audit notes |
 |-------|------------------------|-----------------|-------------|
@@ -149,10 +156,75 @@ adjustments; no `.rs` file is modified in any vendored crate).
 | `move-proc-macros` | `external-crates/move/crates/move-proc-macros` | None — `[lints] workspace = true` | 113 LOC proc-macro crate. Pins `syn = "2"` directly (not via workspace inheritance) while the rest of Sui's tree uses `syn = "1.0.64"`; both major versions coexist in the lockfile. Unsafe-free. |
 | `move-abstract-interpreter` | `external-crates/move/crates/move-abstract-interpreter` | None — `[lints] workspace = true` | 601 LOC abstract-interpretation framework. Zero runtime dependencies (only `itertools` as dev-dep). Unsafe-free. |
 
-The unsafe surface inherited from this vendoring is bounded to
+The unsafe surface inherited from Batch 1 is bounded to
 `move-core-types::identifier`'s two usages. The remaining four
-vendored crates inherit `unsafe_code = "forbid"` from the
+Batch 1 crates inherit `unsafe_code = "forbid"` from the
 workspace lint table.
+
+### Vendored crates — Batch 2 (Phase 5 §6.2.1.6: bytecode verifier)
+
+The eight crates in this batch are being vendored to unblock the
+Adamant-specific validator additions (§6.2.1.6). At this scaffold
+commit the workspace plumbing — `workspace.members` entries,
+`workspace.dependencies` pins matching Sui's at the same release
+tag, placeholder `vendor/<crate>/Cargo.toml` and `PROVENANCE.md`
+files — is in place; the actual upstream source-file copy lands
+in the follow-up vendor commit per `vendor/README.md`.
+
+The eight-week-cushion policy is already satisfied by the same
+release-tag selection that governed Batch 1 (ten weeks elapsed at
+that vendoring; further by the time Batch 2 lands).
+
+| Crate | Source path within Sui | Lint exceptions | Audit notes |
+|-------|------------------------|-----------------|-------------|
+| `move-bytecode-verifier` | `external-crates/move/crates/move-bytecode-verifier` | `unsafe_code = "forbid"` (matches upstream `#![forbid(unsafe_code)]` in src/lib.rs) | Primary crate of this batch. Source not yet copied; vendor commit follows. |
+| `move-borrow-graph` | `external-crates/move/crates/move-borrow-graph` | `unsafe_code = "forbid"` (matches upstream) | Direct dep of `move-bytecode-verifier`. Borrow-graph data structure for reference safety. Source not yet copied. |
+| `move-bytecode-verifier-meter` | `external-crates/move/crates/move-bytecode-verifier-meter` | `unsafe_code = "forbid"` | Direct dep of `move-bytecode-verifier`. Metering trait surface for verifier resource limits. Source not yet copied. |
+| `move-vm-config` | `external-crates/move/crates/move-vm-config` | `unsafe_code = "forbid"` | Direct dep of `move-bytecode-verifier`; transitively required by `move-bytecode-verifier-meter`. VM configuration types. Source not yet copied. |
+| `move-abstract-stack` | `external-crates/move/crates/move-abstract-stack` | `unsafe_code = "forbid"` | Direct dep of `move-bytecode-verifier`. Space-efficient abstract stack for verifier passes. Source not yet copied. |
+| `move-regex-borrow-graph` | `external-crates/move/crates/move-regex-borrow-graph` | `unsafe_code = "forbid"` (matches upstream) | Direct dep of `move-bytecode-verifier`. Regex-based borrow graph for reference safety on regex types. Source not yet copied. |
+| `move-command-line-common` | `external-crates/move/crates/move-command-line-common` | `unsafe_code = "forbid"` | **Transitive via `move-regex-borrow-graph`.** Brings six new generic transitive dependencies into the workspace (`colored`, `dirs-next`, `packed_struct`, `sha2`, `vfs`, `walkdir`) — these are not directly required by the verifier and enter the audit surface only because Sui's `move-regex-borrow-graph` declares this dep. See "Transitive generic-dependency note" below. Source not yet copied. |
+| `move-symbol-pool` | `external-crates/move/crates/move-symbol-pool` | `unsafe_code = "allow"` | **Transitive via `move-command-line-common`.** Carries upstream `unsafe` (string-interning, servo/string-cache pattern). Same lint posture as `move-core-types` and `adamant-crypto-blst-extra`. Brings `phf` as an additional generic transitive dep (also via `move-command-line-common`'s tree, not directly used by the verifier — see note below). Source not yet copied. |
+
+The unsafe surface inherited from Batch 2 will be bounded to
+`move-symbol-pool` (string-interning pattern) once the source is
+copied in. The other seven Batch 2 crates inherit
+`unsafe_code = "forbid"` from upstream's own declarations and
+the workspace lint table.
+
+#### Transitive generic-dependency note (Batch 2)
+
+Of the nine new generic workspace dependencies introduced by
+Batch 2, two are required directly on the bytecode-verification
+path — `petgraph` (graph algorithms in dependency-cycle and
+borrow-graph passes; direct dep of `move-bytecode-verifier` and
+`move-regex-borrow-graph`) and `datatest-stable`
+(`move-regex-borrow-graph` dev-dep for a `harness = false` test
+binary).
+
+The remaining seven (`colored`, `dirs-next`, `packed_struct`,
+`phf`, `sha2`, `vfs`, `walkdir`) enter the audit surface as
+**transitive dependencies of `move-command-line-common` and
+`move-symbol-pool`** rather than as crates the bytecode verifier
+directly requires. This is recorded explicitly because the audit
+posture distinguishes between "deps we chose because the verifier
+needs them" and "deps we inherited because Sui's
+`move-regex-borrow-graph` happens to depend on the
+`move-command-line-common` CLI/dev-tooling crate." A future audit
+reading SECURITY.md should understand that, for example, `sha2`
+is in our tree because Sui's `move-command-line-common` uses it
+for source-file fingerprinting in dev tooling — not for any
+consensus-critical hashing path. (Adamant's consensus hashing
+remains locked to `sha3` per whitepaper §3.3.)
+
+The `clippy.toml` `allowed-duplicate-crates` allowlist will gain
+entries at the vendor commit when `cargo build --workspace`
+empirically surfaces the multi-version duplicates introduced by
+the Batch 2 dep tree. Conservative estimate at scaffold time:
+5–10 new entries with the same revisit-signal pattern as the
+existing Sui-Move skew section above. The rationale block in
+`clippy.toml` is already in place at this scaffold; the entries
+themselves are filled in at the vendor commit.
 
 ## RustCrypto ecosystem skew
 
