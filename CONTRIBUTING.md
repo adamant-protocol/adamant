@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Eleven confirmed instances during Phases
+sources before proceeding. Fifteen confirmed instances during Phases
 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -296,6 +296,110 @@ sources before proceeding. Eleven confirmed instances during Phases
   (bytecode operands appear inside Move binary modules; BCS-encoded
   values appear in transaction arguments and on-chain typed
   values) (commit 83bb1e9).
+- **Privacy byte storage location** (whitepaper 6.2.1.3) — the
+  Phase 5 validator-rules deliverable proposal surfaced that
+  §6.2.1.3 specified privacy annotations as "appended to
+  Sui-Move's standard function definition layout," implying a
+  per-function field on Sui-Move's `FunctionDefinition`. Empirical
+  investigation of vendored Sui-Move (at
+  `vendor/move-binary-format/src/file_format.rs:529-553`) found
+  that `FunctionDefinition` has fields exactly: `function`,
+  `visibility`, `is_entry`, `acquires_global_resources`, `code` —
+  no extension hook. Adding a privacy-byte field would require
+  patching vendored Sui-Move, contradicting §6.2.1.1's
+  strict-superset commitment and the byte-faithfulness audit
+  anchor established at the wire encoding deliverable. Without
+  resolution, the implementation would have either patched the
+  vendored binary format (regressing the audit anchor) or silently
+  invented a workaround — exactly the failure mode the discipline
+  exists to prevent. Resolved by amending §6.2.1.3: privacy
+  annotations move to a module-level metadata entry
+  `b"adamant.privacy"` whose value is the BCS encoding of
+  `Vec<(FunctionDefinitionIndex, u8)>`, matching the pattern
+  Rule 1 uses for `b"adamant.mutability"`. `FunctionDefinition`
+  stays inherited from Sui-Move unchanged (commit 804d9db).
+- **Bounded-loops algorithm undefined** (whitepaper 6.2.1.6
+  Rule 8) — the same Phase 5 validator-rules deliverable proposal
+  surfaced that §6.2.1.6 Rule 8 specified "the verifier uses
+  Sui-Move's existing loop-bound analysis as a starting point and
+  tightens it: any loop whose bound is not provable is rejected."
+  Empirical investigation of vendored Sui-Move (at
+  `vendor/move-bytecode-verifier/src/loop_summary.rs:29`) found
+  that the named module implements Tarjan's loop reducibility —
+  CFG structural analysis (back-edge identification, DFS spanning
+  tree) — and does not bound iteration counts. There is no
+  upstream loop-bound analysis to extend. Without resolution, the
+  implementation would have either invented a bound algorithm
+  silently (likely incomplete or undecidable in practice for
+  adversarial bytecode) or shipped an incorrect static check.
+  Resolved by amending §6.2.1.6 Rule 8: drop static loop-bound
+  analysis at verification time; the gas budget at runtime
+  carries the determinism guarantee already specified at §6.2.4
+  ("All loops must have statically-bounded iteration counts or
+  run within a gas budget that bounds them dynamically"). Rule 8
+  becomes a no-op at deployment. The amendment text explicitly
+  acknowledges the original drafting error rather than silently
+  revising — same audit-trail honesty as the §6.2.1.4
+  register-vs-stack correction (commit 804d9db).
+- **Dynamic-field operations enumeration** (whitepaper 6.2.1.6
+  Rule 6) — the same Phase 5 validator-rules deliverable proposal
+  surfaced that §6.2.1.6 Rule 6 specified "Sui-Move's
+  dynamic-field operations are restricted" without pinning which
+  `(module_address, module_name, function_name)` tuples
+  constitute "dynamic-field operations." Sui exposes dynamic-field
+  functionality across two standard library modules —
+  `0x2::dynamic_field` and `0x2::dynamic_object_field` — each
+  with multiple functions (`add`, `borrow`, `borrow_mut`,
+  `exists_`, `exists_with_type`, `remove`, etc.). Without an
+  explicit specification, the implementation would have made a
+  silent consensus-critical choice about which Sui standard
+  library calls trigger the restriction — exactly the failure
+  mode the discipline exists to prevent. Resolved by amending
+  §6.2.1.6 Rule 6: pin the rule's scope at the module level —
+  calls to functions whose target module address is `0x2` and
+  whose module name is `dynamic_field` or `dynamic_object_field`.
+  Pinning at the module level (rather than enumerating individual
+  function names) ensures future Sui standard library additions
+  to those modules are automatically captured by the rule without
+  further spec amendment (commit 804d9db).
+- **Cross-module privacy consistency under upgrades** (whitepaper
+  6.2.1.6 Rule 3, with supporting amendment to 6.4.3) — the same
+  Phase 5 validator-rules deliverable proposal surfaced that
+  §6.2.1.6 Rule 3 specified "the verifier statically checks the
+  entire call graph reachable from each public function" without
+  addressing how cross-module calls verify against modules whose
+  annotations might change post-deployment. Three related
+  sub-gaps surfaced: (a) for cross-module calls the deploy-time
+  verifier sees the deploying module but consults dependency
+  modules from chain state, raising the question of whether
+  deploy-time-only checking is sufficient; (b) once loaded,
+  dependency modules might be upgraded later, invalidating the
+  deploy-time check; (c) the AVM must enforce privacy at runtime
+  regardless because shielded execution structurally requires
+  shielded context (proof generation infrastructure, encrypted
+  operand stack), so a runtime check is unavoidable. Without
+  resolution, the implementation would have silently chosen one
+  of (i) runtime-only enforcement (giving up the static
+  deployer-feedback layer), (ii) deploy-time-only (leaving
+  runtime mismatches uncovered when upgrades cause staleness), or
+  (iii) restricting Rule 3 to in-module call graphs (defeating
+  the purpose of static cross-module privacy verification).
+  Resolved by amending §6.2.1.6 Rule 3 with explicit
+  defense-in-depth framing: runtime enforcement is the
+  consensus-binding mechanism (the AVM aborts privacy-mismatched
+  calls at the call boundary regardless of deploy-time
+  verification); deploy-time static check is the deployer-feedback
+  and gas-trap-prevention layer. The deploy-time guarantee is
+  made durable across upgrades by a supporting amendment to
+  §6.4.3 adding privacy annotations on public functions to the
+  upgrade-compatibility contract: `#[transparent]` and
+  `#[shielded]` cannot change across upgrades, so dependent
+  modules deployed against an upstream module's privacy
+  annotations can rely on those annotations remaining stable. The
+  §6.4.3 amendment is itself not a contradiction-resolution but a
+  strengthening constraint that closes the gap Rule 3 would
+  otherwise leave open across the deployed module's lifetime
+  (commit 804d9db).
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
