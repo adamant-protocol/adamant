@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Fifteen confirmed instances during Phases
+sources before proceeding. Nineteen confirmed instances during Phases
 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -400,6 +400,122 @@ sources before proceeding. Fifteen confirmed instances during Phases
   strengthening constraint that closes the gap Rule 3 would
   otherwise leave open across the deployed module's lifetime
   (commit 804d9db).
+- **Module deserializer architecture** (whitepaper 6.2.1.1,
+  6.2.1.2, 6.2.1.8) — the Phase 5 fifth deliverable's Wave 3b
+  proposal investigation surfaced an integration gap between the
+  language-level "strict superset" claim of §6.2.1.1 and the
+  scope of the vendored Sui-Move crates from Phase 5/4 (commit
+  e6ca254). Empirical reading of vendored Sui-Move:
+  `vendor/move-binary-format/src/deserializer.rs:1717` is a
+  closed-match opcode dispatch, with line 2112's `_ =>
+  Err(... UNKNOWN_OPCODE)` rejecting any byte outside Sui's
+  `0x01..=0x56` range. Adamant's reserved extension range
+  `0x80..=0x90` (per §6.2.1.4 and the AdamantOpcodeKind type)
+  falls into the UNKNOWN_OPCODE bucket — Sui's deserializer
+  rejects modules containing Adamant extension opcodes outright.
+  Sui's per-instruction verifier passes (StackUsageVerifier,
+  type_safety, locals_safety, reference_safety, control_flow,
+  InstructionConsistency) likewise use exhaustive matches over
+  Sui's `Bytecode` enum, with no representation for Adamant
+  extensions. Phase 5/3's wire encoding (commit 0d88e8e) was
+  function-body-level only and never integrated with the
+  CompiledModule deserializer. The strict-superset claim was
+  correct at the language level (every Sui-Move-respecting
+  Adamant module is shape-equivalent to a Sui module) but the
+  vendored crates handle Sui-base only; a conforming
+  implementation needs an Adamant-native deserializer and a
+  projection mechanism to feed the Sui-base subset into Sui's
+  verifier passes. The Wave 3a wrapper slipped past this gap
+  because every Wave 3a fixture used pure-Sui bytecode. Without
+  resolution, the implementation would have either patched
+  vendored Sui-Move to recognise Adamant extensions (regressing
+  the byte-faithfulness audit anchor established at commit
+  4164e7b) or silently produced an integration that rejected
+  Adamant modules at the deserialize boundary — exactly the
+  failure mode the discipline exists to prevent. Resolved by
+  amending §6.2.1.1 to distinguish the language-level superset
+  property from the vendored-crate scope (cross-referencing the
+  new §6.2.1.8); amending §6.2.1.2 to remove stale per-
+  FunctionDefinition privacy-annotation-byte text (privacy
+  annotations were already relocated to module-level metadata in
+  commit 804d9db); and adding new §6.2.1.8 ("Module deserializer
+  and verifier-projection architecture") pinning the
+  Adamant-native deserializer (delegating to vendored Sui logic
+  for Sui-base instructions and module-level structure; using
+  §6.2.1.5 wire encoding for extensions; rejecting non-canonical
+  encodings), the Sui-projection mechanism (one-for-one
+  substitution of extension instructions with `Bytecode::Nop`
+  per `vendor/move-binary-format/src/file_format.rs:1682` —
+  opcode `0x28`, (0,0) stack effect, already idiomatic in Sui's
+  own test fixtures per
+  `vendor/move-binary-format/src/unit_tests/binary_tests.rs:29`),
+  the rationale for Nop substitution over alternatives
+  (stripping requires consensus-critical offset rewriting on
+  branch targets; per-function exclusion surrenders verifier
+  coverage on the highest-value functions), what Sui's verifier
+  proves on the projection (over the Sui-base subset only) and
+  what it does not prove (per-instruction semantics of Adamant
+  extensions, deferred to §6.2.1.6 rules and the AVM runtime per
+  §6.2.2), and the five-step deployment-validator pipeline
+  (Adamant-native deserialize, canonical-encoding round-trip,
+  Sui-projection construction, inherited Sui verifier,
+  Adamant-specific rules) (commit 61cec44).
+- **`GenerateProof` and `VerifyProof` operand-stack pop counts
+  under-specified** (whitepaper 6.2.1.4) — the same Wave 3b
+  investigation read per-extension stack effects empirically
+  against §6.2.1.4 and surfaced that the spec text said "Pops
+  circuit inputs from the stack; pushes a `Witness` value" for
+  `GenerateProof` and "Pops `Witness` and public inputs from the
+  stack; pushes a `bool`" for `VerifyProof` without enumerating
+  the pop count. The count is parametric in the circuit signature
+  resolved through the operand's `CircuitId`; Sui's
+  `StackUsageVerifier` would need either an invented count or a
+  signature-lookup mechanism the spec did not pin. Without
+  resolution, the implementation would have either invented a
+  count silently or deferred to a circuit-signature lookup the
+  spec did not pin — exactly the failure mode the discipline
+  exists to prevent. Resolved by amending §6.2.1.4: stack
+  effects for these two extensions are explicitly parametric in
+  the circuit signature, mirroring how Sui-Move's `Call` stack
+  effect is parametric in its `FunctionHandle`'s signature. The
+  circuit's input arity and per-input types (`GenerateProof`)
+  and the public-input arity and types (`VerifyProof`) are
+  determined by the circuit signature; circuit signature
+  resolution itself stays deferred to §7 (privacy layer) per
+  the encoding/construction split established in §6.0.7
+  (commit 61cec44).
+- **`RecursiveVerify` operand-stack pop count under-specified**
+  (whitepaper 6.2.1.4) — same shape as the seventeenth instance,
+  applied to the recursive circuit's public-input arity. The
+  spec text said "Pops the proof and the public inputs from the
+  stack; pushes a `bool`" without enumerating the public-input
+  count, which is parametric in the recursive circuit's signature
+  per §8.5. Without resolution, same silent-choice failure mode.
+  Resolved by amending §6.2.1.4 with parametric framing parallel
+  to the seventeenth instance's resolution; the recursive
+  circuit's public-input arity is resolved per §8.5
+  (commit 61cec44).
+- **`InvokeShielded` and `InvokeTransparent` reference-safety
+  semantics under-specified** (whitepaper 6.2.1.4) — the same
+  Wave 3b investigation surfaced that §6.2.1.4 specified "Stack
+  effect matches `Call`" for `InvokeShielded` and
+  `InvokeTransparent` without addressing reference-safety
+  semantics. Sui-Move's `Call` performs borrow-graph updates when
+  its signature contains references (per
+  `vendor/move-bytecode-verifier/src/reference_safety/mod.rs`);
+  the Adamant invokes presumably need the same treatment when
+  their target function's signature includes reference parameters
+  or returns, but the spec did not pin this. Without resolution,
+  the implementation would have silently chosen whether
+  borrow-graph updates apply to these extensions, leaving a
+  verifier-vs-runtime drift surface. Resolved by amending
+  §6.2.1.4 to make reference-safety semantics identical to Sui's
+  `Call` for the same signature shape: when the target function's
+  signature contains reference parameters or returns, the
+  borrow-graph effect of `InvokeShielded` and `InvokeTransparent`
+  is identical to `Call`; the verifier and AVM runtime treat
+  reference inputs and outputs of these instructions exactly as
+  they would for an inherited `Call` (commit 61cec44).
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
