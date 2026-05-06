@@ -88,7 +88,9 @@ pub use bytecode_wire::{
     deserialize_function_body, deserialize_function_body_from_cursor, serialize_function_body,
     DeserializeConfig, DeserializeError, SerializeError,
 };
-pub use module::{AdamantCodeUnit, AdamantCompiledModule, AdamantFunctionDefinition};
+pub use module::{
+    AdamantCodeUnit, AdamantCompiledModule, AdamantFunctionDefinition, AdamantToSuiConversionError,
+};
 pub use module_wire::{
     adamant_deserialize, adamant_serialize, AdamantDeserializeError, AdamantSerializeError,
 };

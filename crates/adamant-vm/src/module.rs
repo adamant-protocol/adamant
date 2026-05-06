@@ -58,11 +58,11 @@
 //! with stray extensions.
 
 use move_binary_format::file_format::{
-    AddressIdentifierPool, ConstantPool, DatatypeHandle, EnumDefInstantiation, EnumDefinition,
-    FieldHandle, FieldInstantiation, FunctionHandle, FunctionHandleIndex, FunctionInstantiation,
-    IdentifierPool, ModuleHandle, ModuleHandleIndex, SignatureIndex, SignaturePool,
-    StructDefInstantiation, StructDefinition, StructDefinitionIndex, VariantHandle,
-    VariantInstantiationHandle, VariantJumpTable, Visibility,
+    AddressIdentifierPool, CodeUnit, CompiledModule, ConstantPool, DatatypeHandle,
+    EnumDefInstantiation, EnumDefinition, FieldHandle, FieldInstantiation, FunctionDefinition,
+    FunctionHandle, FunctionHandleIndex, FunctionInstantiation, IdentifierPool, ModuleHandle,
+    ModuleHandleIndex, SignatureIndex, SignaturePool, StructDefInstantiation, StructDefinition,
+    StructDefinitionIndex, VariantHandle, VariantInstantiationHandle, VariantJumpTable, Visibility,
 };
 use move_core_types::metadata::Metadata;
 
@@ -250,11 +250,10 @@ impl AdamantCompiledModule {
     /// contains an [`Adamant`-variant][BytecodeInstruction::Adamant]
     /// instruction per §6.2.1.4.
     ///
-    /// Used by the future `to_sui_module` conversion (Phase 5/5a
-    /// step 5) to refuse conversion when extensions are present,
-    /// and by test-time cross-validation per §6.2.1.8 to gate
-    /// which fixtures may be cross-validated against the vendored
-    /// Sui reference implementation.
+    /// Used by [`Self::to_sui_module`] to refuse conversion when
+    /// extensions are present, and by test-time cross-validation
+    /// per §6.2.1.8 to gate which fixtures may be cross-validated
+    /// against the vendored Sui reference implementation.
     #[must_use]
     pub fn contains_adamant_extensions(&self) -> bool {
         self.function_defs.iter().any(|fd| {
@@ -266,7 +265,157 @@ impl AdamantCompiledModule {
             })
         })
     }
+
+    /// Convert this `AdamantCompiledModule` to Sui-Move's
+    /// [`CompiledModule`] for test-time cross-validation against
+    /// the vendored Sui reference implementation per §6.2.1.8.
+    ///
+    /// The conversion is gated on
+    /// [`Self::contains_adamant_extensions`] returning `false` —
+    /// modules containing Adamant extensions are explicitly
+    /// refused with [`AdamantToSuiConversionError::ContainsAdamantExtensions`]
+    /// rather than silently dropping or substituting the
+    /// extension instructions, because that would produce a
+    /// misleading "equivalence" result for near-pure-Sui modules
+    /// with stray extensions.
+    ///
+    /// All non-`function_defs` fields are reused unchanged (they
+    /// are already Sui's types per the parallel-struct pattern).
+    /// The `function_defs` projection rewrites each
+    /// [`AdamantFunctionDefinition`] to a Sui [`FunctionDefinition`]
+    /// and each [`AdamantCodeUnit`] to a Sui [`CodeUnit`] by
+    /// unwrapping every `BytecodeInstruction::Inherited(b)` to
+    /// `b`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdamantToSuiConversionError::ContainsAdamantExtensions`]
+    /// reporting the first offending function index and
+    /// instruction offset (lowest function index, lowest offset
+    /// within that function) if any function body contains an
+    /// Adamant-variant instruction.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a function-def index or body-instruction offset
+    /// exceeds `u16::MAX`. Sui-Move's binary format precludes both
+    /// (`FUNCTION_HANDLE_INDEX_MAX = 65535`,
+    /// `BYTECODE_INDEX_MAX = 65535`); any module that came through
+    /// [`crate::adamant_deserialize`] respects those bounds, so
+    /// this branch is unreachable for inputs the public pipeline
+    /// produces.
+    pub fn to_sui_module(&self) -> Result<CompiledModule, AdamantToSuiConversionError> {
+        let mut function_defs = Vec::with_capacity(self.function_defs.len());
+        for (fd_idx, fd) in self.function_defs.iter().enumerate() {
+            let code = match &fd.code {
+                None => None,
+                Some(code_unit) => {
+                    let mut sui_code = Vec::with_capacity(code_unit.code.len());
+                    for (instr_idx, instr) in code_unit.code.iter().enumerate() {
+                        match instr {
+                            BytecodeInstruction::Inherited(b) => sui_code.push(b.clone()),
+                            BytecodeInstruction::Adamant(_) => {
+                                // Cast safety: Sui's binary format
+                                // bounds function-def count and
+                                // body-instruction count to u16
+                                // (`FUNCTION_HANDLE_INDEX_MAX = 65535`,
+                                // `BYTECODE_INDEX_MAX = 65535`); this
+                                // module came through the
+                                // deserializer which enforces the
+                                // bounds. `try_from` makes the bound
+                                // explicit.
+                                let function_index = u16::try_from(fd_idx).expect(
+                                    "function-def count fits u16; binary format precludes \
+                                     overflow",
+                                );
+                                let instruction_offset = u16::try_from(instr_idx).expect(
+                                    "body-instruction count fits u16; binary format precludes \
+                                     overflow",
+                                );
+                                return Err(
+                                    AdamantToSuiConversionError::ContainsAdamantExtensions {
+                                        function_index,
+                                        instruction_offset,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    Some(CodeUnit {
+                        locals: code_unit.locals,
+                        code: sui_code,
+                        jump_tables: code_unit.jump_tables.clone(),
+                    })
+                }
+            };
+            function_defs.push(FunctionDefinition {
+                function: fd.function,
+                visibility: fd.visibility,
+                is_entry: fd.is_entry,
+                acquires_global_resources: fd.acquires_global_resources.clone(),
+                code,
+            });
+        }
+        Ok(CompiledModule {
+            version: self.version,
+            publishable: self.publishable,
+            self_module_handle_idx: self.self_module_handle_idx,
+            module_handles: self.module_handles.clone(),
+            datatype_handles: self.datatype_handles.clone(),
+            function_handles: self.function_handles.clone(),
+            field_handles: self.field_handles.clone(),
+            friend_decls: self.friend_decls.clone(),
+            struct_def_instantiations: self.struct_def_instantiations.clone(),
+            function_instantiations: self.function_instantiations.clone(),
+            field_instantiations: self.field_instantiations.clone(),
+            signatures: self.signatures.clone(),
+            identifiers: self.identifiers.clone(),
+            address_identifiers: self.address_identifiers.clone(),
+            constant_pool: self.constant_pool.clone(),
+            metadata: self.metadata.clone(),
+            struct_defs: self.struct_defs.clone(),
+            function_defs,
+            enum_defs: self.enum_defs.clone(),
+            enum_def_instantiations: self.enum_def_instantiations.clone(),
+            variant_handles: self.variant_handles.clone(),
+            variant_instantiation_handles: self.variant_instantiation_handles.clone(),
+        })
+    }
 }
+
+/// Errors from [`AdamantCompiledModule::to_sui_module`].
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum AdamantToSuiConversionError {
+    /// At least one function body contains an Adamant-variant
+    /// instruction per §6.2.1.4. Reports the first offending
+    /// location (lowest function index, lowest instruction offset
+    /// within that function); subsequent extensions are not
+    /// enumerated.
+    ContainsAdamantExtensions {
+        /// Function-def index where the first extension was found.
+        function_index: u16,
+        /// Instruction offset within that function's body.
+        instruction_offset: u16,
+    },
+}
+
+impl core::fmt::Display for AdamantToSuiConversionError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ContainsAdamantExtensions {
+                function_index,
+                instruction_offset,
+            } => write!(
+                f,
+                "AdamantCompiledModule cannot be projected to Sui's CompiledModule: \
+                 function index {function_index} instruction offset {instruction_offset} \
+                 is an Adamant extension (whitepaper §6.2.1.4)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AdamantToSuiConversionError {}
 
 #[cfg(test)]
 mod tests {
@@ -415,6 +564,149 @@ mod tests {
             ..AdamantCompiledModule::default()
         };
         assert!(!m.contains_adamant_extensions());
+    }
+
+    /// `to_sui_module` round-trips a pure-Sui module through the
+    /// projection: every non-`function_defs` field is preserved by
+    /// reference-equal cloning, and a function with body
+    /// `[Inherited(Ret)]` projects to body `[Ret]`.
+    #[test]
+    fn to_sui_module_round_trips_pure_sui_function() {
+        let m = AdamantCompiledModule {
+            function_defs: vec![AdamantFunctionDefinition {
+                function: FunctionHandleIndex(0),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(AdamantCodeUnit {
+                    locals: SignatureIndex(0),
+                    code: vec![BytecodeInstruction::Inherited(Bytecode::Ret)],
+                    jump_tables: vec![],
+                }),
+            }],
+            ..AdamantCompiledModule::default()
+        };
+        let sui = m.to_sui_module().unwrap();
+        assert_eq!(sui.function_defs.len(), 1);
+        let fd = &sui.function_defs[0];
+        let body = fd.code.as_ref().unwrap().code.clone();
+        assert_eq!(body, vec![Bytecode::Ret]);
+    }
+
+    /// `to_sui_module` refuses a module with an extension and
+    /// reports the first offending function/offset (in this case
+    /// function 0, offset 1 — `Sha3_256` sits between `Ret` at
+    /// offset 0 and `Ret` at offset 2 — actually offset 1).
+    #[test]
+    fn to_sui_module_refuses_module_with_extension() {
+        use crate::bytecode::AdamantBytecode;
+        let m = AdamantCompiledModule {
+            function_defs: vec![AdamantFunctionDefinition {
+                function: FunctionHandleIndex(0),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(AdamantCodeUnit {
+                    locals: SignatureIndex(0),
+                    code: vec![
+                        BytecodeInstruction::Inherited(Bytecode::Pop),
+                        BytecodeInstruction::Adamant(AdamantBytecode::Sha3_256),
+                        BytecodeInstruction::Inherited(Bytecode::Ret),
+                    ],
+                    jump_tables: vec![],
+                }),
+            }],
+            ..AdamantCompiledModule::default()
+        };
+        let err = m.to_sui_module().unwrap_err();
+        assert_eq!(
+            err,
+            AdamantToSuiConversionError::ContainsAdamantExtensions {
+                function_index: 0,
+                instruction_offset: 1,
+            }
+        );
+    }
+
+    /// `to_sui_module` reports the LOWEST offending function-index
+    /// when multiple functions contain extensions. Pin the eager-
+    /// rejection ordering.
+    #[test]
+    fn to_sui_module_reports_first_offending_function() {
+        use crate::bytecode::AdamantBytecode;
+        let extension_fd = AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: SignatureIndex(0),
+                code: vec![
+                    BytecodeInstruction::Adamant(AdamantBytecode::Blake3),
+                    BytecodeInstruction::Inherited(Bytecode::Ret),
+                ],
+                jump_tables: vec![],
+            }),
+        };
+        let pure_fd = AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: SignatureIndex(0),
+                code: vec![BytecodeInstruction::Inherited(Bytecode::Ret)],
+                jump_tables: vec![],
+            }),
+        };
+        // Function index 0: pure. Function index 1: extension at offset 0.
+        // Function index 2: extension at offset 0. The first offending is fn 1.
+        let m = AdamantCompiledModule {
+            function_defs: vec![pure_fd, extension_fd.clone(), extension_fd],
+            ..AdamantCompiledModule::default()
+        };
+        let err = m.to_sui_module().unwrap_err();
+        assert_eq!(
+            err,
+            AdamantToSuiConversionError::ContainsAdamantExtensions {
+                function_index: 1,
+                instruction_offset: 0,
+            }
+        );
+    }
+
+    /// `to_sui_module` accepts a native function (no body) without
+    /// scanning. Native functions have `code: None`, so there are
+    /// no instructions to check; the projection produces a Sui
+    /// `FunctionDefinition` with `code: None`.
+    #[test]
+    fn to_sui_module_passes_native_function_through() {
+        let m = AdamantCompiledModule {
+            function_defs: vec![AdamantFunctionDefinition {
+                function: FunctionHandleIndex(0),
+                visibility: Visibility::Private,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: None,
+            }],
+            ..AdamantCompiledModule::default()
+        };
+        let sui = m.to_sui_module().unwrap();
+        assert!(sui.function_defs[0].code.is_none());
+    }
+
+    /// `Display` impl on `AdamantToSuiConversionError` produces a
+    /// non-empty diagnostic.
+    #[test]
+    fn conversion_error_display_is_populated() {
+        let err = AdamantToSuiConversionError::ContainsAdamantExtensions {
+            function_index: 5,
+            instruction_offset: 2,
+        };
+        let s = format!("{err}");
+        assert!(!s.is_empty());
+        assert!(s.contains("function index 5"));
+        assert!(s.contains("instruction offset 2"));
     }
 
     /// A module with multiple functions correctly returns `true`

@@ -3300,6 +3300,34 @@ mod tests {
         round_trip_module(&module);
     }
 
+    /// `SignatureToken` nesting at `SIGNATURE_TOKEN_DEPTH_MAX + 1`
+    /// is rejected with `SignatureTooDeep`. Exercises the depth
+    /// check in the iterative parser at its boundary;
+    /// [`round_trip_deep_signature_token_within_depth`] covers the
+    /// well-under-limit case.
+    ///
+    /// Constructs the byte sequence directly (`MAX+1` `VECTOR` tag
+    /// bytes followed by a `U8` terminator) and dispatches to the
+    /// private `load_signature_token` parser via the test module's
+    /// `super::*` import — the rejection happens before any
+    /// terminal token is consumed, so the byte sequence's
+    /// well-formedness past the depth check doesn't matter.
+    #[test]
+    fn signature_token_at_max_depth_plus_one_rejected() {
+        let depth = SIGNATURE_TOKEN_DEPTH_MAX + 1;
+        let mut bytes = Vec::with_capacity(depth + 1);
+        for _ in 0..depth {
+            bytes.push(SerializedType::VECTOR as u8);
+        }
+        bytes.push(SerializedType::U8 as u8);
+        let mut cursor = std::io::Cursor::new(&bytes[..]);
+        let result = load_signature_token(&mut cursor);
+        assert_eq!(
+            result.unwrap_err(),
+            AdamantDeserializeError::SignatureTooDeep
+        );
+    }
+
     /// Deeply-nested `Vector(Vector(...(U8)...))` round-trips up to
     /// `SIGNATURE_TOKEN_DEPTH_MAX - 1` (within the depth bound).
     #[test]
@@ -3622,5 +3650,387 @@ mod tests {
         let parsed = CompiledModule::deserialize_with_defaults(&adamant_bytes)
             .expect("Sui deserializes Adamant-emitted bytes");
         assert_eq!(parsed, sui_expected);
+    }
+
+    // ---- 17 extension-aware fixture round-trips (Phase 5/5a step 5) ------
+    //
+    // Each AdamantBytecode variant per §6.2.1.4 is wrapped in a
+    // single-function module and round-tripped through the
+    // module-level serialize/deserialize pipeline. Extends
+    // bytecode_wire's wire-level coverage to the module level.
+
+    /// Builds a one-function module whose body is `[extension, Ret]`.
+    /// Used by the parameterized 17-extension test.
+    fn module_with_extension(extension: crate::bytecode::AdamantBytecode) -> AdamantCompiledModule {
+        AdamantCompiledModule {
+            version: VERSION_MAX,
+            publishable: true,
+            self_module_handle_idx: ModuleHandleIndex(0),
+            module_handles: vec![ModuleHandle {
+                address: AddressIdentifierIndex(0),
+                name: IdentifierIndex(0),
+            }],
+            identifiers: vec![Identifier::new("M").unwrap(), Identifier::new("h").unwrap()],
+            address_identifiers: vec![AccountAddress::ZERO],
+            signatures: vec![Signature(vec![])],
+            function_handles: vec![FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(1),
+                parameters: SignatureIndex(0),
+                return_: SignatureIndex(0),
+                type_parameters: vec![],
+            }],
+            function_defs: vec![AdamantFunctionDefinition {
+                function: FunctionHandleIndex(0),
+                visibility: Visibility::Private,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(AdamantCodeUnit {
+                    locals: SignatureIndex(0),
+                    code: vec![
+                        BytecodeInstruction::Adamant(extension),
+                        BytecodeInstruction::Inherited(Bytecode::Ret),
+                    ],
+                    jump_tables: vec![],
+                }),
+            }],
+            ..AdamantCompiledModule::default()
+        }
+    }
+
+    /// Round-trip every Adamant extension at the module level. One
+    /// representative instance per [`AdamantOpcodeKind`] —
+    /// parameter-bearing variants get one fixed sample value
+    /// (parameter-shape coverage already lands in `bytecode_wire`).
+    #[test]
+    fn round_trip_each_extension_at_module_level() {
+        use crate::bytecode::{AdamantBytecode, CircuitId, GasDimension};
+        use move_binary_format::file_format::FunctionHandleIndex;
+
+        let extensions = [
+            AdamantBytecode::InvokeShielded(FunctionHandleIndex(0)),
+            AdamantBytecode::InvokeTransparent(FunctionHandleIndex(0)),
+            AdamantBytecode::GenerateProof(CircuitId(0)),
+            AdamantBytecode::VerifyProof(CircuitId(0)),
+            AdamantBytecode::ReleaseSubViewKey,
+            AdamantBytecode::KzgCommit,
+            AdamantBytecode::KzgVerify,
+            AdamantBytecode::RecursiveVerify,
+            AdamantBytecode::Sha3_256,
+            AdamantBytecode::Blake3,
+            AdamantBytecode::Ed25519Verify,
+            AdamantBytecode::MlDsaVerify65,
+            AdamantBytecode::MlDsaVerify87,
+            AdamantBytecode::BlsVerify,
+            AdamantBytecode::ChargeGas(GasDimension::Computation),
+            AdamantBytecode::RemainingGas(GasDimension::Storage),
+            AdamantBytecode::OutOfGas,
+        ];
+        // Sanity: 17 entries matches §6.2.1.4's extension count.
+        assert_eq!(extensions.len(), 17);
+
+        for ext in extensions {
+            let module = module_with_extension(ext.clone());
+            let mut bytes = Vec::new();
+            adamant_serialize(&module, &mut bytes)
+                .unwrap_or_else(|e| panic!("serialize failed for {ext:?}: {e}"));
+            let parsed = adamant_deserialize(&bytes)
+                .unwrap_or_else(|e| panic!("deserialize failed for {ext:?}: {e}"));
+            assert_eq!(parsed, module, "round-trip mismatch for {ext:?}");
+            assert!(
+                parsed.contains_adamant_extensions(),
+                "fixture must contain the extension"
+            );
+            // to_sui_module must refuse: the offending instruction
+            // is at function-def 0, instruction offset 0.
+            let conv = parsed.to_sui_module();
+            assert!(
+                matches!(
+                    conv,
+                    Err(
+                        crate::module::AdamantToSuiConversionError::ContainsAdamantExtensions {
+                            function_index: 0,
+                            instruction_offset: 0,
+                        }
+                    )
+                ),
+                "to_sui_module must refuse extension {ext:?}; got {conv:?}"
+            );
+        }
+    }
+
+    /// A "rich" function body that exercises multiple extensions
+    /// in a single function. 10 distinct extension instructions
+    /// in one function body, mixed with inherited ops:
+    /// `Sha3_256`, `Blake3`, `Ed25519Verify`, `MlDsaVerify65`,
+    /// `BlsVerify`, `ChargeGas`, `RemainingGas`, `OutOfGas`,
+    /// `GenerateProof`, `VerifyProof`, `InvokeShielded`.
+    #[test]
+    fn round_trip_rich_multi_extension_function_body() {
+        use crate::bytecode::{AdamantBytecode, CircuitId, GasDimension};
+        use move_binary_format::file_format::FunctionHandleIndex;
+
+        let mut module = module_with_extension(AdamantBytecode::Sha3_256);
+        // Replace the body with a richer mix.
+        module.function_defs[0].code.as_mut().unwrap().code = vec![
+            BytecodeInstruction::Adamant(AdamantBytecode::Sha3_256),
+            BytecodeInstruction::Adamant(AdamantBytecode::Blake3),
+            BytecodeInstruction::Inherited(Bytecode::Pop),
+            BytecodeInstruction::Adamant(AdamantBytecode::Ed25519Verify),
+            BytecodeInstruction::Adamant(AdamantBytecode::MlDsaVerify65),
+            BytecodeInstruction::Adamant(AdamantBytecode::BlsVerify),
+            BytecodeInstruction::Adamant(AdamantBytecode::ChargeGas(GasDimension::Computation)),
+            BytecodeInstruction::Adamant(AdamantBytecode::RemainingGas(GasDimension::Bandwidth)),
+            BytecodeInstruction::Adamant(AdamantBytecode::OutOfGas),
+            BytecodeInstruction::Adamant(AdamantBytecode::GenerateProof(CircuitId(7))),
+            BytecodeInstruction::Adamant(AdamantBytecode::VerifyProof(CircuitId(7))),
+            BytecodeInstruction::Adamant(AdamantBytecode::InvokeShielded(FunctionHandleIndex(0))),
+            BytecodeInstruction::Inherited(Bytecode::Ret),
+        ];
+        round_trip_module(&module);
+    }
+
+    // ---- Cross-validation surface expansion (more module shapes) ---------
+    //
+    // Phase 5/5a step 5 expands the bidirectional cross-validation
+    // surface beyond `minimal_pair` and `rich_pure_sui_pair` to
+    // exercise less-common module shapes against Sui's reference
+    // serializer/deserializer. Each fixture builds a paired
+    // (AdamantCompiledModule, CompiledModule) and asserts byte-
+    // identity through both encoders plus reciprocal deserialize.
+
+    /// Build a pair containing a generic struct `S<T>` and a
+    /// generic function `f<T>(): T`. Exercises the type-parameter
+    /// pool + ability-set encoding paths.
+    fn generic_pair(
+        version: u32,
+    ) -> (
+        AdamantCompiledModule,
+        move_binary_format::file_format::CompiledModule,
+    ) {
+        use move_binary_format::file_format::{
+            DatatypeTyParameter, FieldDefinition, StructDefinition, StructFieldInformation,
+            TypeSignature,
+        };
+
+        let (mut adamant, mut sui) = minimal_pair(version);
+        adamant.identifiers.push(Identifier::new("S").unwrap());
+        sui.identifiers.push(Identifier::new("S").unwrap());
+        adamant.identifiers.push(Identifier::new("f").unwrap());
+        sui.identifiers.push(Identifier::new("f").unwrap());
+        adamant.identifiers.push(Identifier::new("g").unwrap());
+        sui.identifiers.push(Identifier::new("g").unwrap());
+        adamant.signatures.push(Signature(vec![]));
+        sui.signatures.push(Signature(vec![]));
+        adamant
+            .signatures
+            .push(Signature(vec![SignatureToken::TypeParameter(0)]));
+        sui.signatures
+            .push(Signature(vec![SignatureToken::TypeParameter(0)]));
+        let dh = DatatypeHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            abilities: AbilitySet::EMPTY | move_binary_format::file_format::Ability::Drop,
+            type_parameters: vec![DatatypeTyParameter {
+                constraints: AbilitySet::EMPTY,
+                is_phantom: false,
+            }],
+        };
+        adamant.datatype_handles.push(dh.clone());
+        sui.datatype_handles.push(dh);
+        adamant.struct_defs.push(StructDefinition {
+            struct_handle: DatatypeHandleIndex(0),
+            field_information: StructFieldInformation::Declared(vec![FieldDefinition {
+                name: IdentifierIndex(2),
+                signature: TypeSignature(SignatureToken::TypeParameter(0)),
+            }]),
+        });
+        sui.struct_defs.push(StructDefinition {
+            struct_handle: DatatypeHandleIndex(0),
+            field_information: StructFieldInformation::Declared(vec![FieldDefinition {
+                name: IdentifierIndex(2),
+                signature: TypeSignature(SignatureToken::TypeParameter(0)),
+            }]),
+        });
+        let fh = FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(3),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(1),
+            type_parameters: vec![AbilitySet::EMPTY],
+        };
+        adamant.function_handles.push(fh.clone());
+        sui.function_handles.push(fh);
+        (adamant, sui)
+    }
+
+    /// Cross-validate a generic struct + generic function module:
+    /// `adamant_serialize` and Sui's serializer produce
+    /// byte-identical output across every supported version.
+    #[test]
+    fn cross_validate_generic_module_all_versions() {
+        for version in VERSION_MIN..=VERSION_MAX {
+            let (adamant, sui) = generic_pair(version);
+            let mut adamant_bytes = Vec::new();
+            adamant_serialize(&adamant, &mut adamant_bytes).unwrap();
+            let mut sui_bytes = Vec::new();
+            sui.serialize_with_version(version, &mut sui_bytes).unwrap();
+            assert_eq!(
+                adamant_bytes, sui_bytes,
+                "version {version}: byte mismatch on generic module"
+            );
+        }
+    }
+
+    /// Round-trip a generic-module fixture. Exercises the
+    /// `TypeParameter` `SignatureToken` path through deserialize.
+    #[test]
+    fn round_trip_generic_module() {
+        let (adamant, _) = generic_pair(VERSION_MAX);
+        round_trip_module(&adamant);
+    }
+
+    /// Adamant-emitted bytes for a generic module deserialize via
+    /// Sui's reference deserializer correctly. (Uses
+    /// `deserialize_no_check_bounds` because the fixture has no
+    /// metadata; default deserializer config still applies.)
+    #[test]
+    fn cross_validate_sui_deserializes_generic_module() {
+        let (adamant, sui_expected) = generic_pair(VERSION_MAX);
+        let mut adamant_bytes = Vec::new();
+        adamant_serialize(&adamant, &mut adamant_bytes).unwrap();
+        let parsed = CompiledModule::deserialize_with_defaults(&adamant_bytes)
+            .expect("Sui deserializes Adamant-emitted bytes for generic module");
+        assert_eq!(parsed, sui_expected);
+    }
+
+    /// Builds a pair containing two functions in the same module —
+    /// one public, one private — both with non-trivial bodies.
+    /// Exercises multi-function-def serialization.
+    fn multi_function_pair(
+        version: u32,
+    ) -> (
+        AdamantCompiledModule,
+        move_binary_format::file_format::CompiledModule,
+    ) {
+        let (mut adamant, mut sui) = minimal_pair(version);
+        adamant.identifiers.push(Identifier::new("alpha").unwrap());
+        sui.identifiers.push(Identifier::new("alpha").unwrap());
+        adamant.identifiers.push(Identifier::new("beta").unwrap());
+        sui.identifiers.push(Identifier::new("beta").unwrap());
+        adamant.signatures.push(Signature(vec![]));
+        sui.signatures.push(Signature(vec![]));
+        let alpha_fh = FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(0),
+            type_parameters: vec![],
+        };
+        let beta_fh = FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(2),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(0),
+            type_parameters: vec![],
+        };
+        adamant.function_handles.push(alpha_fh.clone());
+        adamant.function_handles.push(beta_fh.clone());
+        sui.function_handles.push(alpha_fh);
+        sui.function_handles.push(beta_fh);
+        adamant.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Public,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: SignatureIndex(0),
+                code: vec![
+                    BytecodeInstruction::Inherited(Bytecode::LdU64(42)),
+                    BytecodeInstruction::Inherited(Bytecode::Pop),
+                    BytecodeInstruction::Inherited(Bytecode::Ret),
+                ],
+                jump_tables: vec![],
+            }),
+        });
+        adamant.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(1),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: SignatureIndex(0),
+                code: vec![BytecodeInstruction::Inherited(Bytecode::Ret)],
+                jump_tables: vec![],
+            }),
+        });
+        sui.function_defs.push(SuiFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Public,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(CodeUnit {
+                locals: SignatureIndex(0),
+                code: vec![Bytecode::LdU64(42), Bytecode::Pop, Bytecode::Ret],
+                jump_tables: vec![],
+            }),
+        });
+        sui.function_defs.push(SuiFunctionDefinition {
+            function: FunctionHandleIndex(1),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(CodeUnit {
+                locals: SignatureIndex(0),
+                code: vec![Bytecode::Ret],
+                jump_tables: vec![],
+            }),
+        });
+        (adamant, sui)
+    }
+
+    /// Cross-validate the multi-function pair byte-for-byte against
+    /// Sui's serializer at `VERSION_MAX`.
+    #[test]
+    fn cross_validate_multi_function_module() {
+        let (adamant, sui) = multi_function_pair(VERSION_MAX);
+        let mut adamant_bytes = Vec::new();
+        adamant_serialize(&adamant, &mut adamant_bytes).unwrap();
+        let mut sui_bytes = Vec::new();
+        sui.serialize_with_version(VERSION_MAX, &mut sui_bytes)
+            .unwrap();
+        assert_eq!(adamant_bytes, sui_bytes);
+    }
+
+    /// Round-trip the multi-function pair through Adamant's
+    /// serializer + deserializer.
+    #[test]
+    fn round_trip_multi_function_module() {
+        let (adamant, _) = multi_function_pair(VERSION_MAX);
+        round_trip_module(&adamant);
+    }
+
+    /// `to_sui_module` accepts the multi-function pure-Sui fixture
+    /// and produces a `CompiledModule` that compares equal to the
+    /// hand-constructed Sui reference.
+    #[test]
+    fn to_sui_module_matches_sui_reference_for_multi_function_pair() {
+        let (adamant, sui_expected) = multi_function_pair(VERSION_MAX);
+        let projected = adamant
+            .to_sui_module()
+            .expect("pure-Sui multi-function module projects without error");
+        assert_eq!(projected, sui_expected);
+    }
+
+    /// `to_sui_module` also matches Sui's reference for the rich
+    /// pure-Sui pair (handles + signatures + constants + metadata
+    /// + function with body).
+    #[test]
+    fn to_sui_module_matches_sui_reference_for_rich_pair() {
+        let (adamant, sui_expected) = rich_pure_sui_pair(VERSION_MAX);
+        let projected = adamant
+            .to_sui_module()
+            .expect("rich pure-Sui module projects without error");
+        assert_eq!(projected, sui_expected);
     }
 }
