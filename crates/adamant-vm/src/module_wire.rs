@@ -1433,6 +1433,1298 @@ pub fn adamant_serialize(
 }
 
 // ============================================================================
+// Deserializer
+// ============================================================================
+//
+// Per whitepaper §6.2.1.8 (re-amended at commit 0de50d8), Adamant's
+// deploy-time pipeline parses module bytes via this Adamant-native
+// deserializer rather than delegating to vendored Sui-Move at
+// runtime. The implementation mirrors Sui's two-pass approach:
+// (1) read the header + table indices and validate layout;
+// (2) parse each table's content from a sub-cursor scoped to the
+// table's byte range. Function bodies dispatch to
+// [`bytecode_wire::deserialize_function_body_from_cursor`] in
+// strict mode (rejecting deprecated global-storage opcodes per
+// §6.2.1.6 Rule 5). Strict canonical decoding is the only mode:
+// trailing bytes, duplicate tables, version-feature mismatches,
+// and zero-length tables are all rejected.
+
+/// Errors from [`adamant_deserialize`].
+///
+/// Variants are kind-specific so callers can match on the
+/// offending input class for diagnostics.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum AdamantDeserializeError {
+    /// Stream ended before parsing finished.
+    UnexpectedEof,
+    /// Magic header is neither [`BinaryConstants::MOVE_MAGIC`] nor
+    /// [`BinaryConstants::UNPUBLISHABLE_MAGIC`].
+    BadMagic([u8; 4]),
+    /// Bytecode-format version (after `BinaryFlavor` decode) is
+    /// outside `[VERSION_MIN, VERSION_MAX]`.
+    UnsupportedVersion(u32),
+    /// Flavor byte is present (version ≥ 7) but is not
+    /// [`BinaryFlavor::SUI_FLAVOR`] (`0x05`).
+    UnknownFlavor(u8),
+    /// Table-kind byte does not match any known [`TableType`].
+    UnknownTableKind(u8),
+    /// A table kind appears more than once in the table-index
+    /// block.
+    DuplicateTable(TableType),
+    /// Table layout is invalid: tables overlap, leave gaps, have
+    /// zero size, or extend past the binary end.
+    BadTableLayout {
+        /// Human-readable reason for inclusion in error messages.
+        reason: &'static str,
+    },
+    /// ULEB128 sequence is malformed (overflow, non-canonical, or
+    /// terminator missing).
+    MalformedUleb128,
+    /// A pool index, count, or length exceeds its declared bound.
+    OutOfRange {
+        /// Human-readable name of the offending field.
+        kind: &'static str,
+        /// The actual offending value.
+        value: u64,
+        /// The inclusive maximum for the field's kind.
+        max: u64,
+    },
+    /// `SignatureToken` chain exceeds [`SIGNATURE_TOKEN_DEPTH_MAX`].
+    SignatureTooDeep,
+    /// A binary-format feature appears at a version that does not
+    /// support it (metadata at v < 5, enum tables at v < 7,
+    /// jump tables at v < 7).
+    VersionFeatureMismatch {
+        /// Human-readable name of the missing feature.
+        feature: &'static str,
+        /// The bytecode-format version the module declared.
+        version: u32,
+    },
+    /// Trailing bytes remain after a complete module is parsed.
+    TrailingBytes,
+    /// Inner bytecode-wire error from
+    /// [`bytecode_wire::deserialize_function_body_from_cursor`].
+    Bytecode(bytecode_wire::DeserializeError),
+    /// An identifier-pool entry's bytes do not form a valid Move
+    /// identifier per [`move_core_types::identifier::Identifier::new`].
+    InvalidIdentifier,
+    /// A function-definition byte indicated a flag bit other than
+    /// the well-defined ENTRY (0x4) or NATIVE (0x2) bits.
+    UnknownFunctionFlag(u8),
+    /// A serialized-type tag (in a [`SignatureToken`] stream) does
+    /// not correspond to any known [`SerializedType`] variant.
+    UnknownSerializedType(u8),
+    /// A struct-field-information flag is neither NATIVE nor
+    /// DECLARED.
+    UnknownStructFlag(u8),
+    /// An enum-flag byte is not DECLARED (the only variant Sui
+    /// emits).
+    UnknownEnumFlag(u8),
+    /// A jump-table flag byte is not FULL (the only variant Sui
+    /// emits).
+    UnknownJumpTableFlag(u8),
+    /// A visibility byte is not Private (0), Public (1), Friend
+    /// (3), or (at version < 5) the deprecated SCRIPT marker (2).
+    UnknownVisibility(u8),
+    /// An ability-set byte has bits outside the four defined
+    /// abilities (Copy=0x1, Drop=0x2, Store=0x4, Key=0x8).
+    InvalidAbilitySet(u8),
+}
+
+impl core::fmt::Display for AdamantDeserializeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnexpectedEof => write!(f, "unexpected end of module bytes"),
+            Self::BadMagic(magic) => {
+                write!(f, "bad magic header {magic:02x?}")
+            }
+            Self::UnsupportedVersion(v) => write!(
+                f,
+                "bytecode version {v} unsupported (only {VERSION_MIN}..={VERSION_MAX} accepted)"
+            ),
+            Self::UnknownFlavor(b) => write!(f, "unknown binary flavor byte {b:#04x}"),
+            Self::UnknownTableKind(b) => write!(f, "unknown table-kind byte {b:#04x}"),
+            Self::DuplicateTable(k) => write!(f, "duplicate table kind {k:?}"),
+            Self::BadTableLayout { reason } => write!(f, "bad table layout: {reason}"),
+            Self::MalformedUleb128 => write!(f, "malformed ULEB128 sequence"),
+            Self::OutOfRange { kind, value, max } => {
+                write!(f, "{kind} value {value} exceeds maximum {max}")
+            }
+            Self::SignatureTooDeep => {
+                write!(
+                    f,
+                    "signature-token nesting exceeds maximum depth {SIGNATURE_TOKEN_DEPTH_MAX}"
+                )
+            }
+            Self::VersionFeatureMismatch { feature, version } => write!(
+                f,
+                "feature {feature:?} not available at bytecode version {version}"
+            ),
+            Self::TrailingBytes => write!(f, "trailing bytes after module"),
+            Self::Bytecode(e) => write!(f, "function body decoding: {e}"),
+            Self::InvalidIdentifier => {
+                write!(f, "identifier-pool entry is not a valid Move identifier")
+            }
+            Self::UnknownFunctionFlag(b) => write!(f, "unknown function flag byte {b:#04x}"),
+            Self::UnknownSerializedType(b) => write!(f, "unknown serialized-type tag {b:#04x}"),
+            Self::UnknownStructFlag(b) => write!(f, "unknown struct flag byte {b:#04x}"),
+            Self::UnknownEnumFlag(b) => write!(f, "unknown enum flag byte {b:#04x}"),
+            Self::UnknownJumpTableFlag(b) => write!(f, "unknown jump-table flag byte {b:#04x}"),
+            Self::UnknownVisibility(b) => write!(f, "unknown visibility byte {b:#04x}"),
+            Self::InvalidAbilitySet(b) => write!(f, "ability-set byte {b:#04x} has unknown bits"),
+        }
+    }
+}
+
+impl std::error::Error for AdamantDeserializeError {}
+
+impl From<bytecode_wire::DeserializeError> for AdamantDeserializeError {
+    fn from(e: bytecode_wire::DeserializeError) -> Self {
+        Self::Bytecode(e)
+    }
+}
+
+// ----- Cursor primitives -----
+
+/// Returns `cursor.position()` as `usize`. The cast is safe by
+/// construction: position originates from reads of a slice of
+/// length `usize`, so it provably fits `usize` on every supported
+/// (64-bit) target.
+#[inline]
+fn cursor_position(cursor: &std::io::Cursor<&[u8]>) -> usize {
+    #[allow(clippy::cast_possible_truncation)]
+    let pos = cursor.position() as usize;
+    pos
+}
+
+/// Returns `true` when `cursor` has consumed every byte of the
+/// underlying slice.
+#[inline]
+fn cursor_at_end(cursor: &std::io::Cursor<&[u8]>) -> bool {
+    cursor_position(cursor) >= cursor.get_ref().len()
+}
+
+/// Reads a single byte. Returns `UnexpectedEof` if the cursor is at
+/// end-of-stream.
+fn read_u8(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u8, AdamantDeserializeError> {
+    use std::io::Read as _;
+    let mut buf = [0u8; 1];
+    cursor
+        .read_exact(&mut buf)
+        .map_err(|_| AdamantDeserializeError::UnexpectedEof)?;
+    Ok(buf[0])
+}
+
+/// Reads `N` little-endian bytes into a fixed-size array.
+fn read_n<const N: usize>(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<[u8; N], AdamantDeserializeError> {
+    use std::io::Read as _;
+    let mut buf = [0u8; N];
+    cursor
+        .read_exact(&mut buf)
+        .map_err(|_| AdamantDeserializeError::UnexpectedEof)?;
+    Ok(buf)
+}
+
+fn read_u32_le(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u32, AdamantDeserializeError> {
+    Ok(u32::from_le_bytes(read_n::<4>(cursor)?))
+}
+
+/// Reads a ULEB128-encoded `u64`. Mirrors Sui's
+/// [`read_uleb128_as_u64`] but maps errors to our taxonomy.
+fn read_uleb128_u64(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u64, AdamantDeserializeError> {
+    move_binary_format::file_format_common::read_uleb128_as_u64(cursor).map_err(|_| {
+        // Disambiguate EOF from malformed encoding by checking
+        // cursor position against the underlying slice length.
+        // Cast safety: position originates from reads of a slice of
+        // length `usize`; on a 64-bit target it cannot truncate.
+        #[allow(clippy::cast_possible_truncation)]
+        let pos = cursor.position() as usize;
+        if pos >= cursor.get_ref().len() {
+            AdamantDeserializeError::UnexpectedEof
+        } else {
+            AdamantDeserializeError::MalformedUleb128
+        }
+    })
+}
+
+/// Reads a ULEB128 and validates it does not exceed `max`. Returns
+/// the value as a `u64`.
+fn read_uleb128_bounded(
+    cursor: &mut std::io::Cursor<&[u8]>,
+    max: u64,
+    kind: &'static str,
+) -> Result<u64, AdamantDeserializeError> {
+    let v = read_uleb128_u64(cursor)?;
+    if v > max {
+        return Err(AdamantDeserializeError::OutOfRange {
+            kind,
+            value: v,
+            max,
+        });
+    }
+    Ok(v)
+}
+
+/// Reads a ULEB128 length and validates it does not exceed `max`.
+/// Same shape as [`read_uleb128_bounded`] but the return type is
+/// `usize` for direct use with `Vec::with_capacity` / loop bounds.
+fn read_uleb128_length(
+    cursor: &mut std::io::Cursor<&[u8]>,
+    max: u64,
+    kind: &'static str,
+) -> Result<usize, AdamantDeserializeError> {
+    let v = read_uleb128_bounded(cursor, max, kind)?;
+    // Cast safety: `v <= max <= u64::MAX`, and on supported
+    // (64-bit) targets `usize::MAX == u64::MAX`. The pool-size
+    // bounds (TABLE_INDEX_MAX = 65535, etc.) are well below
+    // `usize::MAX` on every supported target.
+    #[allow(clippy::cast_possible_truncation)]
+    let v_usize = v as usize;
+    Ok(v_usize)
+}
+
+// ----- Index / count readers (mirror serialise side) -----
+
+fn load_module_handle_index(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<ModuleHandleIndex, AdamantDeserializeError> {
+    let v = read_uleb128_bounded(cursor, MODULE_HANDLE_INDEX_MAX, "ModuleHandleIndex")?;
+    // Cast safety: bound is 65535 (`TABLE_INDEX_MAX`), fits u16.
+    #[allow(clippy::cast_possible_truncation)]
+    let idx = v as u16;
+    Ok(ModuleHandleIndex(idx))
+}
+
+fn load_datatype_handle_index(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<DatatypeHandleIndex, AdamantDeserializeError> {
+    let v = read_uleb128_bounded(cursor, DATATYPE_HANDLE_INDEX_MAX, "DatatypeHandleIndex")?;
+    #[allow(clippy::cast_possible_truncation)]
+    let idx = v as u16;
+    Ok(DatatypeHandleIndex(idx))
+}
+
+fn load_function_handle_index(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<FunctionHandleIndex, AdamantDeserializeError> {
+    let v = read_uleb128_bounded(cursor, FUNCTION_HANDLE_INDEX_MAX, "FunctionHandleIndex")?;
+    #[allow(clippy::cast_possible_truncation)]
+    let idx = v as u16;
+    Ok(FunctionHandleIndex(idx))
+}
+
+fn load_identifier_index(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<IdentifierIndex, AdamantDeserializeError> {
+    let v = read_uleb128_bounded(cursor, IDENTIFIER_INDEX_MAX, "IdentifierIndex")?;
+    #[allow(clippy::cast_possible_truncation)]
+    let idx = v as u16;
+    Ok(IdentifierIndex(idx))
+}
+
+fn load_address_identifier_index(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<move_binary_format::file_format::AddressIdentifierIndex, AdamantDeserializeError> {
+    let v = read_uleb128_bounded(cursor, ADDRESS_INDEX_MAX, "AddressIdentifierIndex")?;
+    #[allow(clippy::cast_possible_truncation)]
+    let idx = v as u16;
+    Ok(move_binary_format::file_format::AddressIdentifierIndex(idx))
+}
+
+fn load_signature_index(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<SignatureIndex, AdamantDeserializeError> {
+    let v = read_uleb128_bounded(cursor, SIGNATURE_INDEX_MAX, "SignatureIndex")?;
+    #[allow(clippy::cast_possible_truncation)]
+    let idx = v as u16;
+    Ok(SignatureIndex(idx))
+}
+
+fn load_struct_def_index(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<StructDefinitionIndex, AdamantDeserializeError> {
+    let v = read_uleb128_bounded(cursor, STRUCT_DEF_INDEX_MAX, "StructDefinitionIndex")?;
+    #[allow(clippy::cast_possible_truncation)]
+    let idx = v as u16;
+    Ok(StructDefinitionIndex(idx))
+}
+
+fn load_enum_def_index(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<EnumDefinitionIndex, AdamantDeserializeError> {
+    let v = read_uleb128_bounded(cursor, ENUM_DEF_INDEX_MAX, "EnumDefinitionIndex")?;
+    #[allow(clippy::cast_possible_truncation)]
+    let idx = v as u16;
+    Ok(EnumDefinitionIndex(idx))
+}
+
+fn load_enum_def_inst_index(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<move_binary_format::file_format::EnumDefInstantiationIndex, AdamantDeserializeError> {
+    let v = read_uleb128_bounded(cursor, ENUM_DEF_INST_INDEX_MAX, "EnumDefInstantiationIndex")?;
+    #[allow(clippy::cast_possible_truncation)]
+    let idx = v as u16;
+    Ok(move_binary_format::file_format::EnumDefInstantiationIndex(
+        idx,
+    ))
+}
+
+fn load_field_offset(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u16, AdamantDeserializeError> {
+    let v = read_uleb128_bounded(cursor, FIELD_OFFSET_MAX, "field offset")?;
+    #[allow(clippy::cast_possible_truncation)]
+    let off = v as u16;
+    Ok(off)
+}
+
+fn load_variant_tag(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u16, AdamantDeserializeError> {
+    let v = read_uleb128_bounded(cursor, VARIANT_TAG_MAX_VALUE, "variant tag")?;
+    #[allow(clippy::cast_possible_truncation)]
+    let tag = v as u16;
+    Ok(tag)
+}
+
+fn load_type_parameter_index(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<u16, AdamantDeserializeError> {
+    let v = read_uleb128_bounded(cursor, TYPE_PARAMETER_INDEX_MAX, "type parameter index")?;
+    #[allow(clippy::cast_possible_truncation)]
+    let idx = v as u16;
+    Ok(idx)
+}
+
+// ----- Per-pool deserializers -----
+
+fn load_module_handle(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<ModuleHandle, AdamantDeserializeError> {
+    let address = load_address_identifier_index(cursor)?;
+    let name = load_identifier_index(cursor)?;
+    Ok(ModuleHandle { address, name })
+}
+
+fn load_datatype_handle(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<DatatypeHandle, AdamantDeserializeError> {
+    let module = load_module_handle_index(cursor)?;
+    let name = load_identifier_index(cursor)?;
+    let abilities = load_ability_set(cursor)?;
+    let type_parameters = load_type_parameters(cursor)?;
+    Ok(DatatypeHandle {
+        module,
+        name,
+        abilities,
+        type_parameters,
+    })
+}
+
+fn load_type_parameters(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<Vec<DatatypeTyParameter>, AdamantDeserializeError> {
+    let n = read_uleb128_length(cursor, TYPE_PARAMETER_COUNT_MAX, "type parameter count")?;
+    let mut tps = Vec::with_capacity(n);
+    for _ in 0..n {
+        tps.push(load_type_parameter(cursor)?);
+    }
+    Ok(tps)
+}
+
+fn load_type_parameter(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<DatatypeTyParameter, AdamantDeserializeError> {
+    let constraints = load_ability_set(cursor)?;
+    let phantom_byte = read_uleb128_bounded(cursor, 1, "phantom flag")?;
+    Ok(DatatypeTyParameter {
+        constraints,
+        is_phantom: phantom_byte == 1,
+    })
+}
+
+fn load_function_handle(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<FunctionHandle, AdamantDeserializeError> {
+    let module = load_module_handle_index(cursor)?;
+    let name = load_identifier_index(cursor)?;
+    let parameters = load_signature_index(cursor)?;
+    let return_ = load_signature_index(cursor)?;
+    let type_parameters = load_ability_sets(cursor)?;
+    Ok(FunctionHandle {
+        module,
+        name,
+        parameters,
+        return_,
+        type_parameters,
+    })
+}
+
+fn load_function_instantiation(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<FunctionInstantiation, AdamantDeserializeError> {
+    let handle = load_function_handle_index(cursor)?;
+    let type_parameters = load_signature_index(cursor)?;
+    Ok(FunctionInstantiation {
+        handle,
+        type_parameters,
+    })
+}
+
+fn load_field_handle(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<FieldHandle, AdamantDeserializeError> {
+    let owner = load_struct_def_index(cursor)?;
+    let field = load_field_offset(cursor)?;
+    Ok(FieldHandle { owner, field })
+}
+
+fn load_field_instantiation(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<FieldInstantiation, AdamantDeserializeError> {
+    let v = read_uleb128_bounded(cursor, FIELD_HANDLE_INDEX_MAX, "FieldHandleIndex")?;
+    #[allow(clippy::cast_possible_truncation)]
+    let handle = move_binary_format::file_format::FieldHandleIndex(v as u16);
+    let type_parameters = load_signature_index(cursor)?;
+    Ok(FieldInstantiation {
+        handle,
+        type_parameters,
+    })
+}
+
+fn load_struct_def_instantiation(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<StructDefInstantiation, AdamantDeserializeError> {
+    let def = load_struct_def_index(cursor)?;
+    let type_parameters = load_signature_index(cursor)?;
+    Ok(StructDefInstantiation {
+        def,
+        type_parameters,
+    })
+}
+
+fn load_enum_def_instantiation(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<EnumDefInstantiation, AdamantDeserializeError> {
+    let def = load_enum_def_index(cursor)?;
+    let type_parameters = load_signature_index(cursor)?;
+    Ok(EnumDefInstantiation {
+        def,
+        type_parameters,
+    })
+}
+
+fn load_variant_handle(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<VariantHandle, AdamantDeserializeError> {
+    let enum_def = load_enum_def_index(cursor)?;
+    let variant = load_variant_tag(cursor)?;
+    Ok(VariantHandle { enum_def, variant })
+}
+
+fn load_variant_instantiation_handle(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<VariantInstantiationHandle, AdamantDeserializeError> {
+    let enum_def = load_enum_def_inst_index(cursor)?;
+    let variant = load_variant_tag(cursor)?;
+    Ok(VariantInstantiationHandle { enum_def, variant })
+}
+
+fn load_address(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<AccountAddress, AdamantDeserializeError> {
+    let bytes = read_n::<{ AccountAddress::LENGTH }>(cursor)?;
+    Ok(AccountAddress::new(bytes))
+}
+
+fn load_identifier(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<move_core_types::identifier::Identifier, AdamantDeserializeError> {
+    let len = read_uleb128_length(cursor, IDENTIFIER_SIZE_MAX, "identifier size")?;
+    // Cast safety: cursor position is bounded by the underlying
+    // slice length (a `usize`).
+    #[allow(clippy::cast_possible_truncation)]
+    let pos = cursor.position() as usize;
+    let bytes = cursor.get_ref();
+    if pos + len > bytes.len() {
+        return Err(AdamantDeserializeError::UnexpectedEof);
+    }
+    let slice = &bytes[pos..pos + len];
+    cursor.set_position((pos + len) as u64);
+    let s = std::str::from_utf8(slice).map_err(|_| AdamantDeserializeError::InvalidIdentifier)?;
+    move_core_types::identifier::Identifier::new(s)
+        .map_err(|_| AdamantDeserializeError::InvalidIdentifier)
+}
+
+fn load_constant(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<move_binary_format::file_format::Constant, AdamantDeserializeError> {
+    let type_ = load_signature_token(cursor)?;
+    let len = read_uleb128_length(cursor, CONSTANT_SIZE_MAX, "constant data size")?;
+    #[allow(clippy::cast_possible_truncation)]
+    let pos = cursor.position() as usize;
+    let bytes = cursor.get_ref();
+    if pos + len > bytes.len() {
+        return Err(AdamantDeserializeError::UnexpectedEof);
+    }
+    let data = bytes[pos..pos + len].to_vec();
+    cursor.set_position((pos + len) as u64);
+    Ok(move_binary_format::file_format::Constant { type_, data })
+}
+
+fn load_metadata_entry(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<Metadata, AdamantDeserializeError> {
+    let key = load_byte_blob(cursor, METADATA_KEY_SIZE_MAX, "metadata key size")?;
+    let value = load_byte_blob(cursor, METADATA_VALUE_SIZE_MAX, "metadata value size")?;
+    Ok(Metadata { key, value })
+}
+
+fn load_byte_blob(
+    cursor: &mut std::io::Cursor<&[u8]>,
+    max: u64,
+    kind: &'static str,
+) -> Result<Vec<u8>, AdamantDeserializeError> {
+    let len = read_uleb128_length(cursor, max, kind)?;
+    #[allow(clippy::cast_possible_truncation)]
+    let pos = cursor.position() as usize;
+    let bytes = cursor.get_ref();
+    if pos + len > bytes.len() {
+        return Err(AdamantDeserializeError::UnexpectedEof);
+    }
+    let blob = bytes[pos..pos + len].to_vec();
+    cursor.set_position((pos + len) as u64);
+    Ok(blob)
+}
+
+fn load_signature(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<Signature, AdamantDeserializeError> {
+    let n = read_uleb128_length(cursor, SIGNATURE_SIZE_MAX, "signature length")?;
+    let mut tokens = Vec::with_capacity(n);
+    for _ in 0..n {
+        tokens.push(load_signature_token(cursor)?);
+    }
+    Ok(Signature(tokens))
+}
+
+/// Iterative `SignatureToken` parser using an explicit stack of
+/// "needs-children" placeholders, mirroring Sui's `load_signature_token`
+/// but using our error taxonomy. Avoids unbounded recursion on
+/// pathological (deeply-nested) inputs.
+#[allow(clippy::too_many_lines)]
+fn load_signature_token(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<SignatureToken, AdamantDeserializeError> {
+    // Each frame tracks the kind of node and how many child tokens
+    // remain to be parsed before the node can be finalised.
+    enum Frame {
+        Vector,
+        Reference,
+        MutableReference,
+        DatatypeInstantiation {
+            idx: DatatypeHandleIndex,
+            remaining: usize,
+            collected: Vec<SignatureToken>,
+        },
+    }
+
+    let mut stack: Vec<Frame> = Vec::new();
+    // Loop invariant: we always need to read and return exactly one
+    // token at the start of each iteration; that token may itself
+    // require further child tokens (pushed onto the stack), or it
+    // may be terminal and start to "collapse" the stack upward.
+    loop {
+        if stack.len() > SIGNATURE_TOKEN_DEPTH_MAX {
+            return Err(AdamantDeserializeError::SignatureTooDeep);
+        }
+        let tag = read_u8(cursor)?;
+        let mut node = match tag {
+            x if x == SerializedType::BOOL as u8 => SignatureToken::Bool,
+            x if x == SerializedType::U8 as u8 => SignatureToken::U8,
+            x if x == SerializedType::U16 as u8 => SignatureToken::U16,
+            x if x == SerializedType::U32 as u8 => SignatureToken::U32,
+            x if x == SerializedType::U64 as u8 => SignatureToken::U64,
+            x if x == SerializedType::U128 as u8 => SignatureToken::U128,
+            x if x == SerializedType::U256 as u8 => SignatureToken::U256,
+            x if x == SerializedType::ADDRESS as u8 => SignatureToken::Address,
+            x if x == SerializedType::SIGNER as u8 => SignatureToken::Signer,
+            x if x == SerializedType::VECTOR as u8 => {
+                stack.push(Frame::Vector);
+                continue;
+            }
+            x if x == SerializedType::REFERENCE as u8 => {
+                stack.push(Frame::Reference);
+                continue;
+            }
+            x if x == SerializedType::MUTABLE_REFERENCE as u8 => {
+                stack.push(Frame::MutableReference);
+                continue;
+            }
+            x if x == SerializedType::STRUCT as u8 => {
+                let idx = load_datatype_handle_index(cursor)?;
+                SignatureToken::Datatype(idx)
+            }
+            x if x == SerializedType::DATATYPE_INST as u8 => {
+                let idx = load_datatype_handle_index(cursor)?;
+                let arity = read_uleb128_length(cursor, SIGNATURE_SIZE_MAX, "instantiation arity")?;
+                if arity == 0 {
+                    SignatureToken::DatatypeInstantiation(Box::new((idx, vec![])))
+                } else {
+                    stack.push(Frame::DatatypeInstantiation {
+                        idx,
+                        remaining: arity,
+                        collected: Vec::with_capacity(arity),
+                    });
+                    continue;
+                }
+            }
+            x if x == SerializedType::TYPE_PARAMETER as u8 => {
+                let idx = load_type_parameter_index(cursor)?;
+                SignatureToken::TypeParameter(idx)
+            }
+            other => return Err(AdamantDeserializeError::UnknownSerializedType(other)),
+        };
+
+        // Collapse: walk up the stack while the top frame is
+        // satisfied by `node`.
+        loop {
+            match stack.pop() {
+                None => return Ok(node),
+                Some(Frame::Vector) => {
+                    node = SignatureToken::Vector(Box::new(node));
+                }
+                Some(Frame::Reference) => {
+                    node = SignatureToken::Reference(Box::new(node));
+                }
+                Some(Frame::MutableReference) => {
+                    node = SignatureToken::MutableReference(Box::new(node));
+                }
+                Some(Frame::DatatypeInstantiation {
+                    idx,
+                    remaining,
+                    mut collected,
+                }) => {
+                    collected.push(node);
+                    if collected.len() == remaining {
+                        node = SignatureToken::DatatypeInstantiation(Box::new((idx, collected)));
+                    } else {
+                        // Not yet complete — push the frame back
+                        // and break to read the next sibling token.
+                        stack.push(Frame::DatatypeInstantiation {
+                            idx,
+                            remaining,
+                            collected,
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn load_ability_set(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<AbilitySet, AdamantDeserializeError> {
+    let v = read_uleb128_u64(cursor)?;
+    if v > u64::from(AbilitySet::ALL.into_u8()) {
+        // Cast safety: bound check above guarantees `v <= 0x0f`
+        // (`AbilitySet::ALL.into_u8()`), which fits `u8`.
+        #[allow(clippy::cast_possible_truncation)]
+        let byte = v as u8;
+        return Err(AdamantDeserializeError::InvalidAbilitySet(byte));
+    }
+    // Cast safety: bound check above guarantees `v <= 0x0f`.
+    #[allow(clippy::cast_possible_truncation)]
+    let byte = v as u8;
+    AbilitySet::from_u8(byte).ok_or(AdamantDeserializeError::InvalidAbilitySet(byte))
+}
+
+fn load_ability_sets(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<Vec<AbilitySet>, AdamantDeserializeError> {
+    let n = read_uleb128_length(cursor, TYPE_PARAMETER_COUNT_MAX, "type parameter count")?;
+    let mut sets = Vec::with_capacity(n);
+    for _ in 0..n {
+        sets.push(load_ability_set(cursor)?);
+    }
+    Ok(sets)
+}
+
+fn load_struct_definition(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<StructDefinition, AdamantDeserializeError> {
+    let struct_handle = load_datatype_handle_index(cursor)?;
+    let flag = read_u8(cursor)?;
+    let field_information = if flag == SerializedNativeStructFlag::NATIVE as u8 {
+        StructFieldInformation::Native
+    } else if flag == SerializedNativeStructFlag::DECLARED as u8 {
+        let fields = load_field_definitions(cursor)?;
+        StructFieldInformation::Declared(fields)
+    } else {
+        return Err(AdamantDeserializeError::UnknownStructFlag(flag));
+    };
+    Ok(StructDefinition {
+        struct_handle,
+        field_information,
+    })
+}
+
+fn load_field_definitions(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<Vec<FieldDefinition>, AdamantDeserializeError> {
+    let n = read_uleb128_length(cursor, FIELD_COUNT_MAX, "field count")?;
+    let mut fields = Vec::with_capacity(n);
+    for _ in 0..n {
+        fields.push(load_field_definition(cursor)?);
+    }
+    Ok(fields)
+}
+
+fn load_field_definition(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<FieldDefinition, AdamantDeserializeError> {
+    let name = load_identifier_index(cursor)?;
+    let signature = move_binary_format::file_format::TypeSignature(load_signature_token(cursor)?);
+    Ok(FieldDefinition { name, signature })
+}
+
+fn load_enum_definition(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<EnumDefinition, AdamantDeserializeError> {
+    let enum_handle = load_datatype_handle_index(cursor)?;
+    let flag = read_u8(cursor)?;
+    if flag != SerializedEnumFlag::DECLARED as u8 {
+        return Err(AdamantDeserializeError::UnknownEnumFlag(flag));
+    }
+    let n = read_uleb128_length(cursor, VARIANT_COUNT_MAX, "variant count")?;
+    let mut variants = Vec::with_capacity(n);
+    for _ in 0..n {
+        variants.push(load_variant_definition(cursor)?);
+    }
+    Ok(EnumDefinition {
+        enum_handle,
+        variants,
+    })
+}
+
+fn load_variant_definition(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<VariantDefinition, AdamantDeserializeError> {
+    let variant_name = load_identifier_index(cursor)?;
+    let fields = load_field_definitions(cursor)?;
+    Ok(VariantDefinition {
+        variant_name,
+        fields,
+    })
+}
+
+fn load_function_definition(
+    cursor: &mut std::io::Cursor<&[u8]>,
+    version: u32,
+) -> Result<AdamantFunctionDefinition, AdamantDeserializeError> {
+    let function = load_function_handle_index(cursor)?;
+
+    let visibility_byte = read_u8(cursor)?;
+    let (visibility, mut is_entry) = if version < VERSION_5 {
+        // Pre-v5: visibility byte may carry the deprecated SCRIPT
+        // marker (0x2), which encodes Public + entry. Mirrors
+        // Sui's serializer lines 1693–1702 in reverse.
+        if visibility_byte == Visibility::DEPRECATED_SCRIPT {
+            (Visibility::Public, true)
+        } else if let Ok(vis) = Visibility::try_from(visibility_byte) {
+            (vis, false)
+        } else {
+            return Err(AdamantDeserializeError::UnknownVisibility(visibility_byte));
+        }
+    } else {
+        let vis = Visibility::try_from(visibility_byte)
+            .map_err(|()| AdamantDeserializeError::UnknownVisibility(visibility_byte))?;
+        (vis, false)
+    };
+
+    let flags = read_u8(cursor)?;
+    // Reject flag bits that are not ENTRY (0x4) or NATIVE (0x2).
+    // Per Sui's serializer the only two bits that may be set are
+    // these; bit 0x1 is the deprecated DEPRECATED_PUBLIC_BIT and
+    // should never appear in a v≥5 module.
+    let allowed_flags = FunctionDefinition::ENTRY | FunctionDefinition::NATIVE;
+    if flags & !allowed_flags != 0 {
+        return Err(AdamantDeserializeError::UnknownFunctionFlag(flags));
+    }
+    if flags & FunctionDefinition::ENTRY != 0 {
+        if version >= VERSION_5 {
+            is_entry = true;
+        } else {
+            // Pre-v5 should encode entry-ness via the SCRIPT
+            // marker, not via the flag bit.
+            return Err(AdamantDeserializeError::UnknownFunctionFlag(flags));
+        }
+    }
+    let is_native = flags & FunctionDefinition::NATIVE != 0;
+
+    let acquires_global_resources = load_acquires(cursor)?;
+    let code = if is_native {
+        None
+    } else {
+        Some(load_code_unit(cursor, version)?)
+    };
+
+    Ok(AdamantFunctionDefinition {
+        function,
+        visibility,
+        is_entry,
+        acquires_global_resources,
+        code,
+    })
+}
+
+fn load_acquires(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<Vec<StructDefinitionIndex>, AdamantDeserializeError> {
+    let n = read_uleb128_length(cursor, ACQUIRES_COUNT_MAX, "acquires list length")?;
+    let mut indices = Vec::with_capacity(n);
+    for _ in 0..n {
+        indices.push(load_struct_def_index(cursor)?);
+    }
+    Ok(indices)
+}
+
+fn load_code_unit(
+    cursor: &mut std::io::Cursor<&[u8]>,
+    version: u32,
+) -> Result<AdamantCodeUnit, AdamantDeserializeError> {
+    let locals = load_signature_index(cursor)?;
+    // Function bodies are dispatched to bytecode_wire's cursor-API
+    // variant in strict mode (rejects deprecated global-storage
+    // opcodes per §6.2.1.6 Rule 5).
+    let code = bytecode_wire::deserialize_function_body_from_cursor(
+        cursor,
+        &bytecode_wire::DeserializeConfig::strict(),
+    )?;
+    let jump_tables = load_jump_tables(cursor, version)?;
+    Ok(AdamantCodeUnit {
+        locals,
+        code,
+        jump_tables,
+    })
+}
+
+fn load_jump_tables(
+    cursor: &mut std::io::Cursor<&[u8]>,
+    version: u32,
+) -> Result<Vec<VariantJumpTable>, AdamantDeserializeError> {
+    if version < VERSION_7 {
+        // Sui's serializer emits no jump-table count byte at v < 7;
+        // mirror that — the table is implicitly empty and there is
+        // nothing to read.
+        return Ok(vec![]);
+    }
+    let n = read_uleb128_bounded(cursor, JUMP_TABLE_INDEX_MAX, "jump table count")?;
+    // Cast safety: `n <= JUMP_TABLE_INDEX_MAX = 1023` fits usize.
+    #[allow(clippy::cast_possible_truncation)]
+    let n_usize = n as usize;
+    let mut tables = Vec::with_capacity(n_usize);
+    for _ in 0..n_usize {
+        tables.push(load_jump_table(cursor)?);
+    }
+    Ok(tables)
+}
+
+fn load_jump_table(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<VariantJumpTable, AdamantDeserializeError> {
+    let head_enum = load_enum_def_index(cursor)?;
+    let n = read_uleb128_length(cursor, VARIANT_COUNT_MAX, "jump table branch count")?;
+    let flag = read_u8(cursor)?;
+    if flag != SerializedJumpTableFlag::FULL as u8 {
+        return Err(AdamantDeserializeError::UnknownJumpTableFlag(flag));
+    }
+    let mut branches = Vec::with_capacity(n);
+    for _ in 0..n {
+        let v = read_uleb128_bounded(cursor, BYTECODE_INDEX_MAX, "bytecode offset")?;
+        // Cast safety: `BYTECODE_INDEX_MAX = 65535` fits u16.
+        #[allow(clippy::cast_possible_truncation)]
+        let off = v as u16;
+        branches.push(off);
+    }
+    Ok(VariantJumpTable {
+        head_enum,
+        jump_table: JumpTableInner::Full(branches),
+    })
+}
+
+// ----- Table layout parsing & validation -----
+
+/// One table-index entry from the binary header.
+#[derive(Clone, Copy, Debug)]
+struct Table {
+    kind: TableType,
+    offset: u32,
+    count: u32,
+}
+
+/// Maps a raw kind byte to a [`TableType`]. Sui's
+/// `TableType::from_u8` is private to its deserializer crate, so we
+/// reproduce the (small, finite) mapping here.
+fn table_type_from_u8(byte: u8) -> Option<TableType> {
+    match byte {
+        x if x == TableType::MODULE_HANDLES as u8 => Some(TableType::MODULE_HANDLES),
+        x if x == TableType::DATATYPE_HANDLES as u8 => Some(TableType::DATATYPE_HANDLES),
+        x if x == TableType::FUNCTION_HANDLES as u8 => Some(TableType::FUNCTION_HANDLES),
+        x if x == TableType::FUNCTION_INST as u8 => Some(TableType::FUNCTION_INST),
+        x if x == TableType::SIGNATURES as u8 => Some(TableType::SIGNATURES),
+        x if x == TableType::CONSTANT_POOL as u8 => Some(TableType::CONSTANT_POOL),
+        x if x == TableType::IDENTIFIERS as u8 => Some(TableType::IDENTIFIERS),
+        x if x == TableType::ADDRESS_IDENTIFIERS as u8 => Some(TableType::ADDRESS_IDENTIFIERS),
+        x if x == TableType::STRUCT_DEFS as u8 => Some(TableType::STRUCT_DEFS),
+        x if x == TableType::STRUCT_DEF_INST as u8 => Some(TableType::STRUCT_DEF_INST),
+        x if x == TableType::FUNCTION_DEFS as u8 => Some(TableType::FUNCTION_DEFS),
+        x if x == TableType::FIELD_HANDLE as u8 => Some(TableType::FIELD_HANDLE),
+        x if x == TableType::FIELD_INST as u8 => Some(TableType::FIELD_INST),
+        x if x == TableType::FRIEND_DECLS as u8 => Some(TableType::FRIEND_DECLS),
+        x if x == TableType::METADATA as u8 => Some(TableType::METADATA),
+        x if x == TableType::ENUM_DEFS as u8 => Some(TableType::ENUM_DEFS),
+        x if x == TableType::ENUM_DEF_INST as u8 => Some(TableType::ENUM_DEF_INST),
+        x if x == TableType::VARIANT_HANDLES as u8 => Some(TableType::VARIANT_HANDLES),
+        x if x == TableType::VARIANT_INST_HANDLES as u8 => Some(TableType::VARIANT_INST_HANDLES),
+        _ => None,
+    }
+}
+
+/// Read all `table_count` table-index entries from the cursor.
+fn read_tables(
+    cursor: &mut std::io::Cursor<&[u8]>,
+    table_count: u8,
+) -> Result<Vec<Table>, AdamantDeserializeError> {
+    let mut tables = Vec::with_capacity(table_count as usize);
+    for _ in 0..table_count {
+        let kind_byte = read_u8(cursor)?;
+        let kind = table_type_from_u8(kind_byte)
+            .ok_or(AdamantDeserializeError::UnknownTableKind(kind_byte))?;
+        let offset = read_uleb128_bounded(cursor, u64::from(u32::MAX), "table offset")?;
+        let count = read_uleb128_bounded(cursor, u64::from(u32::MAX), "table size")?;
+        // Cast safety: bound checks above guarantee `offset, count <= u32::MAX`.
+        #[allow(clippy::cast_possible_truncation)]
+        let offset = offset as u32;
+        #[allow(clippy::cast_possible_truncation)]
+        let count = count as u32;
+        tables.push(Table {
+            kind,
+            offset,
+            count,
+        });
+    }
+    Ok(tables)
+}
+
+/// Validate table layout: tables must be contiguous (sorted by
+/// offset, no gaps, no overlap), each table.count > 0, no duplicate
+/// kinds, and total content ≤ available bytes. Returns the
+/// cumulative content length.
+fn check_tables(
+    tables: &mut [Table],
+    available_content_bytes: usize,
+) -> Result<u32, AdamantDeserializeError> {
+    tables.sort_by_key(|t| t.offset);
+    let mut current_offset: u32 = 0;
+    let mut seen = std::collections::HashSet::new();
+    for table in tables.iter() {
+        if table.offset != current_offset {
+            return Err(AdamantDeserializeError::BadTableLayout {
+                reason: "non-contiguous table offsets",
+            });
+        }
+        if table.count == 0 {
+            return Err(AdamantDeserializeError::BadTableLayout {
+                reason: "zero-length table",
+            });
+        }
+        current_offset = current_offset.checked_add(table.count).ok_or(
+            AdamantDeserializeError::BadTableLayout {
+                reason: "table content size overflows u32",
+            },
+        )?;
+        if !seen.insert(table.kind) {
+            return Err(AdamantDeserializeError::DuplicateTable(table.kind));
+        }
+        if current_offset as usize > available_content_bytes {
+            return Err(AdamantDeserializeError::BadTableLayout {
+                reason: "table content extends past binary",
+            });
+        }
+    }
+    Ok(current_offset)
+}
+
+// ----- Top-level orchestration -----
+
+/// Parses module bytes per whitepaper §6.2.1.2 (binary format) and
+/// §6.2.1.8 (fully Adamant-native verifier architecture).
+///
+/// Strict canonical decoding: trailing bytes, duplicate tables,
+/// version-feature mismatches, deprecated global-storage opcodes
+/// (per §6.2.1.6 Rule 5), and zero-length tables are all rejected.
+///
+/// # Errors
+///
+/// Returns [`AdamantDeserializeError`] on any of the parse-time
+/// failure modes enumerated by that type.
+pub fn adamant_deserialize(bytes: &[u8]) -> Result<AdamantCompiledModule, AdamantDeserializeError> {
+    use std::io::Cursor;
+
+    // ----- Header: magic + flavored version -----
+    if bytes.len() < BinaryConstants::MOVE_MAGIC_SIZE + 4 {
+        return Err(AdamantDeserializeError::UnexpectedEof);
+    }
+    // Cast safety: literal index, well within bytes.len() check above.
+    let mut magic = [0u8; 4];
+    magic.copy_from_slice(&bytes[..4]);
+    let publishable = match BinaryConstants::decode_magic(magic, 4) {
+        Ok(move_binary_format::file_format_common::MagicKind::Normal) => true,
+        Ok(move_binary_format::file_format_common::MagicKind::Unpublishable) => false,
+        Err(_) => return Err(AdamantDeserializeError::BadMagic(magic)),
+    };
+
+    let mut cursor = Cursor::new(bytes);
+    cursor.set_position(4);
+    let flavored = read_u32_le(&mut cursor)?;
+    let version = BinaryFlavor::decode_version(flavored);
+    if !(VERSION_MIN..=VERSION_MAX).contains(&version) {
+        return Err(AdamantDeserializeError::UnsupportedVersion(version));
+    }
+    if version >= VERSION_7 {
+        match BinaryFlavor::decode_flavor(flavored) {
+            Some(b) if b == BinaryFlavor::SUI_FLAVOR => {}
+            Some(b) => return Err(AdamantDeserializeError::UnknownFlavor(b)),
+            None => {
+                return Err(AdamantDeserializeError::BadTableLayout {
+                    reason: "v≥7 requires flavor byte",
+                });
+            }
+        }
+    }
+
+    // ----- Table-index block -----
+    let table_count = read_u8(&mut cursor)?;
+    if u64::from(table_count) > TABLE_COUNT_MAX {
+        return Err(AdamantDeserializeError::OutOfRange {
+            kind: "table count",
+            value: u64::from(table_count),
+            max: TABLE_COUNT_MAX,
+        });
+    }
+    let mut tables = read_tables(&mut cursor, table_count)?;
+
+    // The remaining-bytes window starts at the cursor position
+    // (after the table-index block) and extends to the end of
+    // `bytes` minus the trailing self-handle ULEB128. We don't
+    // know the trailing-handle's length in advance, so we let the
+    // table-content cover the full remainder and validate the
+    // trailing handle separately at the end.
+    // Cast safety: cursor.position() bounded by bytes.len().
+    #[allow(clippy::cast_possible_truncation)]
+    let content_start = cursor.position() as usize;
+    if content_start > bytes.len() {
+        return Err(AdamantDeserializeError::UnexpectedEof);
+    }
+    let content_window_len = bytes.len() - content_start;
+    let total_content = check_tables(&mut tables, content_window_len)?;
+
+    // ----- Build the module -----
+    let mut module = AdamantCompiledModule {
+        version,
+        publishable,
+        ..AdamantCompiledModule::default()
+    };
+
+    for table in &tables {
+        let abs_start = content_start + table.offset as usize;
+        let abs_end = abs_start + table.count as usize;
+        // Sub-cursor over the table's byte range. We slice the
+        // outer `bytes` to the table's window and parse content
+        // until exhausted.
+        let table_bytes = &bytes[abs_start..abs_end];
+        let mut table_cursor = Cursor::new(table_bytes);
+        load_table(&mut table_cursor, &mut module, table.kind, version)?;
+        // Verify the sub-cursor consumed exactly the table's
+        // declared range (catches per-pool over- or under-reads).
+        #[allow(clippy::cast_possible_truncation)]
+        let consumed = table_cursor.position() as usize;
+        if consumed != table_bytes.len() {
+            return Err(AdamantDeserializeError::BadTableLayout {
+                reason: "table parser under- or over-consumed",
+            });
+        }
+    }
+
+    // ----- Trailing self_module_handle_idx -----
+    cursor.set_position((content_start + total_content as usize) as u64);
+    module.self_module_handle_idx = load_module_handle_index(&mut cursor)?;
+
+    // ----- Canonicality: no trailing bytes -----
+    #[allow(clippy::cast_possible_truncation)]
+    let final_pos = cursor.position() as usize;
+    if final_pos != bytes.len() {
+        return Err(AdamantDeserializeError::TrailingBytes);
+    }
+    Ok(module)
+}
+
+/// Dispatches a single table to its per-pool loader based on
+/// [`TableType`] kind. Mirrors Sui's
+/// `build_common_tables` / `build_module_tables` split, fused into
+/// one function since Adamant has only one container type
+/// ([`AdamantCompiledModule`], no `CompiledScript`).
+#[allow(clippy::too_many_lines)]
+fn load_table(
+    cursor: &mut std::io::Cursor<&[u8]>,
+    module: &mut AdamantCompiledModule,
+    kind: TableType,
+    version: u32,
+) -> Result<(), AdamantDeserializeError> {
+    match kind {
+        TableType::MODULE_HANDLES => {
+            while !cursor_at_end(cursor) {
+                module.module_handles.push(load_module_handle(cursor)?);
+            }
+        }
+        TableType::DATATYPE_HANDLES => {
+            while !cursor_at_end(cursor) {
+                module.datatype_handles.push(load_datatype_handle(cursor)?);
+            }
+        }
+        TableType::FUNCTION_HANDLES => {
+            while !cursor_at_end(cursor) {
+                module.function_handles.push(load_function_handle(cursor)?);
+            }
+        }
+        TableType::FUNCTION_INST => {
+            while !cursor_at_end(cursor) {
+                module
+                    .function_instantiations
+                    .push(load_function_instantiation(cursor)?);
+            }
+        }
+        TableType::SIGNATURES => {
+            while !cursor_at_end(cursor) {
+                module.signatures.push(load_signature(cursor)?);
+            }
+        }
+        TableType::IDENTIFIERS => {
+            while !cursor_at_end(cursor) {
+                module.identifiers.push(load_identifier(cursor)?);
+            }
+        }
+        TableType::ADDRESS_IDENTIFIERS => {
+            while !cursor_at_end(cursor) {
+                module.address_identifiers.push(load_address(cursor)?);
+            }
+        }
+        TableType::CONSTANT_POOL => {
+            while !cursor_at_end(cursor) {
+                module.constant_pool.push(load_constant(cursor)?);
+            }
+        }
+        TableType::METADATA => {
+            if version < VERSION_5 {
+                return Err(AdamantDeserializeError::VersionFeatureMismatch {
+                    feature: "metadata",
+                    version,
+                });
+            }
+            while !cursor_at_end(cursor) {
+                module.metadata.push(load_metadata_entry(cursor)?);
+            }
+        }
+        TableType::STRUCT_DEFS => {
+            while !cursor_at_end(cursor) {
+                module.struct_defs.push(load_struct_definition(cursor)?);
+            }
+        }
+        TableType::STRUCT_DEF_INST => {
+            while !cursor_at_end(cursor) {
+                module
+                    .struct_def_instantiations
+                    .push(load_struct_def_instantiation(cursor)?);
+            }
+        }
+        TableType::FUNCTION_DEFS => {
+            while !cursor_at_end(cursor) {
+                module
+                    .function_defs
+                    .push(load_function_definition(cursor, version)?);
+            }
+        }
+        TableType::FIELD_HANDLE => {
+            while !cursor_at_end(cursor) {
+                module.field_handles.push(load_field_handle(cursor)?);
+            }
+        }
+        TableType::FIELD_INST => {
+            while !cursor_at_end(cursor) {
+                module
+                    .field_instantiations
+                    .push(load_field_instantiation(cursor)?);
+            }
+        }
+        TableType::FRIEND_DECLS => {
+            while !cursor_at_end(cursor) {
+                module.friend_decls.push(load_module_handle(cursor)?);
+            }
+        }
+        TableType::ENUM_DEFS => {
+            if version < VERSION_7 {
+                return Err(AdamantDeserializeError::VersionFeatureMismatch {
+                    feature: "enum tables",
+                    version,
+                });
+            }
+            while !cursor_at_end(cursor) {
+                module.enum_defs.push(load_enum_definition(cursor)?);
+            }
+        }
+        TableType::ENUM_DEF_INST => {
+            if version < VERSION_7 {
+                return Err(AdamantDeserializeError::VersionFeatureMismatch {
+                    feature: "enum tables",
+                    version,
+                });
+            }
+            while !cursor_at_end(cursor) {
+                module
+                    .enum_def_instantiations
+                    .push(load_enum_def_instantiation(cursor)?);
+            }
+        }
+        TableType::VARIANT_HANDLES => {
+            if version < VERSION_7 {
+                return Err(AdamantDeserializeError::VersionFeatureMismatch {
+                    feature: "enum tables",
+                    version,
+                });
+            }
+            while !cursor_at_end(cursor) {
+                module.variant_handles.push(load_variant_handle(cursor)?);
+            }
+        }
+        TableType::VARIANT_INST_HANDLES => {
+            if version < VERSION_7 {
+                return Err(AdamantDeserializeError::VersionFeatureMismatch {
+                    feature: "enum tables",
+                    version,
+                });
+            }
+            while !cursor_at_end(cursor) {
+                module
+                    .variant_instantiation_handles
+                    .push(load_variant_instantiation_handle(cursor)?);
+            }
+        }
+    }
+    Ok(())
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1946,5 +3238,389 @@ mod tests {
         adamant_serialize(&module, &mut out).unwrap();
         assert!(module.contains_adamant_extensions());
         assert!(!out.is_empty());
+    }
+
+    // ---- Deserializer: round-trip property tests ------------------------
+
+    fn round_trip_module(module: &AdamantCompiledModule) {
+        let mut bytes = Vec::new();
+        adamant_serialize(module, &mut bytes).expect("serialize");
+        let parsed = adamant_deserialize(&bytes).expect("deserialize");
+        assert_eq!(&parsed, module, "round-trip mismatch");
+    }
+
+    /// Empty module round-trips at every supported version and
+    /// publishability.
+    #[test]
+    fn round_trip_empty_module_all_versions() {
+        for version in VERSION_MIN..=VERSION_MAX {
+            for publishable in [true, false] {
+                let module = AdamantCompiledModule {
+                    version,
+                    publishable,
+                    self_module_handle_idx: ModuleHandleIndex(0),
+                    ..AdamantCompiledModule::default()
+                };
+                round_trip_module(&module);
+            }
+        }
+    }
+
+    /// Rich pure-Sui module (handles, identifiers, signatures,
+    /// constants, metadata, function with body) round-trips.
+    #[test]
+    fn round_trip_rich_pure_sui_module() {
+        let (module, _) = rich_pure_sui_pair(VERSION_MAX);
+        round_trip_module(&module);
+    }
+
+    /// Module with friend declarations round-trips.
+    #[test]
+    fn round_trip_friend_decls() {
+        let (mut module, _) = minimal_pair(VERSION_MAX);
+        module
+            .identifiers
+            .push(Identifier::new("FriendMod").unwrap());
+        module.friend_decls.push(ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(1),
+        });
+        round_trip_module(&module);
+    }
+
+    /// `Vector(Box<U8>)` signature token (recursive) round-trips
+    /// via the iterative parser.
+    #[test]
+    fn round_trip_vector_u8_signature_token() {
+        let (mut module, _) = minimal_pair(VERSION_MAX);
+        module.constant_pool.push(Constant {
+            type_: SignatureToken::Vector(Box::new(SignatureToken::U8)),
+            data: vec![],
+        });
+        round_trip_module(&module);
+    }
+
+    /// Deeply-nested `Vector(Vector(...(U8)...))` round-trips up to
+    /// `SIGNATURE_TOKEN_DEPTH_MAX - 1` (within the depth bound).
+    #[test]
+    fn round_trip_deep_signature_token_within_depth() {
+        let (mut module, _) = minimal_pair(VERSION_MAX);
+        // Build Vector wrapping U8 to depth 64 (well under the 256
+        // limit but exercises the iterative parser non-trivially).
+        let mut tok = SignatureToken::U8;
+        for _ in 0..64 {
+            tok = SignatureToken::Vector(Box::new(tok));
+        }
+        module.constant_pool.push(Constant {
+            type_: tok,
+            data: vec![],
+        });
+        round_trip_module(&module);
+    }
+
+    /// Module with `DatatypeInstantiation(idx, [U64, Bool])` round-trips
+    /// via the multi-child collapse path of the iterative parser.
+    #[test]
+    fn round_trip_datatype_instantiation_signature_token() {
+        let (mut module, _) = minimal_pair(VERSION_MAX);
+        // Need a datatype handle for the instantiation to point at.
+        module.identifiers.push(Identifier::new("S").unwrap());
+        module.datatype_handles.push(DatatypeHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            abilities: AbilitySet::EMPTY,
+            type_parameters: vec![],
+        });
+        module.constant_pool.push(Constant {
+            type_: SignatureToken::DatatypeInstantiation(Box::new((
+                DatatypeHandleIndex(0),
+                vec![SignatureToken::U64, SignatureToken::Bool],
+            ))),
+            data: vec![],
+        });
+        round_trip_module(&module);
+    }
+
+    /// Module with an Adamant-extension instruction in a function
+    /// body round-trips through deserialize. This is the load-bearing
+    /// test for the `bytecode_wire` cursor-API integration.
+    #[test]
+    fn round_trip_function_body_with_extension() {
+        use crate::bytecode::AdamantBytecode;
+        let mut module = AdamantCompiledModule {
+            version: VERSION_MAX,
+            publishable: true,
+            self_module_handle_idx: ModuleHandleIndex(0),
+            module_handles: vec![ModuleHandle {
+                address: AddressIdentifierIndex(0),
+                name: IdentifierIndex(0),
+            }],
+            identifiers: vec![Identifier::new("M").unwrap(), Identifier::new("h").unwrap()],
+            address_identifiers: vec![AccountAddress::ZERO],
+            signatures: vec![Signature(vec![])],
+            ..AdamantCompiledModule::default()
+        };
+        module.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(0),
+            type_parameters: vec![],
+        });
+        module.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: SignatureIndex(0),
+                code: vec![
+                    BytecodeInstruction::Adamant(AdamantBytecode::Sha3_256),
+                    BytecodeInstruction::Adamant(AdamantBytecode::Blake3),
+                    BytecodeInstruction::Inherited(Bytecode::Ret),
+                ],
+                jump_tables: vec![],
+            }),
+        });
+        round_trip_module(&module);
+    }
+
+    /// Module containing a public-entry function at version 5
+    /// (deprecated SCRIPT visibility marker is *not* used at v≥5)
+    /// round-trips.
+    #[test]
+    fn round_trip_public_entry_function_at_v5() {
+        let mut module = AdamantCompiledModule {
+            version: VERSION_5,
+            publishable: true,
+            self_module_handle_idx: ModuleHandleIndex(0),
+            module_handles: vec![ModuleHandle {
+                address: AddressIdentifierIndex(0),
+                name: IdentifierIndex(0),
+            }],
+            identifiers: vec![Identifier::new("M").unwrap(), Identifier::new("g").unwrap()],
+            address_identifiers: vec![AccountAddress::ZERO],
+            signatures: vec![Signature(vec![])],
+            ..AdamantCompiledModule::default()
+        };
+        module.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(0),
+            type_parameters: vec![],
+        });
+        module.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Public,
+            is_entry: true,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: SignatureIndex(0),
+                code: vec![BytecodeInstruction::Inherited(Bytecode::Ret)],
+                jump_tables: vec![],
+            }),
+        });
+        round_trip_module(&module);
+    }
+
+    // ---- Deserializer: constructive parse rejection tests ----------------
+
+    /// Empty input → `UnexpectedEof`.
+    #[test]
+    fn deserialize_rejects_empty_input() {
+        assert_eq!(
+            adamant_deserialize(&[]).unwrap_err(),
+            AdamantDeserializeError::UnexpectedEof
+        );
+    }
+
+    /// Bad magic header → `BadMagic`.
+    #[test]
+    fn deserialize_rejects_bad_magic() {
+        let mut bytes = vec![0x00; 8];
+        bytes[..4].copy_from_slice(b"WXYZ");
+        bytes[4..8].copy_from_slice(&VERSION_MAX.to_le_bytes());
+        let err = adamant_deserialize(&bytes).unwrap_err();
+        assert!(matches!(
+            err,
+            AdamantDeserializeError::BadMagic([b'W', b'X', b'Y', b'Z'])
+        ));
+    }
+
+    /// Version below `VERSION_MIN` → `UnsupportedVersion`.
+    #[test]
+    fn deserialize_rejects_version_too_low() {
+        let mut bytes = vec![];
+        bytes.extend_from_slice(&BinaryConstants::MOVE_MAGIC);
+        bytes.extend_from_slice(&(VERSION_MIN - 1).to_le_bytes());
+        bytes.push(0); // table count = 0
+        bytes.push(0); // self_module_handle_idx = 0
+        let err = adamant_deserialize(&bytes).unwrap_err();
+        assert_eq!(
+            err,
+            AdamantDeserializeError::UnsupportedVersion(VERSION_MIN - 1)
+        );
+    }
+
+    /// Version above `VERSION_MAX` → `UnsupportedVersion`.
+    #[test]
+    fn deserialize_rejects_version_too_high() {
+        let mut bytes = vec![];
+        bytes.extend_from_slice(&BinaryConstants::MOVE_MAGIC);
+        bytes.extend_from_slice(&(VERSION_MAX + 1).to_le_bytes());
+        bytes.push(0);
+        bytes.push(0);
+        let err = adamant_deserialize(&bytes).unwrap_err();
+        assert_eq!(
+            err,
+            AdamantDeserializeError::UnsupportedVersion(VERSION_MAX + 1)
+        );
+    }
+
+    /// Trailing bytes after a complete module → `TrailingBytes`.
+    #[test]
+    fn deserialize_rejects_trailing_bytes() {
+        let module = AdamantCompiledModule {
+            version: VERSION_MAX,
+            publishable: true,
+            self_module_handle_idx: ModuleHandleIndex(0),
+            ..AdamantCompiledModule::default()
+        };
+        let mut bytes = Vec::new();
+        adamant_serialize(&module, &mut bytes).unwrap();
+        bytes.push(0xFF); // junk byte
+        let err = adamant_deserialize(&bytes).unwrap_err();
+        assert_eq!(err, AdamantDeserializeError::TrailingBytes);
+    }
+
+    /// Function body with a deprecated global-storage opcode
+    /// → `Bytecode(DeprecatedGlobalStorageOpcode(_))`. Confirms the
+    /// strict-mode dispatch through `bytecode_wire` flows correctly.
+    #[test]
+    fn deserialize_rejects_deprecated_global_storage_in_function_body() {
+        // Build a module where serialize emits a deprecated opcode
+        // in the function body, then attempt to deserialize.
+        let mut module = AdamantCompiledModule {
+            version: VERSION_MAX,
+            publishable: true,
+            self_module_handle_idx: ModuleHandleIndex(0),
+            module_handles: vec![ModuleHandle {
+                address: AddressIdentifierIndex(0),
+                name: IdentifierIndex(0),
+            }],
+            identifiers: vec![Identifier::new("M").unwrap(), Identifier::new("h").unwrap()],
+            address_identifiers: vec![AccountAddress::ZERO],
+            signatures: vec![Signature(vec![])],
+            ..AdamantCompiledModule::default()
+        };
+        module.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(0),
+            type_parameters: vec![],
+        });
+        module.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: SignatureIndex(0),
+                code: vec![BytecodeInstruction::Inherited(Bytecode::ExistsDeprecated(
+                    StructDefinitionIndex(0),
+                ))],
+                jump_tables: vec![],
+            }),
+        });
+        let mut bytes = Vec::new();
+        adamant_serialize(&module, &mut bytes).expect("serialize");
+        let err = adamant_deserialize(&bytes).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AdamantDeserializeError::Bytecode(
+                    bytecode_wire::DeserializeError::DeprecatedGlobalStorageOpcode(_)
+                )
+            ),
+            "expected Bytecode(DeprecatedGlobalStorageOpcode(_)), got {err:?}"
+        );
+    }
+
+    /// `Display` impl on `AdamantDeserializeError` produces non-empty
+    /// strings for every variant.
+    #[test]
+    fn deserialize_error_display_is_populated() {
+        let cases = [
+            AdamantDeserializeError::UnexpectedEof,
+            AdamantDeserializeError::BadMagic([0, 1, 2, 3]),
+            AdamantDeserializeError::UnsupportedVersion(99),
+            AdamantDeserializeError::UnknownFlavor(0xAB),
+            AdamantDeserializeError::UnknownTableKind(0xCD),
+            AdamantDeserializeError::DuplicateTable(TableType::MODULE_HANDLES),
+            AdamantDeserializeError::BadTableLayout { reason: "test" },
+            AdamantDeserializeError::MalformedUleb128,
+            AdamantDeserializeError::OutOfRange {
+                kind: "test",
+                value: 1,
+                max: 0,
+            },
+            AdamantDeserializeError::SignatureTooDeep,
+            AdamantDeserializeError::VersionFeatureMismatch {
+                feature: "test",
+                version: 5,
+            },
+            AdamantDeserializeError::TrailingBytes,
+            AdamantDeserializeError::Bytecode(bytecode_wire::DeserializeError::UnexpectedEof),
+            AdamantDeserializeError::InvalidIdentifier,
+            AdamantDeserializeError::UnknownFunctionFlag(0xFF),
+            AdamantDeserializeError::UnknownSerializedType(0xFF),
+            AdamantDeserializeError::UnknownStructFlag(0xFF),
+            AdamantDeserializeError::UnknownEnumFlag(0xFF),
+            AdamantDeserializeError::UnknownJumpTableFlag(0xFF),
+            AdamantDeserializeError::UnknownVisibility(0xFF),
+            AdamantDeserializeError::InvalidAbilitySet(0x10),
+        ];
+        for e in &cases {
+            assert!(!format!("{e}").is_empty(), "empty Display for {e:?}");
+        }
+    }
+
+    // ---- Deserializer: cross-validation against Sui's reference ----------
+
+    /// A Sui-serialized pure-Sui module deserializes correctly via
+    /// Adamant's deserializer — the parsed `AdamantCompiledModule`
+    /// has the same shape (sans extension functions) as the original
+    /// Sui `CompiledModule`.
+    #[test]
+    fn cross_validate_deserialize_sui_emitted_bytes() {
+        for version in VERSION_MIN..=VERSION_MAX {
+            let (adamant_expected, sui) = minimal_pair(version);
+            let mut sui_bytes = Vec::new();
+            sui.serialize_with_version(version, &mut sui_bytes).unwrap();
+            let parsed = adamant_deserialize(&sui_bytes)
+                .unwrap_or_else(|e| panic!("version {version}: deserialize failed: {e}"));
+            assert_eq!(parsed, adamant_expected, "version {version}: mismatch");
+        }
+    }
+
+    /// Adamant-serialized bytes of a pure-Sui-shape module
+    /// deserialize correctly via Sui's reference deserializer
+    /// (confirming byte-format compatibility from the encoder side
+    /// when consumed by Sui's parser). Uses `minimal_pair` rather
+    /// than `rich_pure_sui_pair` because Sui's
+    /// `deserialize_with_defaults` sets
+    /// `check_no_extraneous_bytes = true`, which Sui treats as
+    /// "metadata declarations not applicable" (metadata's full
+    /// audit-time validation is not in scope here).
+    #[test]
+    fn cross_validate_sui_deserializes_adamant_emitted_bytes() {
+        let (adamant, sui_expected) = minimal_pair(VERSION_MAX);
+        let mut adamant_bytes = Vec::new();
+        adamant_serialize(&adamant, &mut adamant_bytes).unwrap();
+        let parsed = CompiledModule::deserialize_with_defaults(&adamant_bytes)
+            .expect("Sui deserializes Adamant-emitted bytes");
+        assert_eq!(parsed, sui_expected);
     }
 }

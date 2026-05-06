@@ -85,10 +85,13 @@ pub use bytecode::{
     AdamantBytecode, AdamantOpcodeKind, BytecodeInstruction, CircuitId, GasDimension,
 };
 pub use bytecode_wire::{
-    deserialize_function_body, serialize_function_body, DeserializeError, SerializeError,
+    deserialize_function_body, deserialize_function_body_from_cursor, serialize_function_body,
+    DeserializeConfig, DeserializeError, SerializeError,
 };
 pub use module::{AdamantCodeUnit, AdamantCompiledModule, AdamantFunctionDefinition};
-pub use module_wire::{adamant_serialize, AdamantSerializeError};
+pub use module_wire::{
+    adamant_deserialize, adamant_serialize, AdamantDeserializeError, AdamantSerializeError,
+};
 pub use transaction::{
     AccountRef, AuthEvidence, CallParams, CreatedObject, GasBudget, Transaction, TxBody, Witness,
 };

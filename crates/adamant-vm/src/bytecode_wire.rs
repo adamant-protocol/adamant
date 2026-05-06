@@ -63,7 +63,19 @@
 // per-instance `#[allow]` with one-line rationale at each cast
 // site so the next auditor sees explicit justification for every
 // truncation.
-#![allow(clippy::unnecessary_wraps, clippy::if_not_else)]
+//
+// `trivially_copy_pass_by_ref` fires on the `&DeserializeConfig`
+// parameter of [`deserialize_function_body`] /
+// [`deserialize_function_body_from_cursor`]. The struct is 1 byte
+// today but is the explicit configuration API surface; passing by
+// reference matches `module_wire`'s posture and Sui's
+// `&BinaryConfig` API. Allowing the lint at module level avoids
+// per-fn `#[allow]` clutter at the public entry points.
+#![allow(
+    clippy::unnecessary_wraps,
+    clippy::if_not_else,
+    clippy::trivially_copy_pass_by_ref
+)]
 
 use std::io::Cursor;
 
@@ -133,6 +145,65 @@ pub enum DeserializeError {
     /// [`deserialize_function_body`] is strict: the caller's input
     /// must contain exactly one length-prefixed bytecode stream.
     TrailingBytes,
+    /// A deprecated global-storage opcode was encountered while
+    /// the [`DeserializeConfig::reject_deprecated_global_storage`]
+    /// flag was set. The 10 deprecated opcodes (`Exists`,
+    /// `MutBorrowGlobal`, `ImmBorrowGlobal`, `MoveFrom`, `MoveTo`,
+    /// and their `Generic` counterparts) are rejected at parse
+    /// time per whitepaper §6.2.1.6 Rule 5: Adamant prohibits
+    /// global-storage instructions, and the deserializer is the
+    /// enforcement point.
+    DeprecatedGlobalStorageOpcode(u8),
+}
+
+/// Configuration for [`deserialize_function_body`] /
+/// [`deserialize_function_body_from_cursor`].
+///
+/// The default ([`Self::lenient`]) accepts every well-formed
+/// instruction including the 10 deprecated global-storage opcodes
+/// (used by `bytecode_wire`'s own round-trip property tests). The
+/// strict mode ([`Self::strict`]) rejects deprecated global-storage
+/// opcodes at parse time per §6.2.1.6 Rule 5; this is the mode
+/// `module_wire` uses at deploy time.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub struct DeserializeConfig {
+    /// If true, reject the 10 deprecated global-storage opcodes
+    /// (`Exists`, `MutBorrowGlobal`, `ImmBorrowGlobal`, `MoveFrom`,
+    /// `MoveTo`, and their `Generic` counterparts) with
+    /// [`DeserializeError::DeprecatedGlobalStorageOpcode`]. Mirrors
+    /// Sui's `BinaryConfig::deprecate_global_storage_ops` flag.
+    pub reject_deprecated_global_storage: bool,
+}
+
+impl DeserializeConfig {
+    /// Lenient configuration: accept all well-formed opcodes
+    /// including deprecated global-storage ones. Used by
+    /// `bytecode_wire`'s wire-level round-trip property tests so
+    /// the encoder/decoder symmetry covers every variant.
+    #[must_use]
+    pub const fn lenient() -> Self {
+        Self {
+            reject_deprecated_global_storage: false,
+        }
+    }
+
+    /// Strict configuration: reject deprecated global-storage
+    /// opcodes at parse time. The deploy-time deserializer uses
+    /// this mode.
+    #[must_use]
+    pub const fn strict() -> Self {
+        Self {
+            reject_deprecated_global_storage: true,
+        }
+    }
+}
+
+impl Default for DeserializeConfig {
+    /// Default is lenient. Module-level deploy-time callers
+    /// explicitly construct [`DeserializeConfig::strict`].
+    fn default() -> Self {
+        Self::lenient()
+    }
 }
 
 impl core::fmt::Display for DeserializeError {
@@ -145,6 +216,12 @@ impl core::fmt::Display for DeserializeError {
                 write!(f, "invalid operand for opcode {opcode:#04x}: {reason}")
             }
             Self::TrailingBytes => write!(f, "trailing bytes after bytecode stream"),
+            Self::DeprecatedGlobalStorageOpcode(byte) => {
+                write!(
+                    f,
+                    "deprecated global-storage opcode {byte:#04x} rejected per §6.2.1.6 Rule 5"
+                )
+            }
         }
     }
 }
@@ -185,18 +262,10 @@ pub fn serialize_function_body(body: &[BytecodeInstruction]) -> Result<Vec<u8>, 
 /// stream.
 pub fn deserialize_function_body(
     bytes: &[u8],
+    config: &DeserializeConfig,
 ) -> Result<Vec<BytecodeInstruction>, DeserializeError> {
     let mut cursor = Cursor::new(bytes);
-    let count = read_uleb128(&mut cursor)?;
-    // count: u64 → usize. Truncation only possible on 32-bit
-    // targets; consensus targets are 64-bit. Vec::with_capacity
-    // is a hint; an actual truncation would surface as an OOM or
-    // mismatched count later.
-    #[allow(clippy::cast_possible_truncation)]
-    let mut body = Vec::with_capacity(count as usize);
-    for _ in 0..count {
-        body.push(deserialize_instruction(&mut cursor)?);
-    }
+    let body = deserialize_function_body_from_cursor(&mut cursor, config)?;
     // cursor.position(): u64 → usize. Position came from reads of
     // a slice of length `bytes.len()` (a usize), so it provably
     // fits in usize. Cast cannot truncate in practice.
@@ -206,6 +275,53 @@ pub fn deserialize_function_body(
         return Err(DeserializeError::TrailingBytes);
     }
     Ok(body)
+}
+
+/// Cursor-API variant of [`deserialize_function_body`] for callers
+/// (e.g., `module_wire`) that need to parse a body embedded inside
+/// a larger byte stream and continue parsing afterwards. Reads the
+/// ULEB128 instruction-count prefix and the instruction stream,
+/// leaving the cursor positioned past the body. **Does not** check
+/// for trailing bytes — the caller is responsible for whatever
+/// follows the body in the surrounding stream.
+///
+/// # Errors
+///
+/// Same as [`deserialize_function_body`] except for `TrailingBytes`,
+/// which only the slice-API variant raises.
+pub fn deserialize_function_body_from_cursor(
+    cursor: &mut Cursor<&[u8]>,
+    config: &DeserializeConfig,
+) -> Result<Vec<BytecodeInstruction>, DeserializeError> {
+    let count = read_uleb128(cursor)?;
+    // count: u64 → usize. Truncation only possible on 32-bit
+    // targets; consensus targets are 64-bit. Vec::with_capacity
+    // is a hint; an actual truncation would surface as an OOM or
+    // mismatched count later.
+    #[allow(clippy::cast_possible_truncation)]
+    let mut body = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        body.push(deserialize_instruction(cursor, config)?);
+    }
+    Ok(body)
+}
+
+/// Returns `true` if `byte` is one of the 10 deprecated
+/// global-storage opcode bytes (`Exists`, `MutBorrowGlobal`,
+/// `ImmBorrowGlobal`, `MoveFrom`, `MoveTo`, and their `Generic`
+/// counterparts). Used by [`deserialize_instruction`] to gate the
+/// strict-mode rejection in [`DeserializeConfig`].
+fn is_deprecated_global_storage_opcode(byte: u8) -> bool {
+    byte == Opcodes::EXISTS_DEPRECATED as u8
+        || byte == Opcodes::EXISTS_GENERIC_DEPRECATED as u8
+        || byte == Opcodes::MUT_BORROW_GLOBAL_DEPRECATED as u8
+        || byte == Opcodes::MUT_BORROW_GLOBAL_GENERIC_DEPRECATED as u8
+        || byte == Opcodes::IMM_BORROW_GLOBAL_DEPRECATED as u8
+        || byte == Opcodes::IMM_BORROW_GLOBAL_GENERIC_DEPRECATED as u8
+        || byte == Opcodes::MOVE_FROM_DEPRECATED as u8
+        || byte == Opcodes::MOVE_FROM_GENERIC_DEPRECATED as u8
+        || byte == Opcodes::MOVE_TO_DEPRECATED as u8
+        || byte == Opcodes::MOVE_TO_GENERIC_DEPRECATED as u8
 }
 
 // ---------- ULEB128 helpers ----------
@@ -657,8 +773,17 @@ fn gas_dimension_from_byte(b: u8, opcode: u8) -> Result<GasDimension, Deserializ
 #[allow(clippy::too_many_lines)]
 fn deserialize_instruction(
     cursor: &mut Cursor<&[u8]>,
+    config: &DeserializeConfig,
 ) -> Result<BytecodeInstruction, DeserializeError> {
     let byte = read_u8(cursor)?;
+
+    // Strict-mode rejection of deprecated global-storage opcodes
+    // per §6.2.1.6 Rule 5. Fires before the dispatch so the
+    // operand bytes that follow are not consumed (preserving the
+    // cursor position at the offending opcode for diagnostics).
+    if config.reject_deprecated_global_storage && is_deprecated_global_storage_opcode(byte) {
+        return Err(DeserializeError::DeprecatedGlobalStorageOpcode(byte));
+    }
 
     // Adamant extensions occupy 0x80..=0x90.
     if let Some(kind) = AdamantOpcodeKind::try_from_opcode_byte(byte) {
@@ -921,7 +1046,8 @@ mod tests {
     fn round_trip(instr: &BytecodeInstruction) {
         let body = vec![instr.clone()];
         let bytes = serialize_function_body(&body).expect("encode");
-        let decoded = deserialize_function_body(&bytes).expect("decode");
+        let decoded =
+            deserialize_function_body(&bytes, &DeserializeConfig::lenient()).expect("decode");
         assert_eq!(decoded, body, "round-trip mismatch for {instr:?}");
     }
 
@@ -1114,6 +1240,93 @@ mod tests {
         }
     }
 
+    /// Strict mode rejects every deprecated global-storage opcode
+    /// at parse time per §6.2.1.6 Rule 5. Encoding still produces
+    /// the bytes (lenient round-trip remains tested above) so
+    /// modules that accidentally carry deprecated opcodes can be
+    /// re-serialised; decoding rejects them as soon as the
+    /// deploy-time `DeserializeConfig::strict()` is in effect.
+    #[test]
+    fn strict_mode_rejects_each_deprecated_opcode() {
+        let cases: [(Bytecode, u8); 10] = [
+            (
+                Bytecode::ExistsDeprecated(StructDefinitionIndex::new(0)),
+                Opcodes::EXISTS_DEPRECATED as u8,
+            ),
+            (
+                Bytecode::ExistsGenericDeprecated(StructDefInstantiationIndex::new(0)),
+                Opcodes::EXISTS_GENERIC_DEPRECATED as u8,
+            ),
+            (
+                Bytecode::MoveFromDeprecated(StructDefinitionIndex::new(0)),
+                Opcodes::MOVE_FROM_DEPRECATED as u8,
+            ),
+            (
+                Bytecode::MoveFromGenericDeprecated(StructDefInstantiationIndex::new(0)),
+                Opcodes::MOVE_FROM_GENERIC_DEPRECATED as u8,
+            ),
+            (
+                Bytecode::MoveToDeprecated(StructDefinitionIndex::new(0)),
+                Opcodes::MOVE_TO_DEPRECATED as u8,
+            ),
+            (
+                Bytecode::MoveToGenericDeprecated(StructDefInstantiationIndex::new(0)),
+                Opcodes::MOVE_TO_GENERIC_DEPRECATED as u8,
+            ),
+            (
+                Bytecode::MutBorrowGlobalDeprecated(StructDefinitionIndex::new(0)),
+                Opcodes::MUT_BORROW_GLOBAL_DEPRECATED as u8,
+            ),
+            (
+                Bytecode::MutBorrowGlobalGenericDeprecated(StructDefInstantiationIndex::new(0)),
+                Opcodes::MUT_BORROW_GLOBAL_GENERIC_DEPRECATED as u8,
+            ),
+            (
+                Bytecode::ImmBorrowGlobalDeprecated(StructDefinitionIndex::new(0)),
+                Opcodes::IMM_BORROW_GLOBAL_DEPRECATED as u8,
+            ),
+            (
+                Bytecode::ImmBorrowGlobalGenericDeprecated(StructDefInstantiationIndex::new(0)),
+                Opcodes::IMM_BORROW_GLOBAL_GENERIC_DEPRECATED as u8,
+            ),
+        ];
+        for (bc, expected_byte) in cases {
+            let body = vec![BytecodeInstruction::Inherited(bc.clone())];
+            let bytes = serialize_function_body(&body).expect("encode");
+            let result = deserialize_function_body(&bytes, &DeserializeConfig::strict());
+            assert_eq!(
+                result,
+                Err(DeserializeError::DeprecatedGlobalStorageOpcode(
+                    expected_byte
+                )),
+                "strict mode should reject {bc:?}"
+            );
+            // Lenient round-trip still succeeds.
+            let decoded = deserialize_function_body(&bytes, &DeserializeConfig::lenient())
+                .expect("lenient decode succeeds");
+            assert_eq!(decoded, body);
+        }
+    }
+
+    /// `deserialize_function_body_from_cursor` does NOT reject
+    /// trailing bytes; the slice-API wrapper does. Pin this so the
+    /// module-level deserializer can rely on cursor-API positioning
+    /// for embedded function bodies.
+    #[test]
+    fn cursor_api_leaves_trailing_bytes_for_caller() {
+        // ULEB128(1) + RET opcode + arbitrary trailing bytes.
+        let bytes = vec![0x01, Opcodes::RET as u8, 0xAA, 0xBB, 0xCC];
+        let mut cursor = Cursor::new(&bytes[..]);
+        let body =
+            deserialize_function_body_from_cursor(&mut cursor, &DeserializeConfig::lenient())
+                .expect("decode");
+        assert_eq!(body, vec![BytecodeInstruction::Inherited(Bytecode::Ret)]);
+        assert_eq!(cursor.position(), 2, "cursor advanced past body only");
+        // Slice-API wrapper rejects the same input.
+        let result = deserialize_function_body(&bytes, &DeserializeConfig::lenient());
+        assert_eq!(result, Err(DeserializeError::TrailingBytes));
+    }
+
     // ---------- Adamant extension round-trips ----------
 
     #[test]
@@ -1159,7 +1372,8 @@ mod tests {
         let bytes = serialize_function_body(&body).expect("encode");
         // ULEB128(0) = single 0x00 byte.
         assert_eq!(bytes, vec![0x00]);
-        let decoded = deserialize_function_body(&bytes).expect("decode");
+        let decoded =
+            deserialize_function_body(&bytes, &DeserializeConfig::lenient()).expect("decode");
         assert_eq!(decoded, body);
     }
 
@@ -1168,7 +1382,7 @@ mod tests {
     #[test]
     fn deserialize_unexpected_eof_empty_input() {
         // No length prefix at all.
-        let result = deserialize_function_body(&[]);
+        let result = deserialize_function_body(&[], &DeserializeConfig::lenient());
         assert_eq!(result, Err(DeserializeError::UnexpectedEof));
     }
 
@@ -1177,7 +1391,7 @@ mod tests {
         // Length prefix says 1 instruction, opcode is LD_U64 (needs
         // 8 bytes after), but stream ends after the opcode byte.
         let bytes = vec![0x01, Opcodes::LD_U64 as u8];
-        let result = deserialize_function_body(&bytes);
+        let result = deserialize_function_body(&bytes, &DeserializeConfig::lenient());
         assert_eq!(result, Err(DeserializeError::UnexpectedEof));
     }
 
@@ -1187,7 +1401,7 @@ mod tests {
         // 0x29..=0x2D, 0x3B..=0x3F) and Adamant's range
         // (0x80..=0x90).
         let bytes = vec![0x01, 0xFF];
-        let result = deserialize_function_body(&bytes);
+        let result = deserialize_function_body(&bytes, &DeserializeConfig::lenient());
         assert_eq!(result, Err(DeserializeError::UnknownOpcode(0xFF)));
     }
 
@@ -1213,7 +1427,7 @@ mod tests {
             0xFF,
             0xFF,
         ];
-        let result = deserialize_function_body(&bytes);
+        let result = deserialize_function_body(&bytes, &DeserializeConfig::lenient());
         assert_eq!(result, Err(DeserializeError::MalformedUleb128));
     }
 
@@ -1222,7 +1436,7 @@ mod tests {
         // ChargeGas (0x8E) followed by 0x06 (out of GasDimension's
         // 0x00..=0x05 range).
         let bytes = vec![0x01, AdamantOpcodeKind::ChargeGas.opcode_byte(), 0x06];
-        let result = deserialize_function_body(&bytes);
+        let result = deserialize_function_body(&bytes, &DeserializeConfig::lenient());
         assert!(matches!(
             result,
             Err(DeserializeError::InvalidOperand { opcode: 0x8E, .. })
@@ -1233,7 +1447,7 @@ mod tests {
     fn deserialize_trailing_bytes() {
         // Length-prefix 1, Pop opcode, then an extra byte.
         let bytes = vec![0x01, Opcodes::POP as u8, 0xAA];
-        let result = deserialize_function_body(&bytes);
+        let result = deserialize_function_body(&bytes, &DeserializeConfig::lenient());
         assert_eq!(result, Err(DeserializeError::TrailingBytes));
     }
 
@@ -1255,7 +1469,7 @@ mod tests {
             // need operands; we expect UnknownOpcode before the
             // operand-read step.
             let bytes = vec![0x01, b];
-            let result = deserialize_function_body(&bytes);
+            let result = deserialize_function_body(&bytes, &DeserializeConfig::lenient());
             assert_eq!(
                 result,
                 Err(DeserializeError::UnknownOpcode(b)),
@@ -1366,7 +1580,7 @@ mod tests {
         fn prop_round_trip_single_instruction(instr in arb_instruction()) {
             let body = vec![instr.clone()];
             let bytes = serialize_function_body(&body).unwrap();
-            let decoded = deserialize_function_body(&bytes).unwrap();
+            let decoded = deserialize_function_body(&bytes, &DeserializeConfig::lenient()).unwrap();
             prop_assert_eq!(decoded, body);
         }
 
@@ -1375,7 +1589,7 @@ mod tests {
             body in prop::collection::vec(arb_instruction(), 0..32)
         ) {
             let bytes = serialize_function_body(&body).unwrap();
-            let decoded = deserialize_function_body(&bytes).unwrap();
+            let decoded = deserialize_function_body(&bytes, &DeserializeConfig::lenient()).unwrap();
             prop_assert_eq!(decoded, body);
         }
     }
@@ -1715,7 +1929,8 @@ mod tests {
         );
 
         // Step 6: our decoder recovers the original from our bytes.
-        let our_recovered = deserialize_function_body(&our_bytes).expect("our deserialize");
+        let our_recovered = deserialize_function_body(&our_bytes, &DeserializeConfig::lenient())
+            .expect("our deserialize");
         assert_eq!(our_recovered, our_body);
     }
 
