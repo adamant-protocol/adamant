@@ -9,30 +9,39 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
+adamant-bytecode-format = { workspace = true }
 adamant-crypto = { path = "../adamant-crypto" }
 adamant-types = { path = "../adamant-types" }
 # Vendored Sui-Move bytecode crate per whitepaper §6.2.1.1; provides
-# the inherited `Bytecode` enum and `FunctionHandleIndex` operand
-# type that `BytecodeInstruction::Inherited` and the AdamantBytecode
-# extension variants compose with per §6.2.1.4. See vendor/README.md
-# and SECURITY.md "Vendored upstream surface".
+# the inherited `Bytecode` enum, the 25 reused parallel-struct
+# neighbour types (`CompiledModule`, `ModuleHandle`, `Signature`,
+# etc.), and the deserializer/serializer Adamant exercises at test
+# time for cross-validation per §6.2.1.8. The bytecode-format
+# primitives previously imported from this crate (constants,
+# readers, AbilitySet, Identifier) moved to `adamant-bytecode-format`
+# in Phase 5/5b.1a per the resistant-proof posture; the type-fork
+# (5/5b.1b) will move the 25 neighbour types over and shrink this
+# dependency further.
 move-binary-format = { workspace = true }
 # move-core-types provides U256 used by the bytecode wire format
 # (`Bytecode::LdU256` operand). Re-exported transitively via
 # move-binary-format but referenced directly here for the
 # little-endian U256 encoding per §6.2.1.5 amendment 83bb1e9.
 # Also provides the `Metadata` type (`metadata::Metadata`) the
-# §6.2.1.6 validator rules consult.
+# §6.2.1.6 validator rules consult, and `AccountAddress` used at
+# the module-handle / address-pool layer.
 move-core-types = { workspace = true }
 # Vendored Sui-Move bytecode verifier (Batch 2) per whitepaper
 # §6.2.1.6; the inherited verifier passes (type safety, reference
 # safety, linearity, etc.) run before Adamant-specific rules in
-# `validator::verify_module`. See vendor/move-bytecode-verifier/
-# PROVENANCE.md.
+# `validator::verify_module`. Transitional bridge — Phase 5/5b.4
+# and 5/5b.5 replace this with Adamant-native per-function passes.
 move-bytecode-verifier = { workspace = true }
 # Provides `VerifierConfig` consumed by the inherited verifier;
 # `AdamantVerifierConfig` wraps it with `deprecate_global_storage_ops`
-# locked to `true` to enforce §6.2.1.6 Rule 5 unconditionally.
+# locked to `true` as defense-in-depth (§6.2.1.6 Rule 5's primary
+# enforcement point is in `adamant_deserialize`'s strict mode
+# post-Phase 5/5a).
 move-vm-config = { workspace = true }
 serde = { workspace = true }
 serde-big-array = { workspace = true }

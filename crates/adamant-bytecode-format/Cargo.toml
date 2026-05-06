@@ -1,0 +1,34 @@
+[package]
+name = "adamant-bytecode-format"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = """
+Adamant-owned bytecode-format primitives: constants, ULEB128/LE
+readers, AbilitySet/Ability, Identifier. Forked from Sui-Move's
+move-binary-format and move-core-types at vendor tag
+mainnet-v1.66.2 per whitepaper §6.2.1.8 resistant-proof posture.
+See PROVENANCE.md.
+"""
+
+[lints]
+workspace = true
+
+[dependencies]
+# Strict zero-Sui posture per whitepaper §6.2.1.8 resistant-proof
+# amendment: no `move-*` crate may appear in this crate's
+# production dependencies. The only production dep is serde for
+# the (de)serialization derives Identifier and AbilitySet rely on.
+serde = { workspace = true }
+
+[dev-dependencies]
+# Test-only cross-validation against the still-vendored Sui crates
+# at the same vendor tag (mainnet-v1.66.2). Per the resistant-proof
+# carve-out, test/CI/build-tooling-only deps on vendored Sui are
+# explicitly permitted; this is exactly that path.
+move-binary-format = { workspace = true }
+move-core-types = { workspace = true }
+proptest = { workspace = true }

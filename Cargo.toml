@@ -14,6 +14,7 @@
 resolver = "2"
 members = [
     "crates/adamant-account",
+    "crates/adamant-bytecode-format",
     "crates/adamant-crypto",
     "crates/adamant-crypto-blst-extra",
     "crates/adamant-state",
@@ -187,6 +188,10 @@ hex-literal = "0.3.4"
 # audit-trail commit per vendor/README.md; bumping these pins
 # requires the same discipline.
 # ---------------------------------------------------------------------------
+
+# Adamant-owned crates that other Adamant crates depend on. Path
+# entries enable per-crate `<crate>.workspace = true` inheritance.
+adamant-bytecode-format = { path = "crates/adamant-bytecode-format" }
 
 # Generic Cargo dependencies (Sui-Move pins, mainnet-v1.66.2).
 # The first 23 entries (anyhow … variant_count) were added in the

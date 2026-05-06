@@ -25,6 +25,7 @@
 //! reaches production. Deferred until the rules-implementation
 //! arc completes.
 
+use adamant_bytecode_format::VERSION_MAX;
 use adamant_types::Mutability;
 use move_binary_format::file_format::{
     AbilitySet, AddressIdentifierIndex, Bytecode, DatatypeHandle, DatatypeHandleIndex,
@@ -32,7 +33,6 @@ use move_binary_format::file_format::{
     ModuleHandleIndex, Signature, SignatureIndex, SignatureToken, StructDefinition,
     StructFieldInformation, TypeSignature, Visibility,
 };
-use move_binary_format::file_format_common::VERSION_MAX;
 use move_core_types::{
     account_address::AccountAddress, identifier::Identifier, metadata::Metadata,
 };

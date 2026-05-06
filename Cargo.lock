@@ -15,6 +15,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "adamant-bytecode-format"
+version = "0.0.1"
+dependencies = [
+ "move-binary-format",
+ "move-core-types",
+ "proptest",
+ "serde",
+]
+
+[[package]]
 name = "adamant-crypto"
 version = "0.0.1"
 dependencies = [
@@ -68,6 +78,7 @@ dependencies = [
 name = "adamant-vm"
 version = "0.0.1"
 dependencies = [
+ "adamant-bytecode-format",
  "adamant-crypto",
  "adamant-types",
  "bcs",

@@ -79,13 +79,13 @@
 
 use std::io::Cursor;
 
+use adamant_bytecode_format::{read_uleb128_as_u64, Opcodes};
 use move_binary_format::file_format::{
     Bytecode, CodeOffset, ConstantPoolIndex, FieldHandleIndex, FieldInstantiationIndex,
     FunctionHandleIndex, FunctionInstantiationIndex, LocalIndex, SignatureIndex,
     StructDefInstantiationIndex, StructDefinitionIndex, VariantHandleIndex,
     VariantInstantiationHandleIndex, VariantJumpTableIndex,
 };
-use move_binary_format::file_format_common::{read_uleb128_as_u64, Opcodes};
 use move_core_types::u256::U256;
 
 use crate::bytecode::{
@@ -347,19 +347,13 @@ fn write_uleb128(mut value: u64, out: &mut Vec<u8>) {
 }
 
 /// Read a ULEB128-encoded `u64` from a cursor over a byte slice.
-/// Wraps Sui's public [`read_uleb128_as_u64`] and translates errors
-/// into our [`DeserializeError`] type.
+/// Wraps [`read_uleb128_as_u64`] (now in
+/// `adamant-bytecode-format`) and translates its closed
+/// `ReaderError` into our [`DeserializeError`] taxonomy.
 fn read_uleb128(cursor: &mut Cursor<&[u8]>) -> Result<u64, DeserializeError> {
-    read_uleb128_as_u64(cursor).map_err(|_| {
-        // Sui's reader returns one error type for both EOF and
-        // overflow. Distinguish by checking whether we're at EOF.
-        // cursor.position(): u64 → usize. Position came from a
-        // slice of length usize; cannot truncate in practice.
-        #[allow(clippy::cast_possible_truncation)]
-        let pos = cursor.position() as usize;
-        if pos >= cursor.get_ref().len() {
-            DeserializeError::UnexpectedEof
-        } else {
+    read_uleb128_as_u64(cursor).map_err(|e| match e {
+        adamant_bytecode_format::ReaderError::UnexpectedEof => DeserializeError::UnexpectedEof,
+        adamant_bytecode_format::ReaderError::MalformedUleb128 => {
             DeserializeError::MalformedUleb128
         }
     })
@@ -1764,7 +1758,7 @@ mod tests {
         let address_zero = AccountAddress::ZERO;
 
         CompiledModule {
-            version: move_binary_format::file_format_common::VERSION_MAX,
+            version: adamant_bytecode_format::VERSION_MAX,
             self_module_handle_idx: ModuleHandleIndex::new(0),
             module_handles: vec![ModuleHandle {
                 address: AddressIdentifierIndex::new(0),
@@ -1889,10 +1883,7 @@ mod tests {
         // downstream consumers).
         let mut sui_bytes = Vec::new();
         module
-            .serialize_with_version(
-                move_binary_format::file_format_common::VERSION_MAX,
-                &mut sui_bytes,
-            )
+            .serialize_with_version(adamant_bytecode_format::VERSION_MAX, &mut sui_bytes)
             .expect("Sui serialize");
 
         // Step 4: Sui round-trip sanity.

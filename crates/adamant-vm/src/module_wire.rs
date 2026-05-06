@@ -89,6 +89,16 @@
     clippy::redundant_closure
 )]
 
+// Sui types that 5/5b.1a does not yet fork. The 25 reused
+// parallel-struct neighbour types (DatatypeHandle, FunctionHandle,
+// etc.) move to `adamant-bytecode-format` in Phase 5/5b.1b. The
+// `AbilitySet` import stays here too — `AbilitySet` is forked and
+// cross-validated in `adamant-bytecode-format`, but the Sui
+// neighbour types (`DatatypeHandle`, `FunctionHandle`,
+// `DatatypeTyParameter`) carry `abilities` fields of Sui's
+// `AbilitySet` type. Swapping the import here would type-conflict
+// with those fields; the consistent rewire lands in 5/5b.1b
+// alongside the type-fork.
 use move_binary_format::file_format::{
     AbilitySet, Constant, DatatypeHandle, DatatypeHandleIndex, DatatypeTyParameter,
     EnumDefInstantiation, EnumDefinition, EnumDefinitionIndex, FieldDefinition, FieldHandle,
@@ -100,7 +110,11 @@ use move_binary_format::file_format::{
     VariantHandleIndex, VariantInstantiationHandle, VariantInstantiationHandleIndex,
     VariantJumpTable, VariantJumpTableIndex, Visibility,
 };
-use move_binary_format::file_format_common::{
+// Adamant-owned bytecode-format primitives per Phase 5/5b.1a's
+// resistant-proof fork. The constants, tag enums, and readers
+// here are consumed at the production layer with no type-level
+// conflict against the still-Sui neighbour types above.
+use adamant_bytecode_format::{
     BinaryConstants, BinaryFlavor, SerializedEnumFlag, SerializedJumpTableFlag,
     SerializedNativeStructFlag, SerializedType, TableType, ACQUIRES_COUNT_MAX, ADDRESS_INDEX_MAX,
     BYTECODE_INDEX_MAX, CONSTANT_INDEX_MAX, CONSTANT_SIZE_MAX, DATATYPE_HANDLE_INDEX_MAX,
@@ -1634,7 +1648,7 @@ fn read_u32_le(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u32, AdamantDeseri
 /// Reads a ULEB128-encoded `u64`. Mirrors Sui's
 /// [`read_uleb128_as_u64`] but maps errors to our taxonomy.
 fn read_uleb128_u64(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u64, AdamantDeserializeError> {
-    move_binary_format::file_format_common::read_uleb128_as_u64(cursor).map_err(|_| {
+    adamant_bytecode_format::read_uleb128_as_u64(cursor).map_err(|_| {
         // Disambiguate EOF from malformed encoding by checking
         // cursor position against the underlying slice length.
         // Cast safety: position originates from reads of a slice of
@@ -2480,8 +2494,8 @@ pub fn adamant_deserialize(bytes: &[u8]) -> Result<AdamantCompiledModule, Adaman
     let mut magic = [0u8; 4];
     magic.copy_from_slice(&bytes[..4]);
     let publishable = match BinaryConstants::decode_magic(magic, 4) {
-        Ok(move_binary_format::file_format_common::MagicKind::Normal) => true,
-        Ok(move_binary_format::file_format_common::MagicKind::Unpublishable) => false,
+        Ok(adamant_bytecode_format::MagicKind::Normal) => true,
+        Ok(adamant_bytecode_format::MagicKind::Unpublishable) => false,
         Err(_) => return Err(AdamantDeserializeError::BadMagic(magic)),
     };
 
@@ -2732,12 +2746,12 @@ fn load_table(
 mod tests {
     use super::*;
     use crate::bytecode::BytecodeInstruction;
+    use adamant_bytecode_format::VERSION_6;
     use move_binary_format::file_format::{
         AbilitySet, AddressIdentifierIndex, Bytecode, CodeUnit, CompiledModule, Constant,
         DatatypeHandle, FunctionDefinition as SuiFunctionDefinition, FunctionHandle, ModuleHandle,
         Signature, SignatureToken, Visibility,
     };
-    use move_binary_format::file_format_common::VERSION_6;
     use move_core_types::account_address::AccountAddress;
     use move_core_types::identifier::Identifier;
     use move_core_types::metadata::Metadata;
