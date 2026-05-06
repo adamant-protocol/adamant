@@ -74,12 +74,13 @@ pub mod tx_hash;
 pub mod validator;
 pub mod value;
 
-// Re-export inherited Sui-Move types so consumers of adamant-vm
-// don't reach into the vendored move-binary-format crate name
-// directly. Per whitepaper §6.2.1.4: the AVM's instruction set is
-// Sui-Move's plus Adamant-specific extensions; both ends surface
-// through this crate's public API.
-pub use move_binary_format::file_format::{Bytecode, FunctionHandleIndex};
+// Re-export the inherited bytecode types from
+// `adamant-bytecode-format` so consumers of `adamant-vm` see the
+// Adamant-owned versions per whitepaper §6.2.1.8's resistant-
+// proof posture. Per whitepaper §6.2.1.4: the AVM's instruction
+// set is Sui-Move's (now Adamant-owned) plus Adamant-specific
+// extensions; both ends surface through this crate's public API.
+pub use adamant_bytecode_format::{Bytecode, FunctionHandleIndex};
 
 pub use bytecode::{
     AdamantBytecode, AdamantOpcodeKind, BytecodeInstruction, CircuitId, GasDimension,

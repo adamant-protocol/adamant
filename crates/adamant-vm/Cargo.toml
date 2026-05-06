@@ -12,17 +12,24 @@ publish.workspace = true
 adamant-bytecode-format = { workspace = true }
 adamant-crypto = { path = "../adamant-crypto" }
 adamant-types = { path = "../adamant-types" }
-# Vendored Sui-Move bytecode crate per whitepaper §6.2.1.1; provides
-# the inherited `Bytecode` enum, the 25 reused parallel-struct
-# neighbour types (`CompiledModule`, `ModuleHandle`, `Signature`,
-# etc.), and the deserializer/serializer Adamant exercises at test
-# time for cross-validation per §6.2.1.8. The bytecode-format
-# primitives previously imported from this crate (constants,
-# readers, AbilitySet, Identifier) moved to `adamant-bytecode-format`
-# in Phase 5/5b.1a per the resistant-proof posture; the type-fork
-# (5/5b.1b) will move the 25 neighbour types over and shrink this
-# dependency further.
-move-binary-format = { workspace = true }
+# Vendored Sui-Move bytecode crate per whitepaper §6.2.1.1.
+# After Phase 5/5b.1b's type-fork, adamant-vm's production
+# paths consume Adamant-owned types from adamant-bytecode-format
+# end-to-end; this dep is retained for the transitional
+# validator wrapper bridge in `validator/mod.rs` (Sui-side
+# deserializer + Sui-verifier path) and for the `to_sui_module`
+# BCS round-trip conversion target used at test time only for
+# cross-validation per §6.2.1.8.
+#
+# `features = ["wasm"]` enables Sui's gated Serialize/Deserialize
+# derives on bytecode-format types, required for the BCS round-
+# trip in `module::to_sui_module` (test-time path) and for the
+# cross-validation tests in `adamant-bytecode-format`. The
+# feature does not affect production code paths in adamant-vm
+# (production code never serialises Sui types). Both this dep
+# and the `wasm` feature are removed in Phase 5/5b.5 along with
+# the validator wrapper bridge.
+move-binary-format = { workspace = true, features = ["wasm"] }
 # move-core-types provides U256 used by the bytecode wire format
 # (`Bytecode::LdU256` operand). Re-exported transitively via
 # move-binary-format but referenced directly here for the

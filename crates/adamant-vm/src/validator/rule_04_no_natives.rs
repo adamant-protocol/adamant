@@ -9,7 +9,7 @@
 //! ([`crate::AdamantBytecode`] per §6.2.1.4) rather than
 //! through bytecode-bypass natives.
 
-use move_binary_format::file_format::FunctionDefinitionIndex;
+use adamant_bytecode_format::FunctionDefinitionIndex;
 
 use crate::module::AdamantCompiledModule;
 

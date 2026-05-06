@@ -214,7 +214,7 @@ pub fn verify_module(
 
 #[cfg(test)]
 mod tests {
-    use move_binary_format::file_format::{Bytecode, StructDefinitionIndex};
+    use adamant_bytecode_format::{Bytecode, StructDefinitionIndex};
 
     use super::test_fixtures::{
         module_with_function_body_starting, module_without_mutability_metadata, serialize_module,

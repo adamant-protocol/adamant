@@ -79,14 +79,12 @@
 
 use std::io::Cursor;
 
-use adamant_bytecode_format::{read_uleb128_as_u64, Opcodes};
-use move_binary_format::file_format::{
-    Bytecode, CodeOffset, ConstantPoolIndex, FieldHandleIndex, FieldInstantiationIndex,
-    FunctionHandleIndex, FunctionInstantiationIndex, LocalIndex, SignatureIndex,
-    StructDefInstantiationIndex, StructDefinitionIndex, VariantHandleIndex,
-    VariantInstantiationHandleIndex, VariantJumpTableIndex,
+use adamant_bytecode_format::{
+    read_uleb128_as_u64, Bytecode, CodeOffset, ConstantPoolIndex, FieldHandleIndex,
+    FieldInstantiationIndex, FunctionHandleIndex, FunctionInstantiationIndex, LocalIndex, Opcodes,
+    SignatureIndex, StructDefInstantiationIndex, StructDefinitionIndex, VariantHandleIndex,
+    VariantInstantiationHandleIndex, VariantJumpTableIndex, U256,
 };
-use move_core_types::u256::U256;
 
 use crate::bytecode::{
     AdamantBytecode, AdamantOpcodeKind, BytecodeInstruction, CircuitId, GasDimension,
@@ -420,7 +418,7 @@ fn read_u128_le(cursor: &mut Cursor<&[u8]>) -> Result<u128, DeserializeError> {
 /// BCS are independent encoding paths.
 fn read_u256_le(cursor: &mut Cursor<&[u8]>) -> Result<U256, DeserializeError> {
     let bytes = read_n::<32>(cursor)?;
-    Ok(U256::from_le_bytes(&bytes))
+    Ok(U256::from_le_bytes(bytes))
 }
 
 fn read_n<const N: usize>(cursor: &mut Cursor<&[u8]>) -> Result<[u8; N], DeserializeError> {
@@ -1120,7 +1118,7 @@ mod tests {
             let i_u8 = i as u8;
             *byte = i_u8;
         }
-        rt_inherited(Bytecode::LdU256(Box::new(U256::from_le_bytes(&u256_bytes))));
+        rt_inherited(Bytecode::LdU256(Box::new(U256::from_le_bytes(u256_bytes))));
     }
 
     // ---------- ULEB128-index inherited variants ----------
@@ -1516,7 +1514,7 @@ mod tests {
             any::<u32>().prop_map(Bytecode::LdU32),
             // U256 from arbitrary 32 bytes.
             prop::array::uniform32(any::<u8>())
-                .prop_map(|bs| Bytecode::LdU256(Box::new(U256::from_le_bytes(&bs)))),
+                .prop_map(|bs| Bytecode::LdU256(Box::new(U256::from_le_bytes(bs)))),
             any::<u16>().prop_map(|v| Bytecode::PackVariant(VariantHandleIndex::new(v))),
             any::<u16>().prop_map(|v| Bytecode::VariantSwitch(VariantJumpTableIndex::new(v))),
             any::<u16>().prop_map(|v| Bytecode::ExistsDeprecated(StructDefinitionIndex::new(v))),
@@ -1655,7 +1653,7 @@ mod tests {
             Bytecode::LdU32(0xabcd_1234),
             Bytecode::LdU64(0x0102_0304_0506_0708),
             Bytecode::LdU128(Box::new(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10)),
-            Bytecode::LdU256(Box::new(U256::from_le_bytes(&[0x42; 32]))),
+            Bytecode::LdU256(Box::new(U256::from_le_bytes([0x42; 32]))),
             // ULEB128-index variants. Operand values reference
             // pool index 0 (which we populate) for every type.
             Bytecode::BrTrue(0),
@@ -1745,13 +1743,31 @@ mod tests {
     // place is more auditable than splitting across multiple
     // smaller fixtures.
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::needless_pass_by_value)] // body parameter is moved into the BCS-converted Sui body Vec; the clippy suggestion to take `&[Bytecode]` would require the caller to clone its corpus, while the current shape lets the function consume the Vec directly.
     fn build_minimal_module(body: Vec<Bytecode>) -> CompiledModule {
+        // The function signature accepts Adamant's `Bytecode`
+        // (matching the production-side test corpus that the
+        // cross-validation test feeds in) and constructs Sui's
+        // `CompiledModule` for the cross-validation comparison.
+        // The Adamant→Sui conversion uses BCS round-trip; byte-
+        // identity is asserted by `adamant-bytecode-format`'s
+        // Phase 5/5b.6 cross-validation suite.
         use move_binary_format::file_format::{
-            Constant, EnumDefInstantiation, EnumDefInstantiationIndex, EnumDefinition,
-            EnumDefinitionIndex, FieldHandle, FieldInstantiation, FunctionInstantiation,
-            JumpTableInner, StructDefInstantiation, VariantDefinition, VariantHandle,
+            Bytecode as SuiBytecode, Constant, EnumDefInstantiation, EnumDefInstantiationIndex,
+            EnumDefinition, EnumDefinitionIndex, FieldHandle, FieldHandleIndex, FieldInstantiation,
+            FunctionHandleIndex, FunctionInstantiation, JumpTableInner, SignatureIndex,
+            StructDefInstantiation, StructDefinitionIndex, VariantDefinition, VariantHandle,
             VariantInstantiationHandle, VariantJumpTable,
         };
+        let body: Vec<SuiBytecode> = body
+            .iter()
+            .map(|bc| {
+                let bytes = bcs::to_bytes(bc)
+                    .expect("byte-identity invariant per Phase 5/5b.6 cross-validation");
+                bcs::from_bytes(&bytes)
+                    .expect("byte-identity invariant per Phase 5/5b.6 cross-validation")
+            })
+            .collect();
 
         let test_id = Identifier::new("test").unwrap();
         let enum_id = Identifier::new("enum_test").unwrap();
@@ -1869,6 +1885,7 @@ mod tests {
     /// correctness anchor for Option II.
     #[test]
     fn cross_validate_against_sui_compiled_module() {
+        use move_binary_format::file_format::Bytecode as SuiBytecode;
         // Use a corpus that only references operand indices we
         // populate in the minimal module. This is the subset that
         // can round-trip through Sui's CompiledModule decoder
@@ -1889,12 +1906,23 @@ mod tests {
         // Step 4: Sui round-trip sanity.
         let recovered_module =
             CompiledModule::deserialize_with_defaults(&sui_bytes).expect("Sui deserialize");
-        let recovered_body: Vec<Bytecode> = recovered_module.function_defs[0]
+        let recovered_body_sui: Vec<SuiBytecode> = recovered_module.function_defs[0]
             .code
             .as_ref()
             .expect("function 0 has code")
             .code
             .clone();
+        // Convert Sui's recovered body back to Adamant's
+        // `Bytecode` via BCS round-trip for comparison against
+        // the original (Adamant) corpus. Byte-identity per
+        // Phase 5/5b.6 cross-validation.
+        let recovered_body: Vec<Bytecode> = recovered_body_sui
+            .iter()
+            .map(|b| {
+                let bytes = bcs::to_bytes(b).expect("byte-identity");
+                bcs::from_bytes(&bytes).expect("byte-identity")
+            })
+            .collect();
         assert_eq!(
             recovered_body, corpus,
             "Sui's own round-trip failed — fixture or Sui version issue"

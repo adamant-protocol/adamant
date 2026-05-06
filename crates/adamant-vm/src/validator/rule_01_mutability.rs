@@ -29,7 +29,7 @@ const MUTABILITY_METADATA_KEY: &[u8] = b"adamant.mutability";
 ///   the (single) entry's value is not a valid BCS encoding of
 ///   `Mutability`.
 pub(super) fn verify(module: &AdamantCompiledModule) -> Result<(), AdamantValidationError> {
-    let entries: Vec<&move_core_types::metadata::Metadata> = module
+    let entries: Vec<&adamant_bytecode_format::Metadata> = module
         .metadata
         .iter()
         .filter(|m| m.key == MUTABILITY_METADATA_KEY)

@@ -20,15 +20,32 @@ workspace = true
 [dependencies]
 # Strict zero-Sui posture per whitepaper §6.2.1.8 resistant-proof
 # amendment: no `move-*` crate may appear in this crate's
-# production dependencies. The only production dep is serde for
-# the (de)serialization derives Identifier and AbilitySet rely on.
+# production dependencies.
 serde = { workspace = true }
+# `adamant-types::Address` is reused as the address-pool type
+# (Phase 5/5b.1b Q6 verify-then-pick: byte-layout identical to
+# Sui's `AccountAddress`; canonical Adamant type per §4.1).
+# `adamant-types` itself depends only on `serde`, `serde-big-
+# array`, and `bcs` — no `move-*` crate, no circular dep on
+# `adamant-bytecode-format`.
+adamant-types = { path = "../adamant-types" }
 
 [dev-dependencies]
 # Test-only cross-validation against the still-vendored Sui crates
 # at the same vendor tag (mainnet-v1.66.2). Per the resistant-proof
 # carve-out, test/CI/build-tooling-only deps on vendored Sui are
 # explicitly permitted; this is exactly that path.
-move-binary-format = { workspace = true }
+#
+# `features = ["wasm"]` on `move-binary-format` enables the
+# upstream `Serialize`/`Deserialize` derives on the file-format
+# types, which Sui itself gates behind that feature. This is
+# how the cross-validation test suite obtains a Sui-side BCS
+# encoding to compare Adamant's outputs against. The feature
+# only affects test-time builds; it does not flow into any
+# production target.
+move-binary-format = { workspace = true, features = ["wasm"] }
 move-core-types = { workspace = true }
 proptest = { workspace = true }
+# BCS for byte-identity cross-validation: serde-derived Adamant
+# types must produce the same BCS bytes as Sui's vendored types.
+bcs = { workspace = true }

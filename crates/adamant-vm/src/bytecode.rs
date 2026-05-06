@@ -42,7 +42,7 @@
 //! complete table is pinned by [`AdamantOpcodeKind::opcode_byte`]
 //! and asserted in this module's tests.
 
-use move_binary_format::file_format::{Bytecode, FunctionHandleIndex};
+use adamant_bytecode_format::{Bytecode, FunctionHandleIndex};
 
 // ---------- AdamantBytecode (with operands) ----------
 

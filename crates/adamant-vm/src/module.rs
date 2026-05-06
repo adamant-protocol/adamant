@@ -57,14 +57,21 @@
 //! a misleading "equivalence" result for near-pure-Sui modules
 //! with stray extensions.
 
-use move_binary_format::file_format::{
-    AddressIdentifierPool, CodeUnit, CompiledModule, ConstantPool, DatatypeHandle,
-    EnumDefInstantiation, EnumDefinition, FieldHandle, FieldInstantiation, FunctionDefinition,
-    FunctionHandle, FunctionHandleIndex, FunctionInstantiation, IdentifierPool, ModuleHandle,
-    ModuleHandleIndex, SignatureIndex, SignaturePool, StructDefInstantiation, StructDefinition,
-    StructDefinitionIndex, VariantHandle, VariantInstantiationHandle, VariantJumpTable, Visibility,
+use adamant_bytecode_format::{
+    AddressIdentifierPool, ConstantPool, DatatypeHandle, EnumDefInstantiation, EnumDefinition,
+    FieldHandle, FieldInstantiation, FunctionHandle, FunctionHandleIndex, FunctionInstantiation,
+    IdentifierPool, Metadata, ModuleHandle, ModuleHandleIndex, SignatureIndex, SignaturePool,
+    StructDefInstantiation, StructDefinition, StructDefinitionIndex, VariantHandle,
+    VariantInstantiationHandle, VariantJumpTable, Visibility,
 };
-use move_core_types::metadata::Metadata;
+// Sui's `CompiledModule`/`CodeUnit`/`FunctionDefinition` are
+// retained as imports so that `to_sui_module` can produce a
+// vendored-Sui shape for test-time cross-validation per
+// whitepaper §6.2.1.8. The conversion converts each Adamant
+// field to its Sui counterpart via BCS round-trip (byte-
+// identity verified by `adamant-bytecode-format`'s Phase 5/5b.6
+// cross-validation suite).
+use move_binary_format::file_format::{CodeUnit, CompiledModule, FunctionDefinition};
 
 use crate::bytecode::BytecodeInstruction;
 
@@ -305,6 +312,29 @@ impl AdamantCompiledModule {
     /// this branch is unreachable for inputs the public pipeline
     /// produces.
     pub fn to_sui_module(&self) -> Result<CompiledModule, AdamantToSuiConversionError> {
+        // Per-field conversion strategy: Adamant's bytecode-
+        // format types are byte-identical to Sui's vendored
+        // counterparts under BCS (asserted by
+        // `adamant-bytecode-format/tests/cross_validation.rs`).
+        // Each Adamant field is round-tripped through BCS into
+        // its Sui counterpart. The conversion is test-time only
+        // — `to_sui_module` is exercised exclusively by
+        // cross-validation tests per whitepaper §6.2.1.8.
+        //
+        // `function_defs` is the one structural exception:
+        // Adamant's `Vec<AdamantFunctionDefinition>` differs
+        // from Sui's `Vec<FunctionDefinition>` by carrying
+        // `Vec<BytecodeInstruction>` instead of `Vec<Bytecode>`
+        // in each function body. The conversion strips the
+        // `BytecodeInstruction::Inherited(_)` wrapper and
+        // refuses on `Adamant(_)`.
+        fn cv<T: serde::Serialize, U: serde::de::DeserializeOwned>(t: &T) -> U {
+            let bytes = bcs::to_bytes(t)
+                .expect("byte-identity invariant per Phase 5/5b.6 cross-validation");
+            bcs::from_bytes(&bytes)
+                .expect("byte-identity invariant per Phase 5/5b.6 cross-validation")
+        }
+
         let mut function_defs = Vec::with_capacity(self.function_defs.len());
         for (fd_idx, fd) in self.function_defs.iter().enumerate() {
             let code = match &fd.code {
@@ -313,16 +343,18 @@ impl AdamantCompiledModule {
                     let mut sui_code = Vec::with_capacity(code_unit.code.len());
                     for (instr_idx, instr) in code_unit.code.iter().enumerate() {
                         match instr {
-                            BytecodeInstruction::Inherited(b) => sui_code.push(b.clone()),
+                            BytecodeInstruction::Inherited(b) => sui_code.push(cv(b)),
                             BytecodeInstruction::Adamant(_) => {
-                                // Cast safety: Sui's binary format
-                                // bounds function-def count and
-                                // body-instruction count to u16
-                                // (`FUNCTION_HANDLE_INDEX_MAX = 65535`,
-                                // `BYTECODE_INDEX_MAX = 65535`); this
-                                // module came through the
-                                // deserializer which enforces the
-                                // bounds. `try_from` makes the bound
+                                // Cast safety: Sui's binary
+                                // format bounds function-def
+                                // count and body-instruction
+                                // count to u16
+                                // (`FUNCTION_HANDLE_INDEX_MAX =
+                                // 65535`, `BYTECODE_INDEX_MAX =
+                                // 65535`); this module came
+                                // through the deserializer
+                                // which enforces the bounds.
+                                // `try_from` makes the bound
                                 // explicit.
                                 let function_index = u16::try_from(fd_idx).expect(
                                     "function-def count fits u16; binary format precludes \
@@ -342,43 +374,43 @@ impl AdamantCompiledModule {
                         }
                     }
                     Some(CodeUnit {
-                        locals: code_unit.locals,
+                        locals: cv(&code_unit.locals),
                         code: sui_code,
-                        jump_tables: code_unit.jump_tables.clone(),
+                        jump_tables: cv(&code_unit.jump_tables),
                     })
                 }
             };
             function_defs.push(FunctionDefinition {
-                function: fd.function,
-                visibility: fd.visibility,
+                function: cv(&fd.function),
+                visibility: cv(&fd.visibility),
                 is_entry: fd.is_entry,
-                acquires_global_resources: fd.acquires_global_resources.clone(),
+                acquires_global_resources: cv(&fd.acquires_global_resources),
                 code,
             });
         }
         Ok(CompiledModule {
             version: self.version,
             publishable: self.publishable,
-            self_module_handle_idx: self.self_module_handle_idx,
-            module_handles: self.module_handles.clone(),
-            datatype_handles: self.datatype_handles.clone(),
-            function_handles: self.function_handles.clone(),
-            field_handles: self.field_handles.clone(),
-            friend_decls: self.friend_decls.clone(),
-            struct_def_instantiations: self.struct_def_instantiations.clone(),
-            function_instantiations: self.function_instantiations.clone(),
-            field_instantiations: self.field_instantiations.clone(),
-            signatures: self.signatures.clone(),
-            identifiers: self.identifiers.clone(),
-            address_identifiers: self.address_identifiers.clone(),
-            constant_pool: self.constant_pool.clone(),
-            metadata: self.metadata.clone(),
-            struct_defs: self.struct_defs.clone(),
+            self_module_handle_idx: cv(&self.self_module_handle_idx),
+            module_handles: cv(&self.module_handles),
+            datatype_handles: cv(&self.datatype_handles),
+            function_handles: cv(&self.function_handles),
+            field_handles: cv(&self.field_handles),
+            friend_decls: cv(&self.friend_decls),
+            struct_def_instantiations: cv(&self.struct_def_instantiations),
+            function_instantiations: cv(&self.function_instantiations),
+            field_instantiations: cv(&self.field_instantiations),
+            signatures: cv(&self.signatures),
+            identifiers: cv(&self.identifiers),
+            address_identifiers: cv(&self.address_identifiers),
+            constant_pool: cv(&self.constant_pool),
+            metadata: cv(&self.metadata),
+            struct_defs: cv(&self.struct_defs),
             function_defs,
-            enum_defs: self.enum_defs.clone(),
-            enum_def_instantiations: self.enum_def_instantiations.clone(),
-            variant_handles: self.variant_handles.clone(),
-            variant_instantiation_handles: self.variant_instantiation_handles.clone(),
+            enum_defs: cv(&self.enum_defs),
+            enum_def_instantiations: cv(&self.enum_def_instantiations),
+            variant_handles: cv(&self.variant_handles),
+            variant_instantiation_handles: cv(&self.variant_instantiation_handles),
         })
     }
 }
@@ -421,7 +453,13 @@ impl std::error::Error for AdamantToSuiConversionError {}
 mod tests {
     use super::*;
     use crate::bytecode::AdamantBytecode;
-    use move_binary_format::file_format::Bytecode;
+    use adamant_bytecode_format::Bytecode;
+    // Sui's `Bytecode` is also imported to assert against the
+    // result of `to_sui_module` (which returns a Sui
+    // `CompiledModule`). The two enum types are byte-identical
+    // under BCS but distinct nominal types in Rust's type
+    // system; the test scope needs both visible.
+    use move_binary_format::file_format::Bytecode as SuiBytecode;
 
     /// `AdamantCompiledModule::default()` returns a module with
     /// every field empty / zero. Constructing the default and
@@ -590,7 +628,7 @@ mod tests {
         assert_eq!(sui.function_defs.len(), 1);
         let fd = &sui.function_defs[0];
         let body = fd.code.as_ref().unwrap().code.clone();
-        assert_eq!(body, vec![Bytecode::Ret]);
+        assert_eq!(body, vec![SuiBytecode::Ret]);
     }
 
     /// `to_sui_module` refuses a module with an extension and

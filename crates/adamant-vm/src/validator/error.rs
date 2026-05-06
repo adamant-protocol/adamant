@@ -10,8 +10,10 @@
 //! Eager semantics: callers receive the first violation
 //! encountered.
 
+use adamant_bytecode_format::FunctionDefinitionIndex;
+use move_binary_format::errors::VMError;
+
 use crate::module_wire::AdamantDeserializeError;
-use move_binary_format::{errors::VMError, file_format::FunctionDefinitionIndex};
 
 /// Errors returned by the Adamant validator
 /// ([`super::verify_module`]).

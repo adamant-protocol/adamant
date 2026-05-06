@@ -25,17 +25,13 @@
 //! reaches production. Deferred until the rules-implementation
 //! arc completes.
 
-use adamant_bytecode_format::VERSION_MAX;
-use adamant_types::Mutability;
-use move_binary_format::file_format::{
+use adamant_bytecode_format::{
     AbilitySet, AddressIdentifierIndex, Bytecode, DatatypeHandle, DatatypeHandleIndex,
-    FieldDefinition, FunctionHandle, FunctionHandleIndex, IdentifierIndex, ModuleHandle,
-    ModuleHandleIndex, Signature, SignatureIndex, SignatureToken, StructDefinition,
-    StructFieldInformation, TypeSignature, Visibility,
+    FieldDefinition, FunctionHandle, FunctionHandleIndex, Identifier, IdentifierIndex, Metadata,
+    ModuleHandle, ModuleHandleIndex, Signature, SignatureIndex, SignatureToken, StructDefinition,
+    StructFieldInformation, TypeSignature, Visibility, VERSION_MAX,
 };
-use move_core_types::{
-    account_address::AccountAddress, identifier::Identifier, metadata::Metadata,
-};
+use adamant_types::{Address as AccountAddress, Mutability};
 
 use crate::bytecode::BytecodeInstruction;
 use crate::module::{AdamantCodeUnit, AdamantCompiledModule, AdamantFunctionDefinition};
@@ -74,7 +70,7 @@ fn module_shell() -> AdamantCompiledModule {
             name: IdentifierIndex(0),
         }],
         identifiers: vec![Identifier::new("M").unwrap()],
-        address_identifiers: vec![AccountAddress::ZERO],
+        address_identifiers: vec![AccountAddress::from_bytes([0u8; 32])],
         ..AdamantCompiledModule::default()
     }
 }

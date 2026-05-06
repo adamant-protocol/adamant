@@ -212,6 +212,9 @@ impl AsRef<str> for Identifier {
     }
 }
 
+/// The pool of [`Identifier`]s used by a module.
+pub type IdentifierPool = Vec<Identifier>;
+
 impl fmt::Display for Identifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", &self.0)

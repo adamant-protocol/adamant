@@ -92,31 +92,24 @@
 // Sui types that 5/5b.1a does not yet fork. The 25 reused
 // parallel-struct neighbour types (DatatypeHandle, FunctionHandle,
 // etc.) move to `adamant-bytecode-format` in Phase 5/5b.1b. The
-// `AbilitySet` import stays here too — `AbilitySet` is forked and
-// cross-validated in `adamant-bytecode-format`, but the Sui
-// neighbour types (`DatatypeHandle`, `FunctionHandle`,
-// `DatatypeTyParameter`) carry `abilities` fields of Sui's
-// `AbilitySet` type. Swapping the import here would type-conflict
-// with those fields; the consistent rewire lands in 5/5b.1b
-// alongside the type-fork.
-use move_binary_format::file_format::{
-    AbilitySet, Constant, DatatypeHandle, DatatypeHandleIndex, DatatypeTyParameter,
-    EnumDefInstantiation, EnumDefinition, EnumDefinitionIndex, FieldDefinition, FieldHandle,
+// All bytecode-format types now resolve to adamant-bytecode-format.
+// Phase 5/5b.1b's type-fork moved the 25 neighbour types over;
+// adamant-vm's production paths run zero `move-*` types as of
+// this rewire. The validator wrapper bridge in `validator/mod.rs`
+// retains a Sui-side `CompiledModule` import for transitional
+// cross-validation; that bridge is removed in Phase 5/5b.5.
+use adamant_bytecode_format::{
+    AbilitySet, AddressIdentifierIndex, BinaryConstants, BinaryFlavor, Constant, ConstantPoolIndex,
+    DatatypeHandle, DatatypeHandleIndex, DatatypeTyParameter, EnumDefInstantiation,
+    EnumDefInstantiationIndex, EnumDefinition, EnumDefinitionIndex, FieldDefinition, FieldHandle,
     FieldHandleIndex, FieldInstantiation, FieldInstantiationIndex, FunctionDefinition,
     FunctionHandle, FunctionHandleIndex, FunctionInstantiation, FunctionInstantiationIndex,
-    IdentifierIndex, JumpTableInner, ModuleHandle, ModuleHandleIndex, Signature, SignatureIndex,
+    IdentifierIndex, JumpTableInner, Metadata, ModuleHandle, ModuleHandleIndex, SerializedEnumFlag,
+    SerializedJumpTableFlag, SerializedNativeStructFlag, SerializedType, Signature, SignatureIndex,
     SignatureToken, StructDefInstantiation, StructDefInstantiationIndex, StructDefinition,
-    StructDefinitionIndex, StructFieldInformation, VariantDefinition, VariantHandle,
-    VariantHandleIndex, VariantInstantiationHandle, VariantInstantiationHandleIndex,
-    VariantJumpTable, VariantJumpTableIndex, Visibility,
-};
-// Adamant-owned bytecode-format primitives per Phase 5/5b.1a's
-// resistant-proof fork. The constants, tag enums, and readers
-// here are consumed at the production layer with no type-level
-// conflict against the still-Sui neighbour types above.
-use adamant_bytecode_format::{
-    BinaryConstants, BinaryFlavor, SerializedEnumFlag, SerializedJumpTableFlag,
-    SerializedNativeStructFlag, SerializedType, TableType, ACQUIRES_COUNT_MAX, ADDRESS_INDEX_MAX,
+    StructDefinitionIndex, StructFieldInformation, TableType, TypeSignature, VariantDefinition,
+    VariantHandle, VariantHandleIndex, VariantInstantiationHandle, VariantInstantiationHandleIndex,
+    VariantJumpTable, VariantJumpTableIndex, Visibility, ACQUIRES_COUNT_MAX, ADDRESS_INDEX_MAX,
     BYTECODE_INDEX_MAX, CONSTANT_INDEX_MAX, CONSTANT_SIZE_MAX, DATATYPE_HANDLE_INDEX_MAX,
     ENUM_DEF_INDEX_MAX, ENUM_DEF_INST_INDEX_MAX, FIELD_COUNT_MAX, FIELD_HANDLE_INDEX_MAX,
     FIELD_INST_INDEX_MAX, FIELD_OFFSET_MAX, FUNCTION_HANDLE_INDEX_MAX, FUNCTION_INST_INDEX_MAX,
@@ -128,8 +121,7 @@ use adamant_bytecode_format::{
     VARIANT_INSTANTIATION_HANDLE_INDEX_MAX, VARIANT_TAG_MAX_VALUE, VERSION_5, VERSION_7,
     VERSION_MAX, VERSION_MIN,
 };
-use move_core_types::account_address::AccountAddress;
-use move_core_types::metadata::Metadata;
+use adamant_types::Address as AccountAddress;
 
 use crate::bytecode_wire;
 use crate::module::{AdamantCodeUnit, AdamantCompiledModule, AdamantFunctionDefinition};
@@ -379,7 +371,7 @@ fn serialize_identifier_index(
 
 fn serialize_address_identifier_index(
     out: &mut Vec<u8>,
-    idx: &move_binary_format::file_format::AddressIdentifierIndex,
+    idx: &AddressIdentifierIndex,
 ) -> Result<(), AdamantSerializeError> {
     write_uleb128_bounded(
         out,
@@ -402,7 +394,7 @@ fn serialize_signature_index(
 #[allow(dead_code)]
 fn serialize_constant_pool_index(
     out: &mut Vec<u8>,
-    idx: &move_binary_format::file_format::ConstantPoolIndex,
+    idx: &ConstantPoolIndex,
 ) -> Result<(), AdamantSerializeError> {
     write_uleb128_bounded(
         out,
@@ -495,7 +487,7 @@ fn serialize_struct_def_inst_index(
 
 fn serialize_enum_def_inst_index(
     out: &mut Vec<u8>,
-    idx: &move_binary_format::file_format::EnumDefInstantiationIndex,
+    idx: &EnumDefInstantiationIndex,
 ) -> Result<(), AdamantSerializeError> {
     write_uleb128_bounded(
         out,
@@ -750,7 +742,7 @@ fn serialize_identifier(out: &mut Vec<u8>, string: &str) -> Result<(), AdamantSe
 }
 
 fn serialize_address(out: &mut Vec<u8>, address: &AccountAddress) {
-    out.extend_from_slice(address.as_ref());
+    out.extend_from_slice(address.as_bytes());
 }
 
 fn serialize_constant(out: &mut Vec<u8>, constant: &Constant) -> Result<(), AdamantSerializeError> {
@@ -1520,7 +1512,7 @@ pub enum AdamantDeserializeError {
     /// [`bytecode_wire::deserialize_function_body_from_cursor`].
     Bytecode(bytecode_wire::DeserializeError),
     /// An identifier-pool entry's bytes do not form a valid Move
-    /// identifier per [`move_core_types::identifier::Identifier::new`].
+    /// identifier per [`adamant_bytecode_format::Identifier::new`].
     InvalidIdentifier,
     /// A function-definition byte indicated a flag bit other than
     /// the well-defined ENTRY (0x4) or NATIVE (0x2) bits.
@@ -1740,11 +1732,11 @@ fn load_identifier_index(
 
 fn load_address_identifier_index(
     cursor: &mut std::io::Cursor<&[u8]>,
-) -> Result<move_binary_format::file_format::AddressIdentifierIndex, AdamantDeserializeError> {
+) -> Result<AddressIdentifierIndex, AdamantDeserializeError> {
     let v = read_uleb128_bounded(cursor, ADDRESS_INDEX_MAX, "AddressIdentifierIndex")?;
     #[allow(clippy::cast_possible_truncation)]
     let idx = v as u16;
-    Ok(move_binary_format::file_format::AddressIdentifierIndex(idx))
+    Ok(AddressIdentifierIndex(idx))
 }
 
 fn load_signature_index(
@@ -1776,13 +1768,11 @@ fn load_enum_def_index(
 
 fn load_enum_def_inst_index(
     cursor: &mut std::io::Cursor<&[u8]>,
-) -> Result<move_binary_format::file_format::EnumDefInstantiationIndex, AdamantDeserializeError> {
+) -> Result<EnumDefInstantiationIndex, AdamantDeserializeError> {
     let v = read_uleb128_bounded(cursor, ENUM_DEF_INST_INDEX_MAX, "EnumDefInstantiationIndex")?;
     #[allow(clippy::cast_possible_truncation)]
     let idx = v as u16;
-    Ok(move_binary_format::file_format::EnumDefInstantiationIndex(
-        idx,
-    ))
+    Ok(EnumDefInstantiationIndex(idx))
 }
 
 fn load_field_offset(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u16, AdamantDeserializeError> {
@@ -1896,7 +1886,7 @@ fn load_field_instantiation(
 ) -> Result<FieldInstantiation, AdamantDeserializeError> {
     let v = read_uleb128_bounded(cursor, FIELD_HANDLE_INDEX_MAX, "FieldHandleIndex")?;
     #[allow(clippy::cast_possible_truncation)]
-    let handle = move_binary_format::file_format::FieldHandleIndex(v as u16);
+    let handle = FieldHandleIndex(v as u16);
     let type_parameters = load_signature_index(cursor)?;
     Ok(FieldInstantiation {
         handle,
@@ -1945,13 +1935,13 @@ fn load_variant_instantiation_handle(
 fn load_address(
     cursor: &mut std::io::Cursor<&[u8]>,
 ) -> Result<AccountAddress, AdamantDeserializeError> {
-    let bytes = read_n::<{ AccountAddress::LENGTH }>(cursor)?;
-    Ok(AccountAddress::new(bytes))
+    let bytes = read_n::<{ adamant_types::address::ADDRESS_BYTES }>(cursor)?;
+    Ok(AccountAddress::from_bytes(bytes))
 }
 
 fn load_identifier(
     cursor: &mut std::io::Cursor<&[u8]>,
-) -> Result<move_core_types::identifier::Identifier, AdamantDeserializeError> {
+) -> Result<adamant_bytecode_format::Identifier, AdamantDeserializeError> {
     let len = read_uleb128_length(cursor, IDENTIFIER_SIZE_MAX, "identifier size")?;
     // Cast safety: cursor position is bounded by the underlying
     // slice length (a `usize`).
@@ -1964,13 +1954,11 @@ fn load_identifier(
     let slice = &bytes[pos..pos + len];
     cursor.set_position((pos + len) as u64);
     let s = std::str::from_utf8(slice).map_err(|_| AdamantDeserializeError::InvalidIdentifier)?;
-    move_core_types::identifier::Identifier::new(s)
+    adamant_bytecode_format::Identifier::new(s)
         .map_err(|_| AdamantDeserializeError::InvalidIdentifier)
 }
 
-fn load_constant(
-    cursor: &mut std::io::Cursor<&[u8]>,
-) -> Result<move_binary_format::file_format::Constant, AdamantDeserializeError> {
+fn load_constant(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Constant, AdamantDeserializeError> {
     let type_ = load_signature_token(cursor)?;
     let len = read_uleb128_length(cursor, CONSTANT_SIZE_MAX, "constant data size")?;
     #[allow(clippy::cast_possible_truncation)]
@@ -1981,7 +1969,7 @@ fn load_constant(
     }
     let data = bytes[pos..pos + len].to_vec();
     cursor.set_position((pos + len) as u64);
-    Ok(move_binary_format::file_format::Constant { type_, data })
+    Ok(Constant { type_, data })
 }
 
 fn load_metadata_entry(
@@ -2198,7 +2186,7 @@ fn load_field_definition(
     cursor: &mut std::io::Cursor<&[u8]>,
 ) -> Result<FieldDefinition, AdamantDeserializeError> {
     let name = load_identifier_index(cursor)?;
-    let signature = move_binary_format::file_format::TypeSignature(load_signature_token(cursor)?);
+    let signature = TypeSignature(load_signature_token(cursor)?);
     Ok(FieldDefinition { name, signature })
 }
 
@@ -2746,15 +2734,27 @@ fn load_table(
 mod tests {
     use super::*;
     use crate::bytecode::BytecodeInstruction;
-    use adamant_bytecode_format::VERSION_6;
+    use adamant_bytecode_format::{Bytecode, Identifier, VERSION_6};
+    // Test imports of Sui's vendored types for cross-validation
+    // construction. All Sui-named types are aliased with `Sui*`
+    // prefix so the bare names in test scope (via `use super::*`)
+    // continue to resolve to Adamant's bytecode-format types
+    // post-Phase 5/5b.1b. Adamant-side AdamantCompiledModule
+    // construction uses Adamant types; Sui-side CompiledModule
+    // construction uses Sui types via the aliases.
     use move_binary_format::file_format::{
-        AbilitySet, AddressIdentifierIndex, Bytecode, CodeUnit, CompiledModule, Constant,
-        DatatypeHandle, FunctionDefinition as SuiFunctionDefinition, FunctionHandle, ModuleHandle,
-        Signature, SignatureToken, Visibility,
+        AbilitySet as SuiAbilitySet, AddressIdentifierIndex as SuiAddressIdentifierIndex,
+        Bytecode as SuiBytecode, CodeUnit as SuiCodeUnit, CompiledModule, Constant as SuiConstant,
+        DatatypeHandle as SuiDatatypeHandle, FunctionDefinition as SuiFunctionDefinition,
+        FunctionHandle as SuiFunctionHandle, FunctionHandleIndex as SuiFunctionHandleIndex,
+        IdentifierIndex as SuiIdentifierIndex, ModuleHandle as SuiModuleHandle,
+        ModuleHandleIndex as SuiModuleHandleIndex, Signature as SuiSignature,
+        SignatureIndex as SuiSignatureIndex, SignatureToken as SuiSignatureToken,
+        Visibility as SuiVisibility,
     };
-    use move_core_types::account_address::AccountAddress;
-    use move_core_types::identifier::Identifier;
-    use move_core_types::metadata::Metadata;
+    use move_core_types::account_address::AccountAddress as SuiAccountAddress;
+    use move_core_types::identifier::Identifier as SuiIdentifier;
+    use move_core_types::metadata::Metadata as SuiMetadata;
 
     // ---- Fixture builders --------------------------------------------------
 
@@ -2762,28 +2762,28 @@ mod tests {
     /// module handle, a single identifier, a single address, the
     /// `self_module_handle_idx` pointing at the only module handle.
     fn minimal_pair(version: u32) -> (AdamantCompiledModule, CompiledModule) {
-        let identifiers = vec![Identifier::new("M").unwrap()];
-        let address_identifiers = vec![AccountAddress::ZERO];
-        let module_handles = vec![ModuleHandle {
-            address: AddressIdentifierIndex(0),
-            name: IdentifierIndex(0),
-        }];
         let adamant = AdamantCompiledModule {
             version,
             publishable: true,
             self_module_handle_idx: ModuleHandleIndex(0),
-            module_handles: module_handles.clone(),
-            identifiers: identifiers.clone(),
-            address_identifiers: address_identifiers.clone(),
+            module_handles: vec![ModuleHandle {
+                address: AddressIdentifierIndex(0),
+                name: IdentifierIndex(0),
+            }],
+            identifiers: vec![Identifier::new("M").unwrap()],
+            address_identifiers: vec![AccountAddress::from_bytes([0u8; 32])],
             ..AdamantCompiledModule::default()
         };
         let sui = CompiledModule {
             version,
             publishable: true,
-            self_module_handle_idx: ModuleHandleIndex(0),
-            module_handles,
-            identifiers,
-            address_identifiers,
+            self_module_handle_idx: SuiModuleHandleIndex(0),
+            module_handles: vec![SuiModuleHandle {
+                address: SuiAddressIdentifierIndex(0),
+                name: SuiIdentifierIndex(0),
+            }],
+            identifiers: vec![SuiIdentifier::new("M").unwrap()],
+            address_identifiers: vec![SuiAccountAddress::ZERO],
             ..CompiledModule::default()
         };
         (adamant, sui)
@@ -2796,40 +2796,50 @@ mod tests {
         let (mut adamant, mut sui) = minimal_pair(version);
         // Identifiers.
         adamant.identifiers.push(Identifier::new("f").unwrap());
-        sui.identifiers.push(Identifier::new("f").unwrap());
+        sui.identifiers.push(SuiIdentifier::new("f").unwrap());
         // Datatype handle.
-        let dh = DatatypeHandle {
+        adamant.datatype_handles.push(DatatypeHandle {
             module: ModuleHandleIndex(0),
             name: IdentifierIndex(1),
-            abilities: AbilitySet::EMPTY | move_binary_format::file_format::Ability::Drop,
+            abilities: AbilitySet::EMPTY | adamant_bytecode_format::Ability::Drop,
             type_parameters: vec![],
-        };
-        adamant.datatype_handles.push(dh.clone());
-        sui.datatype_handles.push(dh);
+        });
+        sui.datatype_handles.push(SuiDatatypeHandle {
+            module: SuiModuleHandleIndex(0),
+            name: SuiIdentifierIndex(1),
+            abilities: SuiAbilitySet::EMPTY | move_binary_format::file_format::Ability::Drop,
+            type_parameters: vec![],
+        });
         // Signatures: empty + (U64,).
         adamant.signatures.push(Signature(vec![]));
         adamant
             .signatures
             .push(Signature(vec![SignatureToken::U64]));
-        sui.signatures.push(Signature(vec![]));
-        sui.signatures.push(Signature(vec![SignatureToken::U64]));
+        sui.signatures.push(SuiSignature(vec![]));
+        sui.signatures
+            .push(SuiSignature(vec![SuiSignatureToken::U64]));
         // Function handle for a function `f(): u64`.
-        let fh = FunctionHandle {
+        adamant.function_handles.push(FunctionHandle {
             module: ModuleHandleIndex(0),
             name: IdentifierIndex(1),
             parameters: SignatureIndex(0),
             return_: SignatureIndex(1),
             type_parameters: vec![],
-        };
-        adamant.function_handles.push(fh.clone());
-        sui.function_handles.push(fh);
+        });
+        sui.function_handles.push(SuiFunctionHandle {
+            module: SuiModuleHandleIndex(0),
+            name: SuiIdentifierIndex(1),
+            parameters: SuiSignatureIndex(0),
+            return_: SuiSignatureIndex(1),
+            type_parameters: vec![],
+        });
         // Constant pool.
         adamant.constant_pool.push(Constant {
             type_: SignatureToken::U64,
             data: vec![1, 0, 0, 0, 0, 0, 0, 0],
         });
-        sui.constant_pool.push(Constant {
-            type_: SignatureToken::U64,
+        sui.constant_pool.push(SuiConstant {
+            type_: SuiSignatureToken::U64,
             data: vec![1, 0, 0, 0, 0, 0, 0, 0],
         });
         // Metadata (version 5+).
@@ -2838,7 +2848,7 @@ mod tests {
                 key: b"adamant.privacy".to_vec(),
                 value: vec![0x00],
             });
-            sui.metadata.push(Metadata {
+            sui.metadata.push(SuiMetadata {
                 key: b"adamant.privacy".to_vec(),
                 value: vec![0x00],
             });
@@ -2850,7 +2860,7 @@ mod tests {
             BytecodeInstruction::Inherited(Bytecode::Pop),
             BytecodeInstruction::Inherited(Bytecode::Ret),
         ];
-        let sui_body = vec![Bytecode::LdU64(1), Bytecode::Pop, Bytecode::Ret];
+        let sui_body = vec![SuiBytecode::LdU64(1), SuiBytecode::Pop, SuiBytecode::Ret];
         adamant.function_defs.push(AdamantFunctionDefinition {
             function: FunctionHandleIndex(0),
             visibility: Visibility::Public,
@@ -2863,12 +2873,12 @@ mod tests {
             }),
         });
         sui.function_defs.push(SuiFunctionDefinition {
-            function: FunctionHandleIndex(0),
-            visibility: Visibility::Public,
+            function: SuiFunctionHandleIndex(0),
+            visibility: SuiVisibility::Public,
             is_entry: false,
             acquires_global_resources: vec![],
-            code: Some(CodeUnit {
-                locals: SignatureIndex(0),
+            code: Some(SuiCodeUnit {
+                locals: SuiSignatureIndex(0),
                 code: sui_body,
                 jump_tables: vec![],
             }),
@@ -3111,18 +3121,23 @@ mod tests {
     fn cross_validate_public_entry_function_at_v5() {
         let (mut adamant, mut sui) = minimal_pair(VERSION_5);
         adamant.identifiers.push(Identifier::new("g").unwrap());
-        sui.identifiers.push(Identifier::new("g").unwrap());
+        sui.identifiers.push(SuiIdentifier::new("g").unwrap());
         adamant.signatures.push(Signature(vec![]));
-        sui.signatures.push(Signature(vec![]));
-        let fh = FunctionHandle {
+        sui.signatures.push(SuiSignature(vec![]));
+        adamant.function_handles.push(FunctionHandle {
             module: ModuleHandleIndex(0),
             name: IdentifierIndex(1),
             parameters: SignatureIndex(0),
             return_: SignatureIndex(0),
             type_parameters: vec![],
-        };
-        adamant.function_handles.push(fh.clone());
-        sui.function_handles.push(fh);
+        });
+        sui.function_handles.push(SuiFunctionHandle {
+            module: SuiModuleHandleIndex(0),
+            name: SuiIdentifierIndex(1),
+            parameters: SuiSignatureIndex(0),
+            return_: SuiSignatureIndex(0),
+            type_parameters: vec![],
+        });
         adamant.function_defs.push(AdamantFunctionDefinition {
             function: FunctionHandleIndex(0),
             visibility: Visibility::Public,
@@ -3135,13 +3150,13 @@ mod tests {
             }),
         });
         sui.function_defs.push(SuiFunctionDefinition {
-            function: FunctionHandleIndex(0),
-            visibility: Visibility::Public,
+            function: SuiFunctionHandleIndex(0),
+            visibility: SuiVisibility::Public,
             is_entry: true,
             acquires_global_resources: vec![],
-            code: Some(CodeUnit {
-                locals: SignatureIndex(0),
-                code: vec![Bytecode::Ret],
+            code: Some(SuiCodeUnit {
+                locals: SuiSignatureIndex(0),
+                code: vec![SuiBytecode::Ret],
                 jump_tables: vec![],
             }),
         });
@@ -3162,13 +3177,16 @@ mod tests {
         adamant
             .identifiers
             .push(Identifier::new("FriendMod").unwrap());
-        sui.identifiers.push(Identifier::new("FriendMod").unwrap());
-        let friend = ModuleHandle {
+        sui.identifiers
+            .push(SuiIdentifier::new("FriendMod").unwrap());
+        adamant.friend_decls.push(ModuleHandle {
             address: AddressIdentifierIndex(0),
             name: IdentifierIndex(1),
-        };
-        adamant.friend_decls.push(friend.clone());
-        sui.friend_decls.push(friend);
+        });
+        sui.friend_decls.push(SuiModuleHandle {
+            address: SuiAddressIdentifierIndex(0),
+            name: SuiIdentifierIndex(1),
+        });
 
         let mut adamant_bytes = Vec::new();
         adamant_serialize(&adamant, &mut adamant_bytes).unwrap();
@@ -3189,8 +3207,8 @@ mod tests {
             type_: SignatureToken::Vector(Box::new(SignatureToken::U8)),
             data: vec![],
         });
-        sui.constant_pool.push(Constant {
-            type_: SignatureToken::Vector(Box::new(SignatureToken::U8)),
+        sui.constant_pool.push(SuiConstant {
+            type_: SuiSignatureToken::Vector(Box::new(SuiSignatureToken::U8)),
             data: vec![],
         });
 
@@ -3222,7 +3240,7 @@ mod tests {
                 name: IdentifierIndex(0),
             }],
             identifiers: vec![Identifier::new("M").unwrap(), Identifier::new("h").unwrap()],
-            address_identifiers: vec![AccountAddress::ZERO],
+            address_identifiers: vec![AccountAddress::from_bytes([0u8; 32])],
             signatures: vec![Signature(vec![])],
             ..AdamantCompiledModule::default()
         };
@@ -3398,7 +3416,7 @@ mod tests {
                 name: IdentifierIndex(0),
             }],
             identifiers: vec![Identifier::new("M").unwrap(), Identifier::new("h").unwrap()],
-            address_identifiers: vec![AccountAddress::ZERO],
+            address_identifiers: vec![AccountAddress::from_bytes([0u8; 32])],
             signatures: vec![Signature(vec![])],
             ..AdamantCompiledModule::default()
         };
@@ -3441,7 +3459,7 @@ mod tests {
                 name: IdentifierIndex(0),
             }],
             identifiers: vec![Identifier::new("M").unwrap(), Identifier::new("g").unwrap()],
-            address_identifiers: vec![AccountAddress::ZERO],
+            address_identifiers: vec![AccountAddress::from_bytes([0u8; 32])],
             signatures: vec![Signature(vec![])],
             ..AdamantCompiledModule::default()
         };
@@ -3552,7 +3570,7 @@ mod tests {
                 name: IdentifierIndex(0),
             }],
             identifiers: vec![Identifier::new("M").unwrap(), Identifier::new("h").unwrap()],
-            address_identifiers: vec![AccountAddress::ZERO],
+            address_identifiers: vec![AccountAddress::from_bytes([0u8; 32])],
             signatures: vec![Signature(vec![])],
             ..AdamantCompiledModule::default()
         };
@@ -3685,7 +3703,7 @@ mod tests {
                 name: IdentifierIndex(0),
             }],
             identifiers: vec![Identifier::new("M").unwrap(), Identifier::new("h").unwrap()],
-            address_identifiers: vec![AccountAddress::ZERO],
+            address_identifiers: vec![AccountAddress::from_bytes([0u8; 32])],
             signatures: vec![Signature(vec![])],
             function_handles: vec![FunctionHandle {
                 module: ModuleHandleIndex(0),
@@ -3719,7 +3737,6 @@ mod tests {
     #[test]
     fn round_trip_each_extension_at_module_level() {
         use crate::bytecode::{AdamantBytecode, CircuitId, GasDimension};
-        use move_binary_format::file_format::FunctionHandleIndex;
 
         let extensions = [
             AdamantBytecode::InvokeShielded(FunctionHandleIndex(0)),
@@ -3782,7 +3799,6 @@ mod tests {
     #[test]
     fn round_trip_rich_multi_extension_function_body() {
         use crate::bytecode::{AdamantBytecode, CircuitId, GasDimension};
-        use move_binary_format::file_format::FunctionHandleIndex;
 
         let mut module = module_with_extension(AdamantBytecode::Sha3_256);
         // Replace the body with a richer mix.
@@ -3823,35 +3839,43 @@ mod tests {
         move_binary_format::file_format::CompiledModule,
     ) {
         use move_binary_format::file_format::{
-            DatatypeTyParameter, FieldDefinition, StructDefinition, StructFieldInformation,
-            TypeSignature,
+            DatatypeTyParameter as SuiDatatypeTyParameter, FieldDefinition as SuiFieldDefinition,
+            StructDefinition as SuiStructDefinition,
+            StructFieldInformation as SuiStructFieldInformation, TypeSignature as SuiTypeSignature,
         };
 
         let (mut adamant, mut sui) = minimal_pair(version);
         adamant.identifiers.push(Identifier::new("S").unwrap());
-        sui.identifiers.push(Identifier::new("S").unwrap());
+        sui.identifiers.push(SuiIdentifier::new("S").unwrap());
         adamant.identifiers.push(Identifier::new("f").unwrap());
-        sui.identifiers.push(Identifier::new("f").unwrap());
+        sui.identifiers.push(SuiIdentifier::new("f").unwrap());
         adamant.identifiers.push(Identifier::new("g").unwrap());
-        sui.identifiers.push(Identifier::new("g").unwrap());
+        sui.identifiers.push(SuiIdentifier::new("g").unwrap());
         adamant.signatures.push(Signature(vec![]));
-        sui.signatures.push(Signature(vec![]));
+        sui.signatures.push(SuiSignature(vec![]));
         adamant
             .signatures
             .push(Signature(vec![SignatureToken::TypeParameter(0)]));
         sui.signatures
-            .push(Signature(vec![SignatureToken::TypeParameter(0)]));
-        let dh = DatatypeHandle {
+            .push(SuiSignature(vec![SuiSignatureToken::TypeParameter(0)]));
+        adamant.datatype_handles.push(DatatypeHandle {
             module: ModuleHandleIndex(0),
             name: IdentifierIndex(1),
-            abilities: AbilitySet::EMPTY | move_binary_format::file_format::Ability::Drop,
+            abilities: AbilitySet::EMPTY | adamant_bytecode_format::Ability::Drop,
             type_parameters: vec![DatatypeTyParameter {
                 constraints: AbilitySet::EMPTY,
                 is_phantom: false,
             }],
-        };
-        adamant.datatype_handles.push(dh.clone());
-        sui.datatype_handles.push(dh);
+        });
+        sui.datatype_handles.push(SuiDatatypeHandle {
+            module: SuiModuleHandleIndex(0),
+            name: SuiIdentifierIndex(1),
+            abilities: SuiAbilitySet::EMPTY | move_binary_format::file_format::Ability::Drop,
+            type_parameters: vec![SuiDatatypeTyParameter {
+                constraints: SuiAbilitySet::EMPTY,
+                is_phantom: false,
+            }],
+        });
         adamant.struct_defs.push(StructDefinition {
             struct_handle: DatatypeHandleIndex(0),
             field_information: StructFieldInformation::Declared(vec![FieldDefinition {
@@ -3859,22 +3883,27 @@ mod tests {
                 signature: TypeSignature(SignatureToken::TypeParameter(0)),
             }]),
         });
-        sui.struct_defs.push(StructDefinition {
-            struct_handle: DatatypeHandleIndex(0),
-            field_information: StructFieldInformation::Declared(vec![FieldDefinition {
-                name: IdentifierIndex(2),
-                signature: TypeSignature(SignatureToken::TypeParameter(0)),
+        sui.struct_defs.push(SuiStructDefinition {
+            struct_handle: move_binary_format::file_format::DatatypeHandleIndex(0),
+            field_information: SuiStructFieldInformation::Declared(vec![SuiFieldDefinition {
+                name: SuiIdentifierIndex(2),
+                signature: SuiTypeSignature(SuiSignatureToken::TypeParameter(0)),
             }]),
         });
-        let fh = FunctionHandle {
+        adamant.function_handles.push(FunctionHandle {
             module: ModuleHandleIndex(0),
             name: IdentifierIndex(3),
             parameters: SignatureIndex(0),
             return_: SignatureIndex(1),
             type_parameters: vec![AbilitySet::EMPTY],
-        };
-        adamant.function_handles.push(fh.clone());
-        sui.function_handles.push(fh);
+        });
+        sui.function_handles.push(SuiFunctionHandle {
+            module: SuiModuleHandleIndex(0),
+            name: SuiIdentifierIndex(3),
+            parameters: SuiSignatureIndex(0),
+            return_: SuiSignatureIndex(1),
+            type_parameters: vec![SuiAbilitySet::EMPTY],
+        });
         (adamant, sui)
     }
 
@@ -3929,29 +3958,39 @@ mod tests {
     ) {
         let (mut adamant, mut sui) = minimal_pair(version);
         adamant.identifiers.push(Identifier::new("alpha").unwrap());
-        sui.identifiers.push(Identifier::new("alpha").unwrap());
+        sui.identifiers.push(SuiIdentifier::new("alpha").unwrap());
         adamant.identifiers.push(Identifier::new("beta").unwrap());
-        sui.identifiers.push(Identifier::new("beta").unwrap());
+        sui.identifiers.push(SuiIdentifier::new("beta").unwrap());
         adamant.signatures.push(Signature(vec![]));
-        sui.signatures.push(Signature(vec![]));
-        let alpha_fh = FunctionHandle {
+        sui.signatures.push(SuiSignature(vec![]));
+        adamant.function_handles.push(FunctionHandle {
             module: ModuleHandleIndex(0),
             name: IdentifierIndex(1),
             parameters: SignatureIndex(0),
             return_: SignatureIndex(0),
             type_parameters: vec![],
-        };
-        let beta_fh = FunctionHandle {
+        });
+        adamant.function_handles.push(FunctionHandle {
             module: ModuleHandleIndex(0),
             name: IdentifierIndex(2),
             parameters: SignatureIndex(0),
             return_: SignatureIndex(0),
             type_parameters: vec![],
-        };
-        adamant.function_handles.push(alpha_fh.clone());
-        adamant.function_handles.push(beta_fh.clone());
-        sui.function_handles.push(alpha_fh);
-        sui.function_handles.push(beta_fh);
+        });
+        sui.function_handles.push(SuiFunctionHandle {
+            module: SuiModuleHandleIndex(0),
+            name: SuiIdentifierIndex(1),
+            parameters: SuiSignatureIndex(0),
+            return_: SuiSignatureIndex(0),
+            type_parameters: vec![],
+        });
+        sui.function_handles.push(SuiFunctionHandle {
+            module: SuiModuleHandleIndex(0),
+            name: SuiIdentifierIndex(2),
+            parameters: SuiSignatureIndex(0),
+            return_: SuiSignatureIndex(0),
+            type_parameters: vec![],
+        });
         adamant.function_defs.push(AdamantFunctionDefinition {
             function: FunctionHandleIndex(0),
             visibility: Visibility::Public,
@@ -3979,24 +4018,24 @@ mod tests {
             }),
         });
         sui.function_defs.push(SuiFunctionDefinition {
-            function: FunctionHandleIndex(0),
-            visibility: Visibility::Public,
+            function: SuiFunctionHandleIndex(0),
+            visibility: SuiVisibility::Public,
             is_entry: false,
             acquires_global_resources: vec![],
-            code: Some(CodeUnit {
-                locals: SignatureIndex(0),
-                code: vec![Bytecode::LdU64(42), Bytecode::Pop, Bytecode::Ret],
+            code: Some(SuiCodeUnit {
+                locals: SuiSignatureIndex(0),
+                code: vec![SuiBytecode::LdU64(42), SuiBytecode::Pop, SuiBytecode::Ret],
                 jump_tables: vec![],
             }),
         });
         sui.function_defs.push(SuiFunctionDefinition {
-            function: FunctionHandleIndex(1),
-            visibility: Visibility::Private,
+            function: SuiFunctionHandleIndex(1),
+            visibility: SuiVisibility::Private,
             is_entry: false,
             acquires_global_resources: vec![],
-            code: Some(CodeUnit {
-                locals: SignatureIndex(0),
-                code: vec![Bytecode::Ret],
+            code: Some(SuiCodeUnit {
+                locals: SuiSignatureIndex(0),
+                code: vec![SuiBytecode::Ret],
                 jump_tables: vec![],
             }),
         });
