@@ -404,6 +404,26 @@ pub enum AdamantValidationError {
         /// Index into the corresponding def table.
         idx: TableIndex,
     },
+
+    /// The module's generic-instantiation graph contains a
+    /// non-trivial strongly-connected component with at least
+    /// one type-constructor-applied edge — a monomorphization-
+    /// explosive loop. Cycles formed by identity edges alone
+    /// (`f<T>` calls `f<T>`) are allowed since they don't grow
+    /// types; cycles containing any `TyConApp` edge would
+    /// require unbounded specializations and are rejected.
+    ///
+    /// Phase 5/5b.2 B-3.3 (`module_pass::instantiation_loops`).
+    LoopInInstantiationGraph {
+        /// Diagnostic summary of the offending SCC's nodes
+        /// and `TyConApp` edges. Format matches upstream's
+        /// `"edges with constructors: [{}], nodes: [{}]"`
+        /// shape byte-faithfully (Layer B parity test pins
+        /// the format). Not consensus-binding — the rejection
+        /// is, but the formatting of the cycle's contents
+        /// isn't.
+        component_summary: String,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 2, 3, 6, 7 land in subsequent
@@ -687,6 +707,12 @@ impl core::fmt::Display for AdamantValidationError {
                  references itself through field-signature edges) \
                  (whitepaper §6.2.1.8 step 3, \
                  `module_pass::recursive_data_def`)"
+            ),
+            Self::LoopInInstantiationGraph { component_summary } => write!(
+                f,
+                "monomorphization-explosive loop in generic-instantiation \
+                 graph: {component_summary} (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::instantiation_loops`)"
             ),
         }
     }

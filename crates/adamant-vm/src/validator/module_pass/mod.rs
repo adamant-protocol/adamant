@@ -46,6 +46,7 @@ mod ability_cache;
 mod ability_field_requirements;
 mod constants;
 mod friends;
+mod instantiation_loops;
 mod instruction_consistency;
 mod limits;
 mod recursive_data_def;
