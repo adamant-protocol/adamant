@@ -10,7 +10,7 @@
 //! Eager semantics: callers receive the first violation
 //! encountered.
 
-use adamant_bytecode_format::{ConstantPoolIndex, FunctionDefinitionIndex, TableIndex};
+use adamant_bytecode_format::{CodeOffset, ConstantPoolIndex, FunctionDefinitionIndex, TableIndex};
 use adamant_types::Address;
 use move_binary_format::errors::VMError;
 
@@ -243,6 +243,46 @@ pub enum AdamantValidationError {
         /// `variant_idx`).
         field_idx: TableIndex,
     },
+
+    /// A bytecode instruction's generic-vs-non-generic flavor
+    /// does not match its target's declared type-parameter
+    /// count. Examples: `Pack` referencing a struct with
+    /// declared type parameters; `PackGeneric` referencing a
+    /// struct with no type parameters; `Call` on a generic
+    /// function; `CallGeneric` on a non-generic function. The
+    /// pairing applies symmetrically across the field-borrow,
+    /// function-call, struct-pack/unpack, and enum-variant-
+    /// pack/unpack instruction families.
+    ///
+    /// Phase 5/5b.2 B-2.4 (`module_pass::instruction_consistency`).
+    GenericMemberOpcodeMismatch {
+        /// Function definition containing the offending
+        /// instruction.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Offset of the offending instruction within the
+        /// function body.
+        code_offset: CodeOffset,
+    },
+
+    /// A `VecPack` or `VecUnpack` instruction's element-count
+    /// operand exceeds `u16::MAX`. The element count operand
+    /// is encoded as a `u64` in the binary format, but the
+    /// runtime stack-effect calculation consumes/produces a
+    /// number of values equal to the count, and the count
+    /// must fit `u16::MAX` to bound the stack-effect cost
+    /// statically.
+    ///
+    /// Phase 5/5b.2 B-2.4 (`module_pass::instruction_consistency`).
+    VecPackUnpackArgOutOfRange {
+        /// Function definition containing the offending
+        /// instruction.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Offset of the offending instruction within the
+        /// function body.
+        code_offset: CodeOffset,
+        /// The offending element-count operand.
+        num: u64,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 2, 3, 6, 7 land in subsequent
@@ -323,6 +363,13 @@ impl core::fmt::Display for MalformedConstantReason {
 }
 
 impl core::fmt::Display for AdamantValidationError {
+    // Naturally long: one match arm per `AdamantValidationError`
+    // variant. Splitting obscures the diagnostic-message
+    // dispatch shape — the long arm-list IS the table.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "dispatch over AdamantValidationError variants; the long match IS the table"
+    )]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::AdamantDeserializer(e) => {
@@ -407,6 +454,28 @@ impl core::fmt::Display for AdamantValidationError {
                      (whitepaper §6.2.1.8 step 3, `module_pass::ability_field_requirements`)"
                 ),
             },
+            Self::GenericMemberOpcodeMismatch {
+                fn_def_idx,
+                code_offset,
+            } => write!(
+                f,
+                "function {} offset {code_offset}: generic vs non-generic \
+                 instruction flavor does not match target's type-parameter \
+                 count (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::instruction_consistency`)",
+                fn_def_idx.0
+            ),
+            Self::VecPackUnpackArgOutOfRange {
+                fn_def_idx,
+                code_offset,
+                num,
+            } => write!(
+                f,
+                "function {} offset {code_offset}: VecPack/VecUnpack element count \
+                 {num} exceeds u16::MAX (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::instruction_consistency`)",
+                fn_def_idx.0
+            ),
         }
     }
 }
