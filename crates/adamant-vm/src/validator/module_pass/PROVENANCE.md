@@ -2092,3 +2092,570 @@ exist" and "tests get run."
   final pipeline integration with Sui-verifier bridge
   fully removed + `tests/no_sui_in_production_deps.rs`
   build-system independence check).
+- **2026-05-09 (Phase 5/5b.3 C-1 closure: BoundsChecker
+  feature-complete):** Five sub-checkpoints (C-1.1 → C-1.4b)
+  port upstream `BoundsChecker` per
+  `vendor/move-binary-format/src/check_bounds.rs` to
+  `module_pass/bounds_checker.rs`. **Sub-arc adapted from
+  planned 4 sub-checkpoints to 5** at the C-1.4 plan-gate
+  per the empirical-complexity-drives-sub-checkpoint-shape
+  pattern (C-1.4 split into C-1.4a + C-1.4b at sub-step
+  boundary because the full estimate of ~1,300-1,800 LOC
+  exceeded the cognitive-review threshold). Cumulative
+  Phase 5/5b.3 C-1 LOC: **~4,547 LOC** across the 5
+  sub-checkpoints. Test additions: **162 new tests** (C-1.1:
+  29; C-1.2: 44; C-1.3: 36; C-1.4a: 20; C-1.4b: 33). Six
+  new typed-error variants on `AdamantValidationError`:
+  `NoModuleHandles`, `IndexOutOfBounds`,
+  `NumberOfTypeArgumentsMismatch` (C-1.1);
+  `TooManyLocals` (C-1.4a); `CodeIndexOutOfBounds`,
+  `InvalidEnumSwitch` (C-1.4b). Methodology pattern
+  instances added across C-1: per-handle-extraction
+  refactor pattern's 1st instance (C-1.2's
+  `check_module_handle`) and 2nd instance (C-1.3's
+  `check_field_def`) — pattern reaches 2 instances; rule-of-
+  three trigger formalized; intra-sub-checkpoint
+  structural-impossibility sub-pattern's 1st-3rd instances
+  (C-1.3's `check_variant_instantiation_handles`
+  `debug_assert!`; C-1.4a's two `debug_assert!` for
+  function-handle and parameters re-checks) — sub-pattern
+  reaches 3 instances; **NEW Adamant-extension treatment
+  in module-level passes pattern's 1st instance (C-1.4b
+  `check_adamant_bytecode` partial-inspection dispatch);
+  NEW deferred-to-§7 methodology footnote's 1st instance
+  (C-1.4b GenerateProof/VerifyProof CircuitId pass-
+  through);** structural-impossibility-checks pattern's
+  5th overall instance (C-1.4b deprecated-arms
+  `unreachable!` cross-referencing B-2.4's parallel
+  pattern). Five plan-gate resolution shapes registered
+  across C-1 sub-arc: plan-was-correct (C-1.2's negatives-
+  count flag); plan-was-ambiguous (C-1.3's preservation-
+  pin-count flag — empirically 6); plan-was-conservative
+  (C-1.4a's 20-tests at lower bound); plan-overshot-on-
+  helper-signature (C-1.4b's `check_signature_type_parameters`
+  6→3 params at implementation-time); plan-incremental-
+  disposition-resolved-empirically registered later at C-3.
+  C-1 closes: bounds checker is feature-complete at 17 of
+  17 upstream `verify_impl` sub-checks.
+
+- **2026-05-09 (Phase 5/5b.3 C-2 closure: DuplicationChecker
+  feature-complete):** Single sub-checkpoint ports upstream
+  `DuplicationChecker` per
+  `vendor/move-bytecode-verifier/src/check_duplication.rs`
+  to `module_pass/duplication_checker.rs`. ~1,665 LOC; 38
+  new tests. Six new typed-error variants:
+  `DuplicateElement` (workhorse for 14+ sub-checks),
+  `ZeroSizedStruct`, `ZeroSizedEnum`, `InvalidModuleHandle`,
+  `DuplicateAcquiresAnnotation`, `UnimplementedHandle`.
+  **NEW public closed enum `DefKind` (`Struct | Enum |
+  Function`)** introduced as 3rd instance of the deliberate-
+  Adamant-decision pattern after B-4.2's byte→range→duplicate
+  ordering and C-1.3's `check_field_def` extraction (rule-
+  of-three threshold met). Adamant-extension treatment
+  pattern reaches 2nd instance (DuplicationChecker has no
+  per-instruction operand concern; extensions are early-arm-
+  Ok by virtue of the pass not iterating function bodies).
+  `first_duplicate_element` private helper kept private per
+  Q1 disposition's first-instance-private discipline.
+  Plan-vs-actual variant count off-by-one registered as
+  calibration data (plan +5; actual +6). Plan-was-conservative
+  resolution at lower bound on test count (plan 40-45,
+  actual 38). Implementation-core-vs-total-LOC refinement
+  consistently validated (~440 LOC implementation core well
+  below 800 threshold).
+
+- **2026-05-09 (Phase 5/5b.3 C-3 closure: SignatureChecker
+  feature-complete):** Single sub-checkpoint ports upstream
+  `SignatureChecker` per
+  `vendor/move-bytecode-verifier/src/signature.rs` to
+  `module_pass/signature_checker.rs`. ~1,466 LOC; 19 new
+  tests (after the variant-vs-test mapping audit added 2
+  coverage-closure tests). Five new typed-error variants:
+  `InvalidSignatureToken` with new closed enum
+  `InvalidSignatureReason` (`RefInsideContainer |
+  RefAsFieldType`); `TypeArgumentsArityMismatch`;
+  `ConstraintNotSatisfied`; `InvalidPhantomTypeParamPosition`;
+  `VecOpExpectedSingleTypeArgument`. **`AdamantAbilityCache`
+  consumer's 2nd instance** after B-2.3's
+  `ability_field_requirements`; per-pass instantiation per
+  C-1 plan-gate Q2 disposition. **NEW spec-layer-pinning
+  impossibility sub-pattern** of structural-impossibility-
+  checks (5th sub-pattern overall): `check_type_instantiation`'s
+  VERSION_6 gate handled as `unreachable!` because Adamant's
+  binary-format version is genesis-pinned at `VERSION_MAX
+  = 7`; the `else` branch is structurally unreachable. Three-
+  anchor `unreachable!` message references VERSION_MAX = 7,
+  deserializer parse-time enforcement, and §6.2.1.2 spec.
+  Adamant-extension treatment pattern's 3rd instance with
+  NEW sub-shape (pass iterates bodies, no extensions need
+  handling at this layer); rule-of-three threshold met
+  with three sub-shapes empirically observed. **NEW
+  methodology principle: Variant-vs-test mapping audit at
+  implementation-gate** registered after the audit caught
+  2 unmapped typed variants (`ConstraintNotSatisfied`,
+  `InvalidPhantomTypeParamPosition`) without explicit
+  negative tests; coverage closed before commit. Discipline
+  registered for canonical implementation-gate use.
+
+- **2026-05-09 (Phase 5/5b.3 C-4 closure: pipeline integration
+  of bounds/duplication/signature checkers):** Single sub-
+  checkpoint wires the three new passes into
+  `validator::verify_module`'s step-3 batch. ~249 LOC; 5 new
+  tests. Step-3 batch expands from 8 → **11 passes total**.
+  Eleven-pass invocation order with **two precedence-driven
+  exceptions** to alphabetical-of-remainder: bounds_checker
+  at position 1 (precedence-driven; IndexOutOfBounds
+  reaches first on overlapping inputs against limits'
+  count overflow); signature_checker at position 10 before
+  recursive_data_def at position 11 (precedence-driven;
+  caught at implementation-gate that pure-alphabetical
+  placement would have broken recursive_data_def's
+  `unreachable!` structural argument for refs-in-field-
+  types). Cross-pass eager-error precedence list grows
+  **2 → 3 instances** at C-4 closure (Q2 Claim 3:
+  duplication_checker `DuplicateElement(Signature)` wins
+  over signature_checker `InvalidSignatureToken` on
+  overlapping malformed-and-duplicate-signature input).
+  **NEW different-variant precedence claim shape** distinct
+  from existing 2 shared-variant claims (MalformedConstantData,
+  MalformedPrivacyMetadata). **NEW cross-pass-pipeline-
+  dependency sub-pattern** of structural-impossibility-checks
+  (6th sub-pattern overall): structural guarantee comes from
+  a separate pass earlier in the pipeline; consuming pass's
+  `unreachable!`/`assert!` depends on prior pass having
+  fired. Canonical instance: recursive_data_def's
+  `unreachable!` for refs-in-field-types depends on
+  signature_checker's RefAsFieldType rejection having fired
+  earlier in the pipeline. **Spec-pipeline-impossibility-
+  pending-port sub-pattern's 2 instances retired-via-
+  fulfillment** at C-4 (B-3.2's recursive_data_def qualifiers
+  about DuplicationChecker + SignatureChecker — both passes
+  now landed; qualifiers replaced with explicit upstream-
+  of-this-pass references). Sub-pattern remains documented
+  for future pending-port deferrals; not deleted. Q4 Claim
+  1 (BoundsChecker IndexOutOfBounds vs limits' overflow)
+  deferred per integration-test depth limitation; cross-
+  pass precedence list count stays at 3, not 4, at C-4
+  closure. Q3 wiring-time fixture-update audit clean (no
+  fixture changes; 446 existing validator tests passed
+  unchanged after wiring).
+
+- **2026-05-09 (Phase 5/5b.3 C-5 closure: Phase 5/5b.3
+  closes):** Documentation-only sub-checkpoint. No source-
+  code changes; tests unchanged at 1259. PROVENANCE.md
+  updates batch C-1 → C-4 closure entries (above) plus six
+  methodology accumulation streams (next sections).
+  CLAUDE.md state-bump for Phase 5/5b.3 closure lands in
+  the same commit per the deferred-to-phase-closure pattern
+  (B-6 precedent for Phase 5/5b.2 closure).
+
+  **Sub-arc delta (C-5 alone):** 0 source-code changes;
+  documentation-only; tests unchanged at 1259; ~600-900
+  LOC of net edits to PROVENANCE.md + CLAUDE.md.
+
+  **Cumulative phase delta (Phase 5/5b.3, C-1 through
+  C-5):** 5 sub-arcs (C-1, C-2, C-3, C-4, C-5); C-1 split
+  into 5 sub-checkpoints; **9 commits on origin** (C-1.1
+  at `f9050dd`; C-1.2 at `a8e975a`; C-1.3 at `3fe1582`;
+  C-1.4a at `25dfabe`; C-1.4b at `d2a0308`; C-2 at
+  `60d0a53`; C-3 at `34e80de`; C-4 at `fa79976`; C-5
+  closure commit lands with this state-bump). Workspace
+  test count progression: **1035 → 1259 (+224)**.
+  AdamantValidationError progression: **33 → 50 (+17)**
+  (corrected from prior commit-message claim of 20 → 37
+  per the B-6 baseline-error corrigendum below). Three
+  large module-level passes ported Adamant-native
+  (`bounds_checker` from C-1; `duplication_checker` from
+  C-2; `signature_checker` from C-3) plus pipeline
+  integration at C-4 (8 → 11 passes wired in
+  `verify_module` step-3 batch). 17 new typed-error
+  variants on `AdamantValidationError`. **2 new public
+  closed enums:** `DefKind` (C-2), `InvalidSignatureReason`
+  (C-3) — bringing the Phase 5/5b cumulative public closed-
+  enum count to **5 total** (`MalformedConstantReason`,
+  `FieldOwnerKind`, `HandleKind` from Phase 5/5b.2; plus
+  the two from 5/5b.3). 5 helpers extracted across Phase
+  5/5b.3: `check_index` (C-1.1); `check_module_handle`
+  (C-1.2); `check_field_def` (C-1.3);
+  `check_signature_type_parameters` + `check_code_index`
+  (C-1.4b). Six methodology accumulation streams formalized
+  (sections below): **(1) cross-pass-pipeline-dependency
+  sub-pattern (NEW; C-4); (2) spec-layer-pinning
+  impossibility sub-pattern (NEW; C-3); (3) Adamant-
+  extension treatment in module-level passes (NEW pattern;
+  rule-of-three threshold met across C-1.4b/C-2/C-3); (4)
+  different-variant precedence claim shape (NEW; C-4); (5)
+  variant-vs-test mapping audit principle (NEW; C-3); (6)
+  deferred-to-§7 methodology footnote (NEW; C-1.4b).** Plus
+  C-5's own methodology data point: **commit-message
+  running-total drift discipline.** Phase 5/5b.3 closes;
+  Phase 5/5b sub-arcs remaining: **5/5b.4** (per-function
+  passes infrastructure + Rule 3); **5/5b.5** (type-safety
+  + reference-safety per-function passes + Rules 6, 7 +
+  final pipeline integration with Sui-verifier bridge fully
+  removed + `tests/no_sui_in_production_deps.rs` build-system
+  independence check).
+
+## Phase 5/5b.3 closure — methodology accumulation streams
+
+The six new methodology streams formalized at C-5 closure
+(plus the C-5 commit-message-drift discipline as a seventh
+data point). Each below extends the canonical methodology
+catalog above for future per-function-passes inheritance
+(5/5b.4, 5/5b.5).
+
+### (1) Cross-pass-pipeline-dependency sub-pattern (NEW; structural-impossibility-checks 6th sub-pattern)
+
+Canonical instance: C-4's `recursive_data_def`'s
+`unreachable!` for refs-in-field-types depends on
+`signature_checker`'s `RefAsFieldType` rejection having
+fired earlier in the pipeline. Distinct from existing 5
+sub-patterns of structural-impossibility-checks:
+
+1. Explicit-macro defensive (cross-pass) — guarantee from
+   prior verifier pass (B-2.4, B-3.1, ability_cache.rs)
+2. Implicit-filter exclusionary (cross-pass) — guarantee
+   from skipped category (B-3.3 native-function filter)
+3. Spec-pipeline-impossibility-pending-port (cross-pass) —
+   guarantee from a not-yet-ported upstream pass (B-3.2;
+   **retired-via-fulfillment at C-4**)
+4. Explicit-macro defensive (intra-sub-checkpoint) —
+   guarantee from earlier sub-check within same pass
+   (C-1.3, C-1.4a)
+5. Spec-layer-pinning impossibility (cross-pass) —
+   guarantee from binary-format spec layer (C-3
+   VERSION_6 gate)
+6. **Cross-pass-pipeline-dependency (cross-pass; NEW at
+   C-4)** — guarantee from a separate pass earlier in the
+   pipeline.
+
+Distinguishing feature: requires deliberate pipeline
+ordering (not just verbose `unreachable!` messages). C-4
+caught at implementation-gate that pure-alphabetical
+signature_checker placement would have broken
+recursive_data_def's structural argument; precedence-driven
+placement preserves it. Future per-function passes (5/5b.4,
+5/5b.5) may have similar cross-pass dependencies requiring
+careful pipeline-ordering decisions.
+
+**Worth flagging to future per-function-passes plan-gates:**
+when adding structural-impossibility patterns, surface any
+cross-pass-pipeline-dependency at the consuming-pass
+docstring with explicit reference to the providing pass.
+
+### (2) Spec-layer-pinning impossibility sub-pattern (NEW; structural-impossibility-checks 5th sub-pattern)
+
+Canonical instance: C-3's
+`check_type_instantiation`'s VERSION_6 gate. Adamant's
+binary-format version is genesis-pinned at `VERSION_MAX = 7`
+per `adamant-bytecode-format::format_common`; the `else`
+branch (`version < VERSION_6`) is structurally unreachable.
+The `unreachable!` carries a three-anchor message:
+
+1. `VERSION_MAX = 7` in `adamant-bytecode-format`
+2. Deserializer parse-time version enforcement (rejects
+   versions below `VERSION_MAX`)
+3. Whitepaper §6.2.1.2 binary-format version pinning
+
+General framing: future passes encountering other genesis-
+pinned spec properties (e.g., 200-validator cap, fixed
+issuance schedule, fixed gas-cost table) inherit this sub-
+pattern. Distinguishing feature from cross-pass sub-pattern:
+the structural guarantee is at the binary-format spec
+layer, not in another verifier pass; deserializer-side
+enforcement closes the consensus loop.
+
+### (3) Adamant-extension treatment in module-level passes (NEW pattern; rule-of-three threshold met)
+
+Three sub-shapes empirically observed at C-1.4b/C-2/C-3:
+
+- **Sub-shape 1:** Pass doesn't iterate function bodies →
+  no extension dispatch arm needed (C-2 DuplicationChecker).
+- **Sub-shape 2:** Pass iterates function bodies, some
+  extensions need per-extension handling → partial
+  inspection (C-1.4b BoundsChecker per Q3 §6.2.1.4 verbatim
+  survey: 2 of 17 extensions need bounds-check arms;
+  remaining 15 fall into deferred-to-§7, variant-tag-
+  deserializer-enforced, or zero-operand pass-through
+  categories).
+- **Sub-shape 3:** Pass iterates function bodies, no
+  extensions need handling at this layer → all pass
+  through (C-3 SignatureChecker; per §6.2.1.4 the 17
+  extensions either don't carry generic type-arguments at
+  bytecode operand level or are zero-operand).
+
+Future per-function passes (5/5b.4, 5/5b.5) inherit the
+three-sub-shape framework and surface their disposition at
+plan-gate. The §6.2.1.4 verbatim re-paste (per the C-1.4
+plan-gate Q3) is the empirical anchor for classification.
+
+### (4) Different-variant precedence claim shape (NEW; cross-pass eager-error precedence)
+
+Existing 2 cross-pass precedence claims (B-5 era) are
+**shared-variant precedence**: same variant from two
+passes; ordering determines which fires.
+
+- `MalformedConstantData`: `constants` (B-2.1) > `limits`
+  (B-3.1)
+- `MalformedPrivacyMetadata`: `privacy_metadata_structure`
+  (B-4.2) > `rule_02_privacy` (B-4.1; via step-3-before-
+  step-5 ordering)
+
+NEW shape registered at C-4 (Q2 Claim 3 empirical
+resolution): **different-variant precedence on overlapping
+input** — different variants trigger on the same input;
+ordering determines which fires first.
+
+- `DuplicateElement(Signature)` vs `InvalidSignatureToken`:
+  `duplication_checker` (C-2; position 4) > `signature_checker`
+  (C-3; position 10) on a fixture with two identical
+  `Vec<&u64>` signatures (both passes can fire; ordering
+  determines which is reported).
+
+Two-shape framework empirically grounded. Future plan-
+gates check for **both** shapes when registering precedence
+claims, not just shared-variant.
+
+### (5) Variant-vs-test mapping audit at implementation-gate (NEW canonical methodology principle)
+
+Every typed-error variant landing in a sub-checkpoint must
+have at least one explicit negative test asserting on the
+variant shape. Implementation-gate audit step:
+
+1. Enumerate typed variants added at the sub-checkpoint
+2. Map each to its negative test(s)
+3. Flag any unmapped variant for coverage closure before
+   commit
+
+**First instance: C-3 implementation-gate caught 2
+unmapped variants** (`ConstraintNotSatisfied`,
+`InvalidPhantomTypeParamPosition`); coverage closed before
+commit with 2 new tests. Audit cost: small but load-
+bearing — without it, variants land unproven.
+
+**Retroactive C-5 audit across all 50 variants:** see
+section "Retroactive variant-vs-test mapping audit" below.
+
+**Output shape (canonical; future audits inherit):** per-
+variant enumeration with variant name + negative test
+name(s) + sub-checkpoint where added + any flagged gaps
+with explicit follow-up disposition.
+
+### (6) Deferred-to-§7 methodology footnote (NEW)
+
+Canonical instance: C-1.4b's `GenerateProof(CircuitId)` /
+`VerifyProof(CircuitId)` operands at the bounds-checker
+wide-match. Per §6.2.1.4 line 429's "CircuitId resolution"
+paragraph, the circuit-reference pool's location is
+deferred to §7 (privacy layer); the pool does not exist in
+`AdamantCompiledModule` at the bytecode layer.
+
+Distinct from spec-pipeline-impossibility-pending-port
+sub-pattern (which is for upstream Sui passes not yet
+ported in Adamant). This is **"operand pool not yet defined
+by the spec at the layer the pass operates on."** Documented
+inline + cross-referenced to CLAUDE.md open property #2.
+
+Pass-through disposition at C-1.4b: bounds-check
+infrastructure becomes a §7 / Phase 5/6 concern when §7
+lands. The carve-out is bounded in time; not a stable
+sub-pattern with multiple instances. Footnote, not pattern.
+
+### (7) Commit-message running-total drift discipline (NEW; C-5)
+
+Per-commit deltas can be empirically correct while running
+totals drift if the inherited baseline is wrong. **Future
+phase closures grep-confirm running totals against actual
+code, not inherit running totals from prior CLAUDE.md
+state-bumps.**
+
+Origin instance: B-6's CLAUDE.md state-bump for Phase
+5/5b.2 closure claimed `AdamantValidationError carries 20
+typed variants` — empirically 33 at the same commit
+(`4b03f14`). Both interpretations of "20" (total vs new
+added during phase) were wrong; the actual values were 33
+total + 26 new added during Phase 5/5b.2.
+
+Drift propagated through 5 subsequent commit messages
+across Phase 5/5b.3 (C-1.1 → C-3) via correct-delta-on-
+wrong-baseline:
+
+| Commit | Inherited baseline | Per-commit delta | Claimed total | Actual total |
+|---|---|---|---|---|
+| C-1.1 | 20 (wrong) | +3 ✓ | 23 (wrong) | 36 |
+| C-1.4a | 23 (wrong) | +1 ✓ | 24 (wrong) | 37 |
+| C-1.4b | 24 (wrong) | +2 ✓ | 26 (wrong) | 39 |
+| C-2 | 26 (wrong) | +6 ✓ | 32 (wrong) | 45 |
+| C-3 | 32 (wrong) | +5 ✓ | 37 (wrong) | 50 |
+
+Per-sub-checkpoint deltas were empirically correct
+throughout. Only the inherited baseline was wrong. C-5
+implementation-gate catch surfaced the discrepancy via
+empirical grep before writing the C-5 state-bump.
+
+**Discipline going forward:** at every phase closure,
+empirically count the actual variant count (and any other
+running totals like LOC, test counts) via grep-on-code
+rather than inheriting prior state-bump claims.
+
+## Retroactive variant-vs-test mapping audit (50 variants; C-5 closure)
+
+Per the canonical methodology principle (section above),
+audit every typed variant of `AdamantValidationError` for
+explicit negative-test coverage. Output shape: variant
+name + negative test name(s) + sub-checkpoint where added
++ flagged gaps.
+
+**Audit method:** `grep -rE "Err\(AdamantValidationError::VARIANT\b"
+crates/adamant-vm/src` per variant; counts include
+positive and negative occurrences in test code.
+
+**Audit results: 49 of 50 variants have explicit negative
+test coverage. 1 gap: `SuiVerifier`.**
+
+| Variant | Sub-checkpoint | Test occurrences | Status |
+|---|---|---|---|
+| `AdamantDeserializer` | Phase 5/5a | 3 | ✓ covered |
+| `NonCanonicalBytecode` | Phase 5/5a | 1 | ✓ covered |
+| `SuiVerifier` | Wave 3a transitional | **0** | **❌ GAP** (see follow-up below) |
+| `MissingMutabilityMetadata` | Wave 3a (Rule 1) | 4 | ✓ covered |
+| `MultipleMutabilityMetadata` | Wave 3a (Rule 1) | 2 | ✓ covered |
+| `MalformedMutabilityMetadata` | Wave 3a (Rule 1) | 1 | ✓ covered |
+| `NativeFunctionForbidden` | Wave 3a (Rule 4) | 3 | ✓ covered |
+| `InvalidConstantType` | B-2.1 | 6 | ✓ covered |
+| `MalformedConstantData` | B-2.1 | 6 | ✓ covered |
+| `SelfFriendDeclaration` | B-2.2 | 4 | ✓ covered |
+| `CrossAccountFriendDeclaration` | B-2.2 | 3 | ✓ covered |
+| `FieldMissingTypeAbility` | B-2.3 | 9 | ✓ covered |
+| `GenericMemberOpcodeMismatch` | B-2.4 | 3 | ✓ covered |
+| `VecPackUnpackArgOutOfRange` | B-2.4 | 3 | ✓ covered |
+| `TooManyVectorElements` | B-3.1 | 2 | ✓ covered |
+| `TooManyTypeParameters` | B-3.1 | 4 | ✓ covered |
+| `TooManyParameters` | B-3.1 | 2 | ✓ covered |
+| `TooManyTypeNodes` | B-3.1 | 2 | ✓ covered |
+| `IdentifierTooLong` | B-3.1 | 2 | ✓ covered |
+| `InvalidIdentifier` | B-3.1 | 1 | ✓ covered (structural-impossibility pin) |
+| `MaxFunctionDefinitionsReached` | B-3.1 | 2 | ✓ covered |
+| `MaxDataDefinitionsReached` | B-3.1 | 2 | ✓ covered |
+| `MaxFieldDefinitionsReached` | B-3.1 | 4 | ✓ covered |
+| `MaxVariantsInEnumReached` | B-3.1 | 3 | ✓ covered |
+| `RecursiveDataDefinition` | B-3.2 | 8 | ✓ covered |
+| `LoopInInstantiationGraph` | B-3.3 | 7 | ✓ covered |
+| `MissingPrivacyMetadata` | B-4.1 | 2 | ✓ covered |
+| `MultiplePrivacyMetadata` | B-4.1 | 4 | ✓ covered |
+| `MalformedPrivacyMetadata` | B-4.1/B-4.2 | 6 | ✓ covered |
+| `MissingPrivacyAnnotation` | B-4.1 | 4 | ✓ covered |
+| `InvalidPrivacyAnnotationByte` | B-4.2 | 6 | ✓ covered |
+| `PrivacyEntryOutOfRange` | B-4.2 | 3 | ✓ covered |
+| `DuplicatePrivacyEntry` | B-4.2 | 2 | ✓ covered |
+| `NoModuleHandles` | C-1.1 | 2 | ✓ covered |
+| `IndexOutOfBounds` | C-1.1 | 71 | ✓ covered (workhorse; many sites) |
+| `NumberOfTypeArgumentsMismatch` | C-1.1 | 4 | ✓ covered |
+| `TooManyLocals` | C-1.4a | 3 | ✓ covered |
+| `CodeIndexOutOfBounds` | C-1.4b | 22 | ✓ covered (workhorse; per-bytecode) |
+| `InvalidEnumSwitch` | C-1.4b | 2 | ✓ covered |
+| `DuplicateElement` | C-2 | 26 | ✓ covered (workhorse; 14+ sub-checks) |
+| `ZeroSizedStruct` | C-2 | 2 | ✓ covered |
+| `ZeroSizedEnum` | C-2 | 3 | ✓ covered |
+| `InvalidModuleHandle` | C-2 | 5 | ✓ covered |
+| `DuplicateAcquiresAnnotation` | C-2 | 2 | ✓ covered |
+| `UnimplementedHandle` | C-2 | 4 | ✓ covered |
+| `InvalidSignatureToken` | C-3 | 8 | ✓ covered |
+| `TypeArgumentsArityMismatch` | C-3 | 2 | ✓ covered |
+| `ConstraintNotSatisfied` | C-3 | 2 | ✓ covered (added at C-3 audit catch) |
+| `InvalidPhantomTypeParamPosition` | C-3 | 2 | ✓ covered (added at C-3 audit catch) |
+| `VecOpExpectedSingleTypeArgument` | C-3 | 2 | ✓ covered |
+
+### Audit gap: `SuiVerifier` (Wave 3a transitional bridge variant)
+
+`SuiVerifier(VMError)` wraps Sui's verifier rejections via
+the transitional bridge in `validator/mod.rs::verify_module`
+(post-step-3 inherited-subset check). The variant has **0
+explicit negative tests** — fixtures that reach the bridge
+either pass through cleanly (via the existing integration
+tests) or get rejected at earlier stages (Adamant-native
+deserializer; Adamant-native step-3 passes).
+
+**Disposition: gap deferred to natural resolution at Phase
+5/5b.5 Sui-verifier-bridge tear-out** per the architectural
+commitment in §6.2.1.8. When the bridge is removed, the
+`SuiVerifier` variant is no longer reachable from any
+consensus-critical path and can be removed from
+`AdamantValidationError` entirely. The transitional gap
+during Phase 5/5b.4 is acceptable because:
+
+1. The bridge runs as defense-in-depth alongside the now-
+   complete Adamant-native step-3 batch (C-4 wired all 11
+   passes). Any rejection that fires at the bridge would
+   also have fired at the Adamant-native passes for any
+   inherited-subset module (semantic parity asserted by
+   Layer B cross-validation tests in each pass).
+2. Constructing a fixture that ONLY triggers `SuiVerifier`
+   (not any Adamant-native pass) requires a violation that
+   Sui's verifier catches but Adamant doesn't — currently
+   the per-function-pass concerns (control-flow, type-
+   safety, locals-safety, reference-safety, acquires-list)
+   land at Phase 5/5b.4 + 5/5b.5. A `SuiVerifier`-only
+   fixture would need to trigger one of those, which is
+   the per-function-pass work itself.
+3. At 5/5b.5 tear-out, `SuiVerifier` is removed entirely;
+   no follow-up coverage-closure commit needed.
+
+If Phase 5/5b.4 work surfaces a need for explicit
+`SuiVerifier` coverage (e.g., for transition-period
+behaviour assertions), a small follow-up commit can add
+the test before 5/5b.5 lands. **Registered as a tracked
+follow-up; not blocking C-5 closure.**
+
+## Corrigendum: B-6 baseline error in CLAUDE.md state-bump
+
+**Source:** Phase 5/5b.2 B-6 closure commit (`4b03f14`,
+2026-05-07).
+
+**The error:** B-6's CLAUDE.md state-bump claimed
+`AdamantValidationError carries 20 typed variants at Phase
+5/5b.2 closure` (Code paragraph) and `20 new typed-error
+variants on AdamantValidationError` (Phase paragraph).
+
+**Empirical reality:**
+
+- **Pre-Phase-5/5b.2 (commit `f22e54c` = B-1 foundation
+  fork; pre-variant-additions):** 7 variants
+- **Phase 5/5b.2 wiring closure (commit `1cc6999` = B-5):**
+  33 variants
+- **Phase 5/5b.2 closure (commit `4b03f14` = B-6;
+  documentation-only):** 33 variants unchanged
+- **Phase 5/5b.2 added: 26 new variants** (33 − 7); not 20
+
+Both interpretations of "20" in the B-6 state-bump were
+wrong (total: 33; new added: 26). Honest typo / arithmetic
+error; "20" was used for both metrics without empirical
+verification.
+
+**Drift propagation:** the wrong "20" baseline was
+inherited by 5 subsequent C-N commit messages across Phase
+5/5b.3, with correct per-sub-checkpoint deltas applied to
+the wrong baseline. See the table in section "(7) Commit-
+message running-total drift discipline" above for the per-
+commit progression.
+
+**Correction at C-5:** CLAUDE.md state-bump for Phase
+5/5b.3 closure uses empirically-verified counts:
+- Pre-Phase-5/5b.3 baseline: **33** (= Phase 5/5b.2
+  closure actual; corrects the prior "20" claim)
+- Phase 5/5b.3 added: **17** (per-sub-checkpoint deltas
+  3+1+2+6+5; matches commit-message claims for the
+  delta only)
+- Phase 5/5b.3 closure total: **50** (= 33 + 17;
+  corrects the prior "37" claim)
+
+The "20 → 37" progression baked into Phase 5/5b.3 commit
+messages stays in the git log as historical record. Future
+readers of those commit messages should consult this
+corrigendum for the empirically-verified counts.
+
+**Methodology consequence:** the commit-message running-
+total drift discipline (registered in section (7) above)
+exists to prevent this class of error at future phase
+closures. Empirical grep-on-code is the canonical method;
+inherited running totals are not authoritative.
