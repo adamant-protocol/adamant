@@ -42,7 +42,7 @@
 //! complete table is pinned by [`AdamantOpcodeKind::opcode_byte`]
 //! and asserted in this module's tests.
 
-use adamant_bytecode_format::{Bytecode, FunctionHandleIndex};
+use adamant_bytecode_format::{Bytecode, CodeOffset, FunctionHandleIndex, VariantJumpTable};
 
 // ---------- AdamantBytecode (with operands) ----------
 
@@ -356,6 +356,96 @@ pub enum BytecodeInstruction {
     Inherited(Bytecode),
     /// An Adamant-specific bytecode extension per §6.2.1.4.
     Adamant(AdamantBytecode),
+}
+
+impl BytecodeInstruction {
+    /// Returns `true` if this instruction always branches.
+    ///
+    /// Inherited instructions delegate to
+    /// [`Bytecode::is_unconditional_branch`]; every Adamant
+    /// extension is non-branching (none of the 17 extensions
+    /// alters control flow — privacy, hash, signature-verify,
+    /// proof, and gas operations all fall through to the next
+    /// instruction).
+    #[must_use]
+    pub fn is_unconditional_branch(&self) -> bool {
+        match self {
+            Self::Inherited(b) => b.is_unconditional_branch(),
+            Self::Adamant(_) => false,
+        }
+    }
+
+    /// Returns `true` if this instruction's branching depends on
+    /// a runtime value. Inherited delegates to
+    /// [`Bytecode::is_conditional_branch`]; every Adamant
+    /// extension is non-branching.
+    #[must_use]
+    pub fn is_conditional_branch(&self) -> bool {
+        match self {
+            Self::Inherited(b) => b.is_conditional_branch(),
+            Self::Adamant(_) => false,
+        }
+    }
+
+    /// Returns `true` if this instruction is a conditional or
+    /// unconditional branch.
+    #[must_use]
+    pub fn is_branch(&self) -> bool {
+        self.is_conditional_branch() || self.is_unconditional_branch()
+    }
+
+    /// Returns the in-function offsets this instruction can
+    /// branch to. Inherited delegates to [`Bytecode::offsets`];
+    /// Adamant extensions emit no offsets (none branch within
+    /// the function).
+    ///
+    /// # Panics
+    ///
+    /// Panics if a `VariantSwitch`'s jump-table index is out of
+    /// bounds (mirrors [`Bytecode::offsets`]). The bounds-checker
+    /// pass is expected to have run before this is called;
+    /// bounds-checked inputs do not trigger the panic.
+    #[must_use]
+    pub fn offsets(&self, jump_tables: &[VariantJumpTable]) -> Vec<CodeOffset> {
+        match self {
+            Self::Inherited(b) => b.offsets(jump_tables),
+            Self::Adamant(_) => vec![],
+        }
+    }
+
+    /// Returns the successor PCs of the instruction at `pc` in
+    /// ascending order. Mirrors [`Bytecode::get_successors`]'s
+    /// shape: explicit branch offsets plus the fall-through PC
+    /// (`pc + 1`) when the instruction is not an unconditional
+    /// branch and the next PC is in range.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `pc` is out of bounds for `code` (mirrors
+    /// upstream's invariant).
+    #[must_use]
+    pub fn get_successors(
+        pc: CodeOffset,
+        code: &[Self],
+        jump_tables: &[VariantJumpTable],
+    ) -> Vec<CodeOffset> {
+        assert!(
+            pc < u16::MAX && (pc as usize) < code.len(),
+            "Program counter out of bounds"
+        );
+        let bytecode = &code[pc as usize];
+        let mut v = vec![];
+        v.extend(bytecode.offsets(jump_tables));
+        let next_pc = pc + 1;
+        if (next_pc as usize) >= code.len() {
+            return v;
+        }
+        if !bytecode.is_unconditional_branch() && !v.contains(&next_pc) {
+            v.push(next_pc);
+        }
+        v.sort_unstable();
+        v
+    }
 }
 
 #[cfg(test)]

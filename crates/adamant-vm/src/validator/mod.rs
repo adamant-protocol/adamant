@@ -122,6 +122,7 @@
 
 mod config;
 mod error;
+mod function_pass;
 mod module_pass;
 mod rule_01_mutability;
 mod rule_02_privacy;
