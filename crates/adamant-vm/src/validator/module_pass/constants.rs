@@ -500,21 +500,15 @@ mod tests {
     /// Pass-level cross-validation: run Adamant's `verify` and
     /// Sui's `move_bytecode_verifier::constants::verify_module`
     /// over the same module (after BCS round-trip), assert
-    /// accept/reject parity.
+    /// accept/reject parity via the shared
+    /// [`assert_pass_parity`] helper extracted at B-2.2.
     fn cross_validate_constants_pass(m: &AdamantCompiledModule) {
         let adamant_result = verify(m);
         let sui_module = m
             .to_sui_module()
             .expect("test fixture has no Adamant extensions; to_sui_module must succeed");
         let sui_result = move_bytecode_verifier::constants::verify_module(&sui_module);
-
-        match (adamant_result, sui_result) {
-            (Ok(()), Ok(())) | (Err(_), Err(_)) => {}
-            (a, s) => panic!(
-                "Adamant/Sui disagreement on constants pass: \
-                 adamant = {a:?}, sui = {s:?}"
-            ),
-        }
+        super::super::test_helpers::assert_pass_parity("constants", adamant_result, sui_result);
     }
 
     /// Convenience helper for the common case: insert a single

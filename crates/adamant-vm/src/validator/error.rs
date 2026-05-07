@@ -10,7 +10,8 @@
 //! Eager semantics: callers receive the first violation
 //! encountered.
 
-use adamant_bytecode_format::{ConstantPoolIndex, FunctionDefinitionIndex};
+use adamant_bytecode_format::{ConstantPoolIndex, FunctionDefinitionIndex, TableIndex};
+use adamant_types::Address;
 use move_binary_format::errors::VMError;
 
 use crate::module_wire::AdamantDeserializeError;
@@ -182,6 +183,35 @@ pub enum AdamantValidationError {
         /// [`MalformedConstantReason`].
         reason: MalformedConstantReason,
     },
+
+    /// The module declares itself as a friend. A module's own
+    /// `self_handle` may not appear in `friend_decls`. Per
+    /// upstream Sui's friends pass, friend visibility is a
+    /// directed relation: a module declaring itself as its own
+    /// friend is structurally meaningless and is rejected at
+    /// deployment.
+    ///
+    /// Phase 5/5b.2 B-2.2 (`module_pass::friends`).
+    SelfFriendDeclaration,
+
+    /// The module declares a friend whose address differs from
+    /// the module's own self-address. Adamant inherits Sui's
+    /// policy that friend declarations may not cross account
+    /// boundaries; the rule lives under Adamant's audit per the
+    /// resistant-proof posture (whitepaper §6.2.1.8). Future
+    /// relaxation requires a deliberate Adamant-side decision
+    /// rather than tracking a Sui upstream change.
+    ///
+    /// Phase 5/5b.2 B-2.2 (`module_pass::friends`).
+    CrossAccountFriendDeclaration {
+        /// Index into `friend_decls` of the offending entry.
+        idx: TableIndex,
+        /// The foreign account address the friend points at.
+        /// Carried for diagnostics; reuses
+        /// [`adamant_types::Address`] per the Phase 5/5b.1b
+        /// address-pool reuse decision.
+        foreign_address: Address,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 2, 3, 6, 7 land in subsequent
@@ -288,6 +318,19 @@ impl core::fmt::Display for AdamantValidationError {
                 "constant pool entry {} has malformed data: {reason} \
                  (whitepaper §6.2.1.8 step 3, `module_pass::constants`)",
                 idx.0
+            ),
+            Self::SelfFriendDeclaration => write!(
+                f,
+                "module declares itself as a friend \
+                 (whitepaper §6.2.1.8 step 3, `module_pass::friends`)"
+            ),
+            Self::CrossAccountFriendDeclaration {
+                idx,
+                foreign_address,
+            } => write!(
+                f,
+                "friend declaration {idx} has foreign address {foreign_address:?} \
+                 (whitepaper §6.2.1.8 step 3, `module_pass::friends`)"
             ),
         }
     }
