@@ -29,21 +29,31 @@
 //!   `check_module_handles` + `check_self_module_handle` +
 //!   `check_datatype_handles`. Five sub-checks plus the
 //!   precondition (positions 1–5).
-//! - **C-1.2 (this sub-checkpoint):** `check_function_handles`,
+//! - **C-1.2 (landed):** `check_function_handles`,
 //!   `check_field_handles`, `check_friend_decls`,
 //!   `check_struct_instantiations`,
 //!   `check_function_instantiations`,
 //!   `check_field_instantiations`. Six sub-checks (positions
 //!   6–11). Plan-text initially named "five instantiation
 //!   tables (struct/function/enum/field/variant)"; empirical
-//!   re-baseline per upstream `verify_impl` corrects this to
+//!   re-baseline per upstream `verify_impl` corrected this to
 //!   three instantiation tables (struct/function/field) — the
 //!   enum-instantiations and variant-instantiation-handles
 //!   land at C-1.3.
-//! - **C-1.3:** `check_struct_defs`, `check_enum_defs`,
-//!   `check_enum_instantiations`, `check_variant_handles`,
+//! - **C-1.3 (this sub-checkpoint):** `check_struct_defs`,
+//!   `check_enum_defs`, `check_enum_instantiations`,
+//!   `check_variant_handles`,
 //!   `check_variant_instantiation_handles`. Five sub-checks
-//!   (positions 12–16).
+//!   (positions 12–16). Reuses [`check_type`] (C-1.1) and
+//!   [`check_type_parameter`] (C-1.2) for field-signature
+//!   validation. Extracts [`check_field_def`] helper at N=2
+//!   (byte-identical body in struct-def and enum-def field
+//!   iterations) — second instance of the per-handle-extraction
+//!   refactor pattern after C-1.2's [`check_module_handle`].
+//!   The extraction is a deliberate-Adamant-decision: upstream
+//!   Sui inlines the body in both `check_struct_def` and
+//!   `check_enum_def`; the helper name is chosen for parallel
+//!   structure with the existing per-def validators.
 //! - **C-1.4:** `check_function_defs` including code-unit body
 //!   checks and jump-table validation. One sub-check (position
 //!   17), but the widest one — covers per-bytecode bounds
@@ -78,6 +88,19 @@
 //! `StructDefinition`/`FunctionHandle`/`FieldHandle` discriminators
 //! cover the bulk of C-1.2's bounds checks.
 //!
+//! C-1.3 also adds **0 new error variants.** All five sub-checks
+//! reuse [`AdamantValidationError::IndexOutOfBounds`] from C-1.1
+//! with three additional `IndexKind` discriminators:
+//! `IndexKind::EnumDefinition` (variant-handle and enum-instantiation
+//! `def` references), `IndexKind::EnumDefInstantiation`
+//! (variant-instantiation-handle's `enum_def` reference into the
+//! enum-instantiations table), and `IndexKind::VariantTag` (variant
+//! tag-vs-count check inside variant-handle and variant-instantiation-
+//! handle). All three are existing `adamant-bytecode-format` values.
+//! Plus [`AdamantValidationError::NumberOfTypeArgumentsMismatch`] from
+//! C-1.1 may fire via [`check_type`] recursion on field signatures
+//! within `check_struct_defs` / `check_enum_defs`.
+//!
 //! # No-Sui-parity-claim posture (section 2)
 //!
 //! Not applicable. C-1.1 makes a **full Sui-parity claim** for
@@ -106,13 +129,16 @@
 //!   before invoking any sub-check. A module with both an empty
 //!   `module_handles` table and an out-of-range signature reports
 //!   `NoModuleHandles`.
-//! - Sub-check ordering after C-1.2: signatures → constants →
+//! - Sub-check ordering after C-1.3: signatures → constants →
 //!   module-handles → self-module-handle → datatype-handles →
 //!   function-handles → field-handles → friend-decls →
 //!   struct-instantiations → function-instantiations →
-//!   field-instantiations. First-encountered violation wins.
-//!   (Upstream order; preserved byte-faithfully — see
-//!   `bounds_checker_sub_check_ordering` test.)
+//!   field-instantiations → struct-defs → enum-defs →
+//!   enum-instantiations → variant-handles →
+//!   variant-instantiation-handles. First-encountered violation
+//!   wins. (Upstream order; preserved byte-faithfully — see
+//!   `bounds_checker_sub_check_ordering` and
+//!   `c13_struct_defs_before_enum_defs` tests.)
 //! - Within a sub-check, iteration is in storage order (table
 //!   index ascending); the lowest-index offender is reported.
 //! - Within `check_type`'s match arms: `Datatype(idx)` and
@@ -132,6 +158,18 @@
 //! - Within each instantiation sub-check: bounds check on the
 //!   handle/def field fires before the bounds check on the
 //!   `type_parameters` signature index.
+//! - Within `check_struct_def` / `check_enum_def`: the
+//!   handle bounds check on `struct_handle` / `enum_handle`
+//!   fires before any field iteration. Field iteration calls
+//!   the extracted [`check_field_def`] helper which performs
+//!   the byte-identical sequence (name bounds → `check_type`
+//!   recursion → `check_type_parameter` recursion).
+//! - Within `check_variant_handle` /
+//!   `check_variant_instantiation_handle`: the enum-def-table
+//!   bounds check on `enum_def` fires before the variant-tag-
+//!   vs-count check. The latter dereferences via the addressed
+//!   `EnumDefinition`'s `variants.len()` — safe by virtue of
+//!   the prior bounds check.
 //!
 //! # Shared-variant cross-pass precedence (section 5)
 //!
@@ -193,16 +231,17 @@ use super::super::error::AdamantValidationError;
 /// Verify the deserialized module's index references against
 /// §6.2.1.8 step 3 / position 1 (`module_pass::bounds_checker`).
 ///
-/// As of C-1.2 the pass covers positions 1–11 of upstream
+/// As of C-1.3 the pass covers positions 1–16 of upstream
 /// `BoundsChecker::verify_impl`'s 17 sub-checks: an
 /// empty-module-handles short-circuit followed by signatures,
 /// constants, module-handles, self-module-handle,
 /// datatype-handles, function-handles, field-handles,
-/// friend-decls, and the three module-level instantiation tables
-/// (struct/function/field). Sub-checkpoints C-1.3 / C-1.4 land
-/// the remaining 6 sub-checks (struct-defs, enum-defs,
-/// enum-instantiations, variant-handles,
-/// variant-instantiation-handles, function-defs).
+/// friend-decls, the three module-level instantiation tables
+/// (struct/function/field), struct-defs, enum-defs,
+/// enum-instantiations, variant-handles, and
+/// variant-instantiation-handles. Sub-checkpoint C-1.4 lands the
+/// remaining 1 sub-check (function-defs, the widest one — covers
+/// per-bytecode bounds across the entire instruction set).
 ///
 /// Eager-error semantics: returns the first violation encountered
 /// in upstream sub-check order.
@@ -223,6 +262,11 @@ pub(in crate::validator) fn verify(
     check_struct_instantiations(module)?;
     check_function_instantiations(module)?;
     check_field_instantiations(module)?;
+    check_struct_defs(module)?;
+    check_enum_defs(module)?;
+    check_enum_instantiations(module)?;
+    check_variant_handles(module)?;
+    check_variant_instantiation_handles(module)?;
     Ok(())
 }
 
@@ -500,6 +544,181 @@ fn check_field_instantiations(
     Ok(())
 }
 
+/// For each struct definition, validate `struct_handle` ∈
+/// `datatype_handles` and (for declared structs) recurse into
+/// each field's name and signature via [`check_field_def`].
+///
+/// **Native-struct field iteration:** [`StructFieldInformation::Native`]
+/// has no fields; the iteration is skipped (matching upstream's
+/// `if let StructFieldInformation::Declared(...)` gate).
+fn check_struct_defs(module: &AdamantCompiledModule) -> Result<(), AdamantValidationError> {
+    for struct_def in &module.struct_defs {
+        check_index(module.datatype_handles.len(), struct_def.struct_handle)?;
+        if let adamant_bytecode_format::StructFieldInformation::Declared(fields) =
+            &struct_def.field_information
+        {
+            // The bounds check above guarantees the handle is
+            // in-range; the indexing here is structurally safe.
+            let type_param_count = module.datatype_handles[struct_def.struct_handle.into_index()]
+                .type_parameters
+                .len();
+            for field in fields {
+                check_field_def(module, field, type_param_count)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// For each enum definition, validate `enum_handle` ∈
+/// `datatype_handles` and recurse into each variant's name and
+/// each variant's fields via [`check_field_def`].
+fn check_enum_defs(module: &AdamantCompiledModule) -> Result<(), AdamantValidationError> {
+    for enum_def in &module.enum_defs {
+        check_index(module.datatype_handles.len(), enum_def.enum_handle)?;
+        let type_param_count = module.datatype_handles[enum_def.enum_handle.into_index()]
+            .type_parameters
+            .len();
+        for variant in &enum_def.variants {
+            check_index(module.identifiers.len(), variant.variant_name)?;
+            for field in &variant.fields {
+                check_field_def(module, field, type_param_count)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Per-field validator extracted at C-1.3 with byte-identical
+/// shape to the inline body upstream Sui places inside both
+/// `check_struct_def` and `check_enum_def`. Three sub-steps:
+///
+/// 1. The field's `name` indexes into the identifier pool.
+/// 2. The field's signature is bounds-checked via
+///    [`check_type`] (preorder; rejects out-of-range
+///    `Datatype` / `DatatypeInstantiation` references plus
+///    type-argument arity violations).
+/// 3. The field's signature is bounds-checked via
+///    [`check_type_parameter`] (preorder; rejects out-of-range
+///    `TypeParameter` references against the addressed
+///    handle's declared type-parameter count).
+///
+/// **Deliberate-Adamant-decision (per Phase 5/5b.3 C-1.3 plan-
+/// gate Q1):** upstream Sui inlines this 3-step body in both
+/// `check_struct_def` and `check_enum_def`. The Adamant fork
+/// extracts the helper at N=2 with byte-identical bodies per
+/// the per-handle-extraction refactor pattern (rule-of-three at
+/// N=2 with byte-identical bodies). The helper name is chosen
+/// for parallel structure with the existing `check_struct_def`
+/// and `check_enum_def` per-def validators; alternatives
+/// considered include `check_field_def_bounds` (verbose) and
+/// `check_field_def_signature` (more specific to the signature
+/// recursion aspect, but obscures the name-bounds check).
+fn check_field_def(
+    module: &AdamantCompiledModule,
+    field: &adamant_bytecode_format::FieldDefinition,
+    type_param_count: usize,
+) -> Result<(), AdamantValidationError> {
+    check_index(module.identifiers.len(), field.name)?;
+    check_type(module, &field.signature.0)?;
+    check_type_parameter(&field.signature.0, type_param_count)?;
+    Ok(())
+}
+
+/// For each enum-def-instantiation entry, validate `def` ∈
+/// `enum_defs` and `type_parameters` ∈ signatures. Sibling to
+/// C-1.2's struct/function/field instantiation checks.
+fn check_enum_instantiations(module: &AdamantCompiledModule) -> Result<(), AdamantValidationError> {
+    for enum_inst in &module.enum_def_instantiations {
+        check_index(module.enum_defs.len(), enum_inst.def)?;
+        check_index(module.signatures.len(), enum_inst.type_parameters)?;
+    }
+    Ok(())
+}
+
+/// For each variant handle, validate `enum_def` ∈ `enum_defs`
+/// and `variant` < the addressed enum's variant count.
+///
+/// The variant-tag check is **inline** (not via [`check_index`])
+/// because [`adamant_bytecode_format::VariantTag`] is a `u16`
+/// typedef rather than a `*Index` newtype implementing
+/// [`adamant_bytecode_format::ModuleIndex`] — same shape as
+/// C-1.2's `MemberCount` field-offset check. The error reports
+/// `IndexKind::VariantTag` to discriminate the addressed pool.
+fn check_variant_handles(module: &AdamantCompiledModule) -> Result<(), AdamantValidationError> {
+    for variant_handle in &module.variant_handles {
+        check_index(module.enum_defs.len(), variant_handle.enum_def)?;
+        let enum_def = &module.enum_defs[variant_handle.enum_def.into_index()];
+        let variants_count = enum_def.variants.len();
+        if (variant_handle.variant as usize) >= variants_count {
+            return Err(AdamantValidationError::IndexOutOfBounds {
+                kind: adamant_bytecode_format::IndexKind::VariantTag,
+                idx: variant_handle.variant,
+                pool_len: variants_count,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// For each variant-instantiation handle, validate `enum_def` ∈
+/// `enum_def_instantiations` and `variant` < the resolved enum's
+/// variant count.
+///
+/// **Intra-sub-checkpoint structural-impossibility pin (per
+/// Phase 5/5b.3 C-1.3 plan-gate Q2):** dereferencing into
+/// `enum_def_instantiations` then dereferencing the resolved
+/// instantiation's `def` into `enum_defs` is safe because
+/// [`check_enum_instantiations`] (sub-check at upstream
+/// `verify_impl` position 14) ran earlier in the same `verify`
+/// invocation and validated `def` ∈ `enum_defs` and
+/// `type_parameters` ∈ `signatures` for every entry in
+/// `enum_def_instantiations`. The `debug_assert!` calls below
+/// pin this intra-sub-checkpoint guarantee.
+///
+/// Distinct from the cross-pass structural-impossibility
+/// instances (B-2.4 deprecated-arms, B-3.1 `<SELF>`, B-3.3
+/// native-function filter, B-3.2 duplicate-handle/reference-field):
+/// the upstream-of-this-pass guarantee here comes from THE SAME
+/// PASS at an earlier sub-check, not from a different pass.
+/// Registered as a new sub-pattern of the structural-
+/// impossibility-checks pattern at the C-5 closure batch.
+fn check_variant_instantiation_handles(
+    module: &AdamantCompiledModule,
+) -> Result<(), AdamantValidationError> {
+    for vih in &module.variant_instantiation_handles {
+        check_index(module.enum_def_instantiations.len(), vih.enum_def)?;
+        let enum_inst = &module.enum_def_instantiations[vih.enum_def.into_index()];
+        debug_assert!(
+            enum_inst.def.into_index() < module.enum_defs.len(),
+            "intra-sub-checkpoint structural impossibility: \
+             check_enum_instantiations (verify_impl position 14) validated \
+             def ∈ enum_defs for every enum_def_instantiation entry before \
+             check_variant_instantiation_handles (position 16) reached this \
+             dereference. A fired debug_assert here indicates an intra-\
+             sub-checkpoint ordering bug in verify()."
+        );
+        debug_assert!(
+            enum_inst.type_parameters.into_index() < module.signatures.len(),
+            "intra-sub-checkpoint structural impossibility: \
+             check_enum_instantiations (verify_impl position 14) validated \
+             type_parameters ∈ signatures for every enum_def_instantiation \
+             entry before check_variant_instantiation_handles (position 16) \
+             reached this point."
+        );
+        let enum_def = &module.enum_defs[enum_inst.def.into_index()];
+        let variants_count = enum_def.variants.len();
+        if (vih.variant as usize) >= variants_count {
+            return Err(AdamantValidationError::IndexOutOfBounds {
+                kind: adamant_bytecode_format::IndexKind::VariantTag,
+                idx: vih.variant,
+                pool_len: variants_count,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Generic `idx < pool_len` check returning a typed
 /// [`AdamantValidationError::IndexOutOfBounds`] tagged with the
 /// addressed pool's `IndexKind`.
@@ -529,11 +748,12 @@ fn check_index<I: ModuleIndex>(pool_len: usize, idx: I) -> Result<(), AdamantVal
 mod tests {
     use adamant_bytecode_format::{
         AbilitySet, AddressIdentifierIndex, Constant, DatatypeHandle, DatatypeHandleIndex,
-        DatatypeTyParameter, FieldDefinition, FieldHandle, FieldHandleIndex, FieldInstantiation,
+        DatatypeTyParameter, EnumDefInstantiation, EnumDefInstantiationIndex, EnumDefinition,
+        EnumDefinitionIndex, FieldDefinition, FieldHandle, FieldHandleIndex, FieldInstantiation,
         FunctionHandle, FunctionHandleIndex, FunctionInstantiation, Identifier, IdentifierIndex,
         IndexKind, ModuleHandle, ModuleHandleIndex, Signature, SignatureIndex, SignatureToken,
         StructDefInstantiation, StructDefinition, StructDefinitionIndex, StructFieldInformation,
-        TypeSignature,
+        TypeSignature, VariantDefinition, VariantHandle, VariantInstantiationHandle,
     };
     use adamant_types::Address as AccountAddress;
 
@@ -621,6 +841,78 @@ mod tests {
         m.struct_defs.push(StructDefinition {
             struct_handle: DatatypeHandleIndex(0),
             field_information: StructFieldInformation::Native,
+        });
+        m
+    }
+
+    /// Build a fixture extending `empty_module()` with one
+    /// enum definition. The enum has `variant_count` variants,
+    /// each carrying `fields_per_variant` `u64` fields. The
+    /// variant names and field names are auto-generated
+    /// (`v0`/`v1`/... for variants; `f0`/`f1`/... for fields).
+    /// `enum_handle` lands at `DatatypeHandleIndex(0)`; the
+    /// addressed `DatatypeHandle` declares no type parameters
+    /// (callers needing type parameters mutate the handle
+    /// directly afterwards).
+    fn module_with_one_enum_def(
+        variant_count: u16,
+        fields_per_variant: u16,
+    ) -> AdamantCompiledModule {
+        let mut m = empty_module();
+        m.identifiers.push(Identifier::new("E").unwrap());
+        m.datatype_handles.push(DatatypeHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            abilities: AbilitySet::EMPTY,
+            type_parameters: vec![],
+        });
+        let mut variants = Vec::with_capacity(variant_count as usize);
+        for v_idx in 0..variant_count {
+            // identifiers[0]="M",[1]="E",[2..]=variant/field names.
+            // Layout per call: vN at index 2 + v_idx * (1+fields_per_variant);
+            // the variant's field names follow.
+            let variant_name_idx = u16::try_from(m.identifiers.len())
+                .expect("test fixture has < u16::MAX identifiers");
+            m.identifiers
+                .push(Identifier::new(format!("v{v_idx}")).unwrap());
+            let mut fields = Vec::with_capacity(fields_per_variant as usize);
+            for f_idx in 0..fields_per_variant {
+                let field_name_idx = u16::try_from(m.identifiers.len())
+                    .expect("test fixture has < u16::MAX identifiers");
+                m.identifiers
+                    .push(Identifier::new(format!("f{v_idx}_{f_idx}")).unwrap());
+                fields.push(FieldDefinition {
+                    name: IdentifierIndex(field_name_idx),
+                    signature: TypeSignature(SignatureToken::U64),
+                });
+            }
+            variants.push(VariantDefinition {
+                variant_name: IdentifierIndex(variant_name_idx),
+                fields,
+            });
+        }
+        m.enum_defs.push(EnumDefinition {
+            enum_handle: DatatypeHandleIndex(0),
+            variants,
+        });
+        m
+    }
+
+    /// Build a fixture extending `empty_module()` with one
+    /// enum definition (via `module_with_one_enum_def`) plus a
+    /// matching `EnumDefInstantiation` pointing at it with a
+    /// single `U64` type-parameter signature. Both the
+    /// enum-def and the enum-instantiation table land at
+    /// position 0 of their respective tables.
+    fn module_with_one_enum_def_instantiation(
+        variant_count: u16,
+        fields_per_variant: u16,
+    ) -> AdamantCompiledModule {
+        let mut m = module_with_one_enum_def(variant_count, fields_per_variant);
+        m.signatures.push(Signature(vec![SignatureToken::U64]));
+        m.enum_def_instantiations.push(EnumDefInstantiation {
+            def: EnumDefinitionIndex(0),
+            type_parameters: SignatureIndex(0),
         });
         m
     }
@@ -1813,6 +2105,583 @@ mod tests {
             handle: FieldHandleIndex(3),
             type_parameters: SignatureIndex(0),
         });
+        cross_validate_bounds_pass(&m);
+    }
+
+    // --- Layer A: C-1.3 sub-checks (positions 12–16 of upstream verify_impl) ---
+
+    // check_struct_defs --------------------------------------------------------
+
+    #[test]
+    fn struct_def_with_valid_handle_and_fields_passes() {
+        let m = module_with_one_declared_struct_def(2);
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_struct_def_oob_struct_handle() {
+        let mut m = empty_module();
+        // datatype_handles is empty; reference index 7.
+        m.struct_defs.push(StructDefinition {
+            struct_handle: DatatypeHandleIndex(7),
+            field_information: StructFieldInformation::Native,
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::DatatypeHandle,
+                idx: 7,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(DatatypeHandle, 7, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_struct_def_field_with_oob_name() {
+        let mut m = empty_module();
+        m.identifiers.push(Identifier::new("S").unwrap());
+        m.datatype_handles.push(DatatypeHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            abilities: AbilitySet::EMPTY,
+            type_parameters: vec![],
+        });
+        m.struct_defs.push(StructDefinition {
+            struct_handle: DatatypeHandleIndex(0),
+            field_information: StructFieldInformation::Declared(vec![FieldDefinition {
+                name: IdentifierIndex(99), // OOB
+                signature: TypeSignature(SignatureToken::U64),
+            }]),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::Identifier,
+                idx: 99,
+                pool_len: 2,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(Identifier, 99, 2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_struct_def_field_with_oob_datatype_in_signature() {
+        let mut m = empty_module();
+        m.identifiers.push(Identifier::new("S").unwrap());
+        m.identifiers.push(Identifier::new("f").unwrap());
+        m.datatype_handles.push(DatatypeHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            abilities: AbilitySet::EMPTY,
+            type_parameters: vec![],
+        });
+        m.struct_defs.push(StructDefinition {
+            struct_handle: DatatypeHandleIndex(0),
+            field_information: StructFieldInformation::Declared(vec![FieldDefinition {
+                name: IdentifierIndex(2),
+                // DatatypeHandleIndex(99) is OOB.
+                signature: TypeSignature(SignatureToken::Datatype(DatatypeHandleIndex(99))),
+            }]),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::DatatypeHandle,
+                idx: 99,
+                pool_len: 1,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(DatatypeHandle, 99, 1), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_struct_def_field_with_oob_type_parameter() {
+        let mut m = empty_module();
+        m.identifiers.push(Identifier::new("S").unwrap());
+        m.identifiers.push(Identifier::new("f").unwrap());
+        // Handle declares zero type parameters; field references TypeParameter(2).
+        m.datatype_handles.push(DatatypeHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            abilities: AbilitySet::EMPTY,
+            type_parameters: vec![],
+        });
+        m.struct_defs.push(StructDefinition {
+            struct_handle: DatatypeHandleIndex(0),
+            field_information: StructFieldInformation::Declared(vec![FieldDefinition {
+                name: IdentifierIndex(2),
+                signature: TypeSignature(SignatureToken::TypeParameter(2)),
+            }]),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::TypeParameter,
+                idx: 2,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(TypeParameter, 2, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn struct_def_handle_bounds_fires_before_field_iteration() {
+        // OOB struct_handle plus a field with OOB name. The
+        // handle bounds check fires first; the field iteration
+        // never runs.
+        let mut m = empty_module();
+        m.struct_defs.push(StructDefinition {
+            struct_handle: DatatypeHandleIndex(9),
+            field_information: StructFieldInformation::Declared(vec![FieldDefinition {
+                name: IdentifierIndex(99),
+                signature: TypeSignature(SignatureToken::U64),
+            }]),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::DatatypeHandle,
+                idx: 9,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected struct_handle bounds to win, got {other:?}"),
+        }
+    }
+
+    // check_enum_defs ----------------------------------------------------------
+
+    #[test]
+    fn enum_def_with_one_variant_with_fields_passes() {
+        let m = module_with_one_enum_def(2, 1);
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_enum_def_oob_enum_handle() {
+        let mut m = empty_module();
+        m.enum_defs.push(EnumDefinition {
+            enum_handle: DatatypeHandleIndex(5),
+            variants: vec![],
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::DatatypeHandle,
+                idx: 5,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(DatatypeHandle, 5, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_enum_def_variant_with_oob_variant_name() {
+        let mut m = module_with_one_enum_def(0, 0);
+        m.enum_defs[0].variants.push(VariantDefinition {
+            variant_name: IdentifierIndex(99),
+            fields: vec![],
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::Identifier,
+                idx: 99,
+                pool_len: 2,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(Identifier, 99, 2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_enum_def_field_with_oob_name() {
+        let mut m = module_with_one_enum_def(1, 0);
+        // Add a field to the lone variant with an OOB name.
+        let identifiers_count_at_capture = m.identifiers.len();
+        m.enum_defs[0].variants[0].fields.push(FieldDefinition {
+            name: IdentifierIndex(99),
+            signature: TypeSignature(SignatureToken::U64),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::Identifier,
+                idx: 99,
+                pool_len,
+            }) if pool_len == identifiers_count_at_capture => {}
+            other => panic!("expected IndexOutOfBounds(Identifier, 99, ...), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_enum_def_field_with_oob_datatype_in_signature() {
+        let mut m = module_with_one_enum_def(1, 0);
+        let field_name_idx =
+            u16::try_from(m.identifiers.len()).expect("test fixture has < u16::MAX identifiers");
+        m.identifiers.push(Identifier::new("ff").unwrap());
+        m.enum_defs[0].variants[0].fields.push(FieldDefinition {
+            name: IdentifierIndex(field_name_idx),
+            signature: TypeSignature(SignatureToken::Datatype(DatatypeHandleIndex(99))),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::DatatypeHandle,
+                idx: 99,
+                pool_len: 1,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(DatatypeHandle, 99, 1), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_enum_def_field_with_oob_type_parameter() {
+        let mut m = module_with_one_enum_def(1, 0);
+        // Handle declares zero type parameters; field references TypeParameter(7).
+        let field_name_idx =
+            u16::try_from(m.identifiers.len()).expect("test fixture has < u16::MAX identifiers");
+        m.identifiers.push(Identifier::new("ff").unwrap());
+        m.enum_defs[0].variants[0].fields.push(FieldDefinition {
+            name: IdentifierIndex(field_name_idx),
+            signature: TypeSignature(SignatureToken::TypeParameter(7)),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::TypeParameter,
+                idx: 7,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(TypeParameter, 7, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enum_def_handle_bounds_fires_before_variant_iteration() {
+        // OOB enum_handle plus an OOB variant_name. Enum-handle
+        // bounds wins; variant iteration never runs.
+        let mut m = empty_module();
+        m.enum_defs.push(EnumDefinition {
+            enum_handle: DatatypeHandleIndex(9),
+            variants: vec![VariantDefinition {
+                variant_name: IdentifierIndex(99),
+                fields: vec![],
+            }],
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::DatatypeHandle,
+                idx: 9,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected enum_handle bounds to win, got {other:?}"),
+        }
+    }
+
+    // check_enum_instantiations ------------------------------------------------
+
+    #[test]
+    fn enum_instantiation_with_valid_def_and_signature_passes() {
+        let m = module_with_one_enum_def_instantiation(1, 0);
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_enum_instantiation_oob_def() {
+        let mut m = empty_module();
+        m.signatures.push(Signature(vec![]));
+        m.enum_def_instantiations.push(EnumDefInstantiation {
+            def: EnumDefinitionIndex(5),
+            type_parameters: SignatureIndex(0),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::EnumDefinition,
+                idx: 5,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(EnumDefinition, 5, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_enum_instantiation_oob_type_parameters() {
+        let mut m = module_with_one_enum_def(0, 0);
+        m.enum_def_instantiations.push(EnumDefInstantiation {
+            def: EnumDefinitionIndex(0),
+            type_parameters: SignatureIndex(13),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::Signature,
+                idx: 13,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(Signature, 13, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enum_instantiation_def_bounds_fires_before_type_parameters_bounds() {
+        let mut m = empty_module();
+        m.enum_def_instantiations.push(EnumDefInstantiation {
+            def: EnumDefinitionIndex(7),
+            type_parameters: SignatureIndex(13),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::EnumDefinition,
+                idx: 7,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected def bounds to win, got {other:?}"),
+        }
+    }
+
+    // check_variant_handles ----------------------------------------------------
+
+    #[test]
+    fn variant_handle_with_valid_indices_passes() {
+        let mut m = module_with_one_enum_def(2, 0);
+        m.variant_handles.push(VariantHandle {
+            enum_def: EnumDefinitionIndex(0),
+            variant: 1,
+        });
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_variant_handle_oob_enum_def() {
+        let mut m = empty_module();
+        m.variant_handles.push(VariantHandle {
+            enum_def: EnumDefinitionIndex(5),
+            variant: 0,
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::EnumDefinition,
+                idx: 5,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(EnumDefinition, 5, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_variant_handle_variant_at_or_above_count() {
+        let mut m = module_with_one_enum_def(2, 0);
+        m.variant_handles.push(VariantHandle {
+            enum_def: EnumDefinitionIndex(0),
+            variant: 2, // == variants.len(), rejects
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::VariantTag,
+                idx: 2,
+                pool_len: 2,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(VariantTag, 2, 2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn variant_handle_enum_def_bounds_fires_before_variant_tag_check() {
+        // OOB enum_def + variant tag that would also be OOB.
+        // enum_def bounds wins.
+        let mut m = empty_module();
+        m.variant_handles.push(VariantHandle {
+            enum_def: EnumDefinitionIndex(9),
+            variant: 99,
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::EnumDefinition,
+                idx: 9,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected enum_def bounds to win, got {other:?}"),
+        }
+    }
+
+    // check_variant_instantiation_handles --------------------------------------
+
+    #[test]
+    fn variant_instantiation_handle_with_valid_indices_passes() {
+        let mut m = module_with_one_enum_def_instantiation(2, 0);
+        m.variant_instantiation_handles
+            .push(VariantInstantiationHandle {
+                enum_def: EnumDefInstantiationIndex(0),
+                variant: 1,
+            });
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_variant_instantiation_handle_oob_enum_def() {
+        let mut m = empty_module();
+        m.variant_instantiation_handles
+            .push(VariantInstantiationHandle {
+                enum_def: EnumDefInstantiationIndex(5),
+                variant: 0,
+            });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::EnumDefInstantiation,
+                idx: 5,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(EnumDefInstantiation, 5, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_variant_instantiation_handle_variant_at_or_above_count() {
+        let mut m = module_with_one_enum_def_instantiation(2, 0);
+        m.variant_instantiation_handles
+            .push(VariantInstantiationHandle {
+                enum_def: EnumDefInstantiationIndex(0),
+                variant: 2, // == variants.len(), rejects
+            });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::VariantTag,
+                idx: 2,
+                pool_len: 2,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(VariantTag, 2, 2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn variant_instantiation_enum_def_bounds_fires_before_variant_tag_check() {
+        // OOB enum_def (into enum_def_instantiations) + variant
+        // tag that would also be OOB. enum_def-instantiation
+        // bounds wins.
+        let mut m = empty_module();
+        m.variant_instantiation_handles
+            .push(VariantInstantiationHandle {
+                enum_def: EnumDefInstantiationIndex(9),
+                variant: 99,
+            });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::EnumDefInstantiation,
+                idx: 9,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected enum_def-instantiation bounds to win, got {other:?}"),
+        }
+    }
+
+    // Cross-sub-check ordering pin (C-1.3) -------------------------------------
+
+    #[test]
+    fn c13_struct_defs_before_enum_defs() {
+        // OOB struct_def + OOB enum_def. struct_defs is at
+        // position 12; enum_defs at 13. struct_def violation
+        // wins.
+        let mut m = empty_module();
+        m.struct_defs.push(StructDefinition {
+            struct_handle: DatatypeHandleIndex(99),
+            field_information: StructFieldInformation::Native,
+        });
+        m.enum_defs.push(EnumDefinition {
+            enum_handle: DatatypeHandleIndex(99),
+            variants: vec![],
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::DatatypeHandle,
+                idx: 99,
+                pool_len: 0,
+            }) => {}
+            other => panic!(
+                "expected struct_defs (position 12) violation to win over \
+                 enum_defs (position 13), got {other:?}"
+            ),
+        }
+    }
+
+    // --- Layer B: C-1.3 cross-validation ---
+
+    #[test]
+    fn cross_validation_accepts_module_with_struct_def() {
+        let m = module_with_one_declared_struct_def(2);
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_struct_def_oob_struct_handle() {
+        let mut m = empty_module();
+        m.struct_defs.push(StructDefinition {
+            struct_handle: DatatypeHandleIndex(7),
+            field_information: StructFieldInformation::Native,
+        });
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_module_with_enum_def() {
+        let m = module_with_one_enum_def(2, 1);
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_enum_def_oob_enum_handle() {
+        let mut m = empty_module();
+        m.enum_defs.push(EnumDefinition {
+            enum_handle: DatatypeHandleIndex(5),
+            variants: vec![],
+        });
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_module_with_enum_instantiation() {
+        let m = module_with_one_enum_def_instantiation(1, 0);
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_enum_instantiation_oob_def() {
+        let mut m = empty_module();
+        m.signatures.push(Signature(vec![]));
+        m.enum_def_instantiations.push(EnumDefInstantiation {
+            def: EnumDefinitionIndex(5),
+            type_parameters: SignatureIndex(0),
+        });
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_module_with_variant_handle() {
+        let mut m = module_with_one_enum_def(2, 0);
+        m.variant_handles.push(VariantHandle {
+            enum_def: EnumDefinitionIndex(0),
+            variant: 1,
+        });
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_variant_handle_variant_at_or_above_count() {
+        let mut m = module_with_one_enum_def(2, 0);
+        m.variant_handles.push(VariantHandle {
+            enum_def: EnumDefinitionIndex(0),
+            variant: 2,
+        });
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_module_with_variant_instantiation_handle() {
+        let mut m = module_with_one_enum_def_instantiation(2, 0);
+        m.variant_instantiation_handles
+            .push(VariantInstantiationHandle {
+                enum_def: EnumDefInstantiationIndex(0),
+                variant: 1,
+            });
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_variant_instantiation_handle_variant_at_or_above_count() {
+        let mut m = module_with_one_enum_def_instantiation(2, 0);
+        m.variant_instantiation_handles
+            .push(VariantInstantiationHandle {
+                enum_def: EnumDefInstantiationIndex(0),
+                variant: 2,
+            });
         cross_validate_bounds_pass(&m);
     }
 }
