@@ -424,9 +424,67 @@ pub enum AdamantValidationError {
         /// isn't.
         component_summary: String,
     },
+
+    /// Module has no `b"adamant.privacy"` metadata entry but
+    /// contains at least one `Visibility::Public` function.
+    /// Per §6.2.1.6 Rule 2, every public function must carry a
+    /// privacy annotation; the table is required when public
+    /// functions are present.
+    ///
+    /// Cardinality contract per Q4 walk-back option (b):
+    /// modules with only `Visibility::Friend` or
+    /// `Visibility::Private` functions may omit the entry
+    /// entirely. Visibility coverage is Public-only per Q3
+    /// walk-back.
+    ///
+    /// Phase 5/5b.2 B-4.1 (`validator::rule_02_privacy`).
+    MissingPrivacyMetadata,
+
+    /// Module has more than one `b"adamant.privacy"` metadata
+    /// entry. §6.2.1.6 Rule 2 + cardinality contract per Q4
+    /// walk-back: at most one entry. The spec saying nothing
+    /// about cardinality doesn't license contradictory privacy
+    /// declarations.
+    ///
+    /// Phase 5/5b.2 B-4.1 (`validator::rule_02_privacy`).
+    MultiplePrivacyMetadata {
+        /// Number of entries with key `b"adamant.privacy"`
+        /// the validator found. Always `>= 2`.
+        count: usize,
+    },
+
+    /// The (single) `b"adamant.privacy"` metadata entry's value
+    /// is not a valid BCS encoding of
+    /// `Vec<(FunctionDefinitionIndex, u8)>`. Shared between
+    /// [`super::rule_02_privacy`] (Rule 2 BCS-decode flow) and
+    /// [`super::module_pass::privacy_metadata_structure`]
+    /// (structural pass); per pipeline ordering the structural
+    /// pass typically wins eager-error precedence.
+    ///
+    /// Phase 5/5b.2 B-4.1 + B-4.2 (shared variant per
+    /// pipeline-ordering-eager-error sub-pattern).
+    MalformedPrivacyMetadata {
+        /// The BCS deserialiser's error rendered via `Display`.
+        /// Carried as `String` (matching `MalformedMutabilityMetadata`
+        /// from Wave 3a) so callers don't depend on the BCS
+        /// crate's error-enum surface.
+        bcs_error: String,
+    },
+
+    /// A `Visibility::Public` function definition is not
+    /// covered by any entry in the privacy metadata table.
+    /// Per Q3 walk-back, only Public functions are required
+    /// to appear; Friend and Private functions need not.
+    ///
+    /// Phase 5/5b.2 B-4.1 (`validator::rule_02_privacy`).
+    MissingPrivacyAnnotation {
+        /// Index into the module's `function_defs` of the
+        /// offending Public function.
+        function_index: FunctionDefinitionIndex,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
-    // variant. Variants for Rules 2, 3, 6, 7 land in subsequent
+    // variant. Variants for Rules 3, 6, 7 land in subsequent
     // waves.
 }
 
@@ -713,6 +771,29 @@ impl core::fmt::Display for AdamantValidationError {
                 "monomorphization-explosive loop in generic-instantiation \
                  graph: {component_summary} (whitepaper §6.2.1.8 step 3, \
                  `module_pass::instantiation_loops`)"
+            ),
+            Self::MissingPrivacyMetadata => write!(
+                f,
+                "module has at least one Public function but no \
+                 `adamant.privacy` metadata entry \
+                 (whitepaper §6.2.1.6 Rule 2)"
+            ),
+            Self::MultiplePrivacyMetadata { count } => write!(
+                f,
+                "expected at most one `adamant.privacy` metadata entry, \
+                 found {count} (whitepaper §6.2.1.6 Rule 2)"
+            ),
+            Self::MalformedPrivacyMetadata { bcs_error } => write!(
+                f,
+                "`adamant.privacy` metadata value is not a valid BCS \
+                 encoding of Vec<(FunctionDefinitionIndex, u8)>: \
+                 {bcs_error} (whitepaper §6.2.1.6 Rule 2)"
+            ),
+            Self::MissingPrivacyAnnotation { function_index } => write!(
+                f,
+                "Public function {} has no entry in the `adamant.privacy` \
+                 metadata table (whitepaper §6.2.1.6 Rule 2)",
+                function_index.0
             ),
         }
     }

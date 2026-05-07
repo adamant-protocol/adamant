@@ -76,6 +76,7 @@ mod config;
 mod error;
 mod module_pass;
 mod rule_01_mutability;
+mod rule_02_privacy;
 mod rule_04_no_natives;
 
 #[cfg(test)]
