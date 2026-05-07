@@ -191,19 +191,117 @@ bytecode-verifier passes from `move-bytecode-verifier`.
   the divergence as a development-time signal per the
   resistant-proof posture's vendor-refresh pattern.
 
+### Phase 5/5b.2 B-3.1 (`limits` pass):
+
+- `module_pass::limits::verify(module, limits)` — entry
+  point for structural-limits validation per upstream
+  `move-bytecode-verifier::limits::LimitsVerifier`. Six
+  sub-checks in upstream order: `verify_constants`,
+  `verify_function_handles`, `verify_datatype_handles`,
+  `verify_type_nodes`, `verify_identifiers`,
+  `verify_definitions`. Consumes
+  [`AdamantStructuralLimits`] from B-1's
+  `validator/config.rs`.
+- **Signature divergence from sibling passes:**
+  `verify(module, limits)` takes
+  `&AdamantStructuralLimits` as a second parameter. First
+  pass in Phase 5/5b.2 to consume validator config; B-2
+  and B-3.2/B-3.3 passes take only `&module`. Phase
+  5/5b.2 B-5 pipeline integration threads
+  `config.structural_limits()` from
+  `AdamantVerifierConfig` to `limits::verify`
+  specifically — registered as B-5 carry-forward.
+- 10 new `AdamantValidationError` variants:
+  `TooManyVectorElements`, `TooManyTypeParameters`,
+  `TooManyParameters`, `TooManyTypeNodes`,
+  `IdentifierTooLong`, `InvalidIdentifier` (structurally
+  unreachable — see structural-impossibility section
+  below), `MaxFunctionDefinitionsReached`,
+  `MaxDataDefinitionsReached`,
+  `MaxFieldDefinitionsReached` (reuses `FieldOwnerKind`
+  from B-2.3), `MaxVariantsInEnumReached`.
+- New public closed enum `HandleKind` (`DatatypeHandle`,
+  `FunctionHandle`) re-exported via `validator/mod.rs`
+  and `lib.rs`.
+
+### Phase 5/5b.2 B-3.2 (`recursive_data_def` pass + petgraph promotion):
+
+- `module_pass::recursive_data_def::verify(module)` —
+  cycle detection over the module's struct + enum field
+  graph per upstream
+  `move-bytecode-verifier::data_defs::RecursiveDataDefChecker`.
+  Builds `petgraph::graphmap::DiGraphMap<DataIndex, ()>`;
+  runs `petgraph::algo::toposort`; `Err(cycle)` ⇒ reject.
+- **Petgraph promoted to `adamant-vm`'s production
+  `[dependencies]`** at B-3.2. First non-Sui-vendor-
+  derived production dep on `adamant-vm`. Audit-template
+  doc-comment lives inline in `crates/adamant-vm/Cargo.toml`,
+  serving as the section anchor for "External production
+  dep audit template" below. MSRV verified at B-3.2 start
+  (petgraph 0.8.3 documents `rust-version = "1.64"`;
+  Adamant pins `rust-toolchain.toml` channel `1.95.0`;
+  +31 minor-release cushion).
+- Internal `DataIndex { Struct(TableIndex),
+  Enum(TableIndex) }` private helper keeps struct/enum
+  positions distinct in the graph (graph-internal vs
+  public-error-surface separation).
+  `DataIndex::into_error_kind()` is the single conversion
+  point at error construction.
+- New `AdamantValidationError` variant:
+  `RecursiveDataDefinition { kind: FieldOwnerKind, idx:
+  TableIndex }`. Reuses `FieldOwnerKind` from B-2.3 per
+  the B-3 plan's Q3 disposition.
+
+### Phase 5/5b.2 B-3.3 (`instantiation_loops` pass):
+
+- `module_pass::instantiation_loops::verify(module)` —
+  generic-instantiation-loop detection per upstream
+  `move-bytecode-verifier::instantiation_loops::InstantiationLoopChecker`.
+  Builds `petgraph::Graph<Node, Edge>` where
+  `Node = (FunctionDefinitionIndex, TypeParameterIndex)`
+  and `Edge = Identity | TyConApp(SignatureToken)`. Runs
+  `petgraph::algo::tarjan_scc`; rejects the first non-
+  trivial SCC containing ≥1 `TyConApp` edge.
+- Internal `Checker<'a>` struct holds the graph,
+  node-index map, and function-handle-to-def map. Walks
+  `CallGeneric` instructions in non-native function
+  bodies; `BytecodeInstruction::Adamant(_)` arm continues
+  without adding edges (Q5 from B-2 plan: 17 extensions
+  don't perturb the graph).
+- Native-function filter via `!def.is_native()` guard at
+  the start of `build_graph` — fourth instance of the
+  structural-impossibility-checks pattern with the
+  "implicit-filter exclusionary" sub-pattern.
+- Component-summary diagnostic format byte-faithful to
+  upstream's `"edges with constructors: [{}], nodes: [{}]"`
+  template. Adamant's `define_index!`-generated `Display`
+  and `Debug` derives produce byte-identical output.
+  Empirically validated by a Layer B parity test that
+  pins the format prefix, separator, suffix, and the
+  presence of `f0#0` node + `--Vector(TypeParameter(0))-->`
+  edge fragments.
+- New `AdamantValidationError` variant:
+  `LoopInInstantiationGraph { component_summary:
+  String }`. Diagnostic-only `String` per Q4 from B-2
+  plan; not consensus-binding (the rejection is, the
+  formatting isn't); future sub-arc can promote to typed
+  if downstream consumers need pattern-matching.
+
 ### Pending (later sub-arcs of Phase 5/5b.2):
 
-- **B-3:** `limits`, `recursive_data_def`, `instantiation_loops`
 - **B-4:** Rule 2 (`rule_02_privacy.rs`) + privacy-metadata-
   structure parallel module-level pass; Rule 2 lands in
-  `crates/adamant-vm/src/validator/`, not in this subtree
+  `crates/adamant-vm/src/validator/`, not in this subtree.
 - **B-5:** Pipeline integration in
   `crates/adamant-vm/src/validator/mod.rs`; removal of the
-  four pass-level `#![allow(dead_code)]` sunsets on
+  seven pass-level `#![allow(dead_code)]` sunsets on
   `constants.rs`, `friends.rs`, `ability_field_requirements.rs`,
-  `instruction_consistency.rs`
+  `instruction_consistency.rs`, `limits.rs`,
+  `recursive_data_def.rs`, `instantiation_loops.rs`;
+  threading `&AdamantStructuralLimits` to `limits::verify`
+  per its non-uniform signature shape.
 - **B-6:** Workspace test pass + final PROVENANCE.md batch +
-  CLAUDE.md state-bump for Phase 5/5b.2 closure
+  CLAUDE.md state-bump for Phase 5/5b.2 closure.
 
 ## What was NOT forked
 
@@ -384,6 +482,149 @@ from upstream:
   match IS the table"`. Same reasoning would apply to future
   variant additions; the allow stays.
 
+**Phase 5/5b.2 B-3.1 deviations (`limits` pass):**
+
+- **Typed-error fork.** Upstream returns
+  `PartialVMResult<()>`. Adamant returns
+  `Result<(), AdamantValidationError>` with 10 closed
+  variants (`TooManyVectorElements`,
+  `TooManyTypeParameters`, `TooManyParameters`,
+  `TooManyTypeNodes`, `IdentifierTooLong`,
+  `InvalidIdentifier`, `MaxFunctionDefinitionsReached`,
+  `MaxDataDefinitionsReached`,
+  `MaxFieldDefinitionsReached`,
+  `MaxVariantsInEnumReached`) plus reuse of
+  `MalformedConstantData` from B-2.1 for the vector-length
+  sub-check's ULEB128-prefix-read path. Same rationale as
+  B-2.1.
+- **Signature shape divergence.** `verify(module, limits)`
+  takes `&AdamantStructuralLimits` as a second parameter
+  — the only B-2/B-3 pass with a config parameter.
+  Sibling passes take only `&module`. B-5's pipeline
+  integration threads `config.structural_limits()` from
+  `AdamantVerifierConfig` to `limits::verify`
+  specifically.
+- **Vector-length sub-check via outer ULEB128 prefix
+  read.** Upstream calls `Constant::deserialize_constant`
+  which uses `MoveValue::simple_deserialize` from
+  `move_core_types::runtime_value` — Adamant has no
+  production dep on that path per the resistant-proof
+  posture. Replacement reads only the outer ULEB128
+  length prefix via `read_uleb128_as_u64`; the count is
+  semantically equivalent to upstream's element count for
+  `Vector<T>` constants. Reuses
+  `MalformedConstantData { reason:
+  MalformedConstantReason::InvalidUleb128 }` from B-2.1
+  if the prefix read fails — defense-in-depth structural
+  redundancy with B-2.1's full type-directed walker
+  (constants pass typically wins eager-error precedence
+  per pipeline ordering).
+- **`<SELF>` rejection structurally unreachable in
+  Adamant.** The `disallow_self_identifier` config check
+  at `verify_identifiers` is structurally unreachable
+  because `Identifier::new("<SELF>")` returns `Err` per
+  `is_valid_identifier_char`'s acceptance set
+  (`'_' | 'a'..='z' | 'A'..='Z' | '0'..='9'`); ASCII `<`
+  (`0x3C`) and `>` (`0x3E`) fall in the gap between `'9'`
+  (`0x39`) and `'A'` (`0x41`). Verbatim verification at
+  B-3.1 commit `0dc98a7`. Pinned by the
+  `self_identifier_cannot_be_constructed_via_identifier_new`
+  test asserting `Identifier::new("<SELF>")` returns
+  `Err`. Second instance of the structural-impossibility-
+  checks pattern's "explicit-macro defensive" sub-pattern
+  — see "Structural-impossibility checks pattern"
+  section below.
+- **Six sub-check ordering preserved byte-faithfully**
+  (Q5 from B-3 plan): `verify_constants` →
+  `verify_function_handles` → `verify_datatype_handles`
+  → `verify_type_nodes` → `verify_identifiers` →
+  `verify_definitions`. Matches upstream's
+  `LimitsVerifier::verify_module_impl` ordering.
+- **`max_type_nodes` weighting preserved byte-faithfully**
+  (Q6 from B-3 plan):
+  `STRUCT_SIZE_WEIGHT: usize = 4`,
+  `PARAM_SIZE_WEIGHT: usize = 4`, primitives count as 1.
+  See `verify_type_node` constants.
+
+**Phase 5/5b.2 B-3.2 deviations (`recursive_data_def` pass + petgraph promotion):**
+
+- **Typed-error fork.** Upstream returns
+  `PartialVMResult<()>`. Adamant returns
+  `Result<(), AdamantValidationError>` with closed variant
+  `RecursiveDataDefinition { kind: FieldOwnerKind, idx:
+  TableIndex }`. Reuses `FieldOwnerKind` from B-2.3 per
+  Q3 disposition (instance of byte-faithful preservation
+  of upstream cardinality decisions — see "Byte-faithful
+  preservation of upstream consensus-affecting decisions"
+  section below).
+- **Petgraph promoted to production dependency.** First
+  non-Sui-vendor-derived production dep on `adamant-vm`.
+  Audit-template doc-comment in `crates/adamant-vm/Cargo.toml`
+  inline with the dep entry. See "External production dep
+  audit template" section below.
+- **Internal `DataIndex { Struct, Enum }` graph-internal
+  helper vs `(FieldOwnerKind, TableIndex)` public-error
+  surface.** Pattern for future graph-pass internal node
+  types: graph-internal node type kept distinct from the
+  public error variant's shape;
+  `DataIndex::into_error_kind()` is the single
+  conversion point at error construction.
+- **Two structural-impossibility paths with
+  spec-pipeline-impossibility-pending-port qualifier.**
+  Duplicate handle-to-def mapping (`assert!`) and
+  reference field in datatype position (`unreachable!`).
+  Both messages include "not yet ported" qualifier
+  referencing the upstream-of-this-pass guarantee
+  (`DuplicationChecker` / `SignatureChecker` not yet
+  ported in Phase 5/5b.2). Cleanup item: when those
+  passes land in a later sub-arc, the qualifier drops.
+
+**Phase 5/5b.2 B-3.3 deviations (`instantiation_loops` pass):**
+
+- **Typed-error fork.** Upstream returns
+  `PartialVMResult<()>`. Adamant returns
+  `Result<(), AdamantValidationError>` with closed variant
+  `LoopInInstantiationGraph { component_summary:
+  String }`. Diagnostic-only `String` per Q4 from B-2
+  plan; not consensus-binding. Future sub-arc can promote
+  to typed.
+- **Two-typed graph algorithm preserved byte-faithfully.**
+  `Edge = Identity | TyConApp(SignatureToken)`. Edge
+  cardinality preserves one-edge-per-type-parameter in
+  the actual-type's preorder (Q1 from B-3.3 plan;
+  instance of byte-faithful preservation of upstream
+  cardinality decisions).
+- **Native-function filter via implicit-filter
+  exclusionary sub-pattern.** `if !def.is_native()` guard
+  at the start of `build_graph` filters out structurally-
+  impossible input rather than panicking. Native
+  functions are rejected by Rule 4 at a different
+  pipeline stage; this filter is byte-faithful defense-
+  in-depth. First instance of the structural-
+  impossibility-checks pattern's "implicit-filter
+  exclusionary" sub-pattern.
+- **Adamant extensions don't perturb the graph** (Q5
+  from B-2 plan). 17 extensions per §6.2.1.4 either use
+  `FunctionHandleIndex` (non-generic call shape, no
+  type-arguments) or are zero-operand / non-instantiation-
+  operand. Pass's instruction match adds early-return Ok
+  arm for `BytecodeInstruction::Adamant(_)` per B-2.4
+  pattern. Layer A test pins no-perturbation behaviour.
+- **Component-summary diagnostic byte-faithful to
+  upstream.** Format `"edges with constructors: [{}],
+  nodes: [{}]"`; Adamant's `define_index!`-generated
+  `Display` and `Debug` derives produce byte-identical
+  output. Empirically validated by the
+  `rejects_with_byte_faithful_component_summary` test.
+  Diagnostic isn't consensus-binding, but byte-
+  faithfulness is a free audit anchor.
+- **`#[allow(clippy::similar_names)]` on
+  `Checker::build_graph_call`.** Paired `caller_idx` /
+  `callee_idx` parameter names trip the lint; semantic
+  clarity outweighs the lint, and the names are upstream-
+  faithful. Reason: `"caller/callee are paired upstream-
+  faithful naming"`.
+
 ## Byte-identity invariants
 
 For the resistant-proof posture to be sound, this subtree's
@@ -439,8 +680,41 @@ Specifically:
    the 5 paired-instruction families plus VecPack/VecUnpack
    bound checks.
 
-Subsequent B-3 sub-arcs extend the invariants list as each
-pass lands.
+7. **`module_pass::limits::verify`** accepts the same
+   module configurations as Sui's
+   `move_bytecode_verifier::limits::LimitsVerifier::verify_module`
+   for any `(module, limits)` pair where the structural-
+   limit fields match. Asserted by 6 Layer B parity tests
+   covering each sub-check (function-handle type-params,
+   function parameters, identifier length, vector
+   constant, plus accept-empty parity). The
+   `<SELF>`-rejection path is structurally unreachable in
+   Adamant — no cross-validation parity claim applies (an
+   `<SELF>` identifier cannot be constructed via Adamant's
+   `Identifier::new` API; see B-3.1 deviations above).
+8. **`module_pass::recursive_data_def::verify`** accepts
+   the same module configurations as Sui's
+   `move_bytecode_verifier::data_defs::RecursiveDataDefChecker::verify_module`
+   for any module shape produceable through
+   `to_sui_module`'s BCS round-trip. Asserted by 6 Layer
+   B parity tests covering empty, non-recursive struct,
+   chain (no cycle), self-referencing struct, two-struct
+   cycle, and self-referencing enum variant.
+9. **`module_pass::instantiation_loops::verify`** accepts
+   the same module configurations as Sui's
+   `move_bytecode_verifier::instantiation_loops::InstantiationLoopChecker::verify_module`
+   for any module shape produceable through
+   `to_sui_module`. Asserted by 6 Layer B parity tests
+   covering empty, function with no `CallGeneric`,
+   identity-only self-cycle (allowed), self-edge with
+   `TyConApp`, two-function `TyConApp` cycle, and linear
+   `TyConApp` no-cycle. Plus 1 component-summary parity
+   test pinning the byte-faithful diagnostic format
+   commitment empirically.
+
+Phase 5/5b.2 B-3 closes the invariants list at #9; B-4
+extends with the Rule 2 + privacy-metadata-structure
+parity claims.
 
 ## Why a fork rather than a continued vendoring
 
@@ -656,16 +930,26 @@ reached by the production binary's dependency graph**:
   beyond Phase 5/5b.5 alongside the other test-time-only
   vendored Sui surface.
 - **`move_vm_config::verifier::VerifierConfig` (already in
-  scope; consumed at B-2.4 cross-validation).** Sui's
-  `instruction_consistency::InstructionConsistency::verify_module`
-  takes a `&VerifierConfig` parameter for its
-  `safe_assert!(!config.deprecate_global_storage_ops)` check.
-  Adamant's Layer B helper passes
-  `VerifierConfig::default()` (which sets
-  `deprecate_global_storage_ops = true`, exercising the
-  fully-deprecated-opcode-rejection path Sui ships in
-  production). No production-side use of `VerifierConfig` for
-  this pass — the dependency is already in scope from the
+  scope; consumed at B-2.4 and B-3.1 cross-validation).**
+  Two passes use `VerifierConfig` at test time:
+  - B-2.4: Sui's
+    `instruction_consistency::InstructionConsistency::verify_module`
+    takes `&VerifierConfig` for its
+    `safe_assert!(!config.deprecate_global_storage_ops)`
+    check. Adamant's Layer B helper passes
+    `VerifierConfig::default()` (sets
+    `deprecate_global_storage_ops = true`, exercising the
+    fully-deprecated-opcode-rejection path Sui ships in
+    production).
+  - B-3.1: Sui's `LimitsVerifier::verify_module` takes
+    `&VerifierConfig`. Adamant's Layer B helper builds a
+    `VerifierConfig` whose structural-limits fields mirror
+    the Adamant `AdamantStructuralLimits` test fixture; the
+    rest of `VerifierConfig` defaults. Confirms parity at
+    the same configured limits.
+
+  No production-side use of `VerifierConfig` for either
+  pass — the dependency is already in scope from the
   validator wrapper bridge and is removed alongside it in
   Phase 5/5b.5.
 
@@ -679,6 +963,222 @@ them in the spec, parallel to the per-instruction gas-cost
 appendix pattern. Registered in CLAUDE.md "Open properties to
 track" at B-6 closure, distinct from the genesis-pool
 calibration item.
+
+## Structural-impossibility checks pattern
+
+Upstream Sui has defense-in-depth checks for inputs that
+Adamant's pipeline rejects earlier (or is structurally
+prevented from accepting). Adamant's port keeps the check
+(byte-faithful match shape, defense-in-depth posture) but
+documents the structural impossibility and pin-tests the
+upstream-of-this-pass guarantee rather than negative-testing
+the unreachable path.
+
+Three sub-patterns are named:
+
+### 1. Explicit-macro defensive
+
+`assert!` / `unreachable!` / `expect()` at unreachable code
+paths. Used when reaching the path would indicate a serious
+bug (broken upstream pass, bypassed deserializer, programmer
+error). The macro message documents the structural argument
+inline so an auditor reading the source can verify the
+unreachability claim without external context.
+
+Instances:
+
+- **B-2.4 deprecated-arms `unreachable!`** — the 10
+  deprecated global-storage opcodes (`ExistsDeprecated`
+  et al.) are rejected at deserialize-time per
+  §6.2.1.6 Rule 5; verifier-level arm exists for match
+  exhaustiveness preservation but bodies are
+  `unreachable!` with structural-impossibility messages
+  referencing the deserializer tests
+  (`bytecode_wire.rs:1242 strict_mode_rejects_each_deprecated_opcode`
+  + `validator/mod.rs::tests::rejects_module_with_deprecated_global_storage_opcode`).
+- **B-3.1 `<SELF>` rejection via
+  `disallow_self_identifier` config check; structurally
+  unreachable because `Identifier::new("<SELF>")`
+  returns `Err` per `is_valid_identifier_char`'s
+  acceptance set verification at B-3.1 commit
+  `0dc98a7`.** Pinned via
+  `self_identifier_cannot_be_constructed_via_identifier_new`
+  test asserting the API-level rejection.
+- **B-3.2 duplicate handle-to-def mapping (`assert!`)
+  + reference field in datatype position
+  (`unreachable!`).** Both messages include "not yet
+  ported" qualifier — see "Spec-pipeline-impossibility-
+  pending-port" sub-pattern below.
+
+### 2. Implicit-filter exclusionary
+
+`if !condition` guard that filters out structurally-
+impossible input rather than panicking. Used when the
+upstream check is exclusionary by design (skip processing
+this category of input rather than reject). The filter
+itself is byte-faithful defense-in-depth; the structural
+argument lives in the doc comment rather than a panic
+message.
+
+Instances:
+
+- **B-3.3 native-function filter via
+  `!def.is_native()` guard** at the start of
+  `instantiation_loops::Checker::build_graph`. Native
+  functions are rejected by Rule 4 at a different
+  pipeline stage; the filter here matches upstream
+  byte-faithfully.
+
+### 3. Spec-pipeline-impossibility-pending-port
+
+Sub-sub-pattern of explicit-macro defensive where the
+upstream-of-this-pass guarantee isn't yet ported in
+Adamant. Macro message includes a "not yet ported"
+qualifier referencing the pending pass; cleanup item
+pinned for the later sub-arc that lands the relevant
+upstream pass. When the relevant pass lands, the
+qualifier drops from the message — known cleanup item
+recorded in this PROVENANCE.md.
+
+Instances:
+
+- **B-3.2 duplicate handle-to-def mapping** —
+  `DuplicationChecker` pending; `assert!` message
+  includes "not yet ported (Phase 5/5b.2 B-3 large-pass
+  set)".
+- **B-3.2 reference field in datatype position** —
+  `SignatureChecker` pending; `unreachable!` message
+  includes "not yet ported (Phase 5/5b.2 B-3 large-pass
+  set)".
+
+### Pattern scope
+
+The pattern is about the structural argument and the
+test/doc-comment shape, not the specific macro or the
+exclusionary-vs-defensive choice. Implementations choose
+the most natural shape for the local code:
+
+- `assert!` for "BTreeMap insert with duplicate"
+- `unreachable!` for "closed match arm reached"
+- `expect()` for "API-bounded error path resolved at
+  call site"
+- `if !condition` for "exclusionary filter at iteration
+  start"
+
+All four shapes are valid; the structural argument is
+the load-bearing property. The
+"spec-pipeline-impossibility-pending-port" qualifier
+applies orthogonally to the explicit-macro sub-pattern.
+
+## External production dep audit template
+
+Established at Phase 5/5b.2 B-3.2 (petgraph promotion).
+For each non-Sui-vendor-derived production dep added to
+`adamant-vm`:
+
+1. **License check** — must be compatible with Adamant's
+   Apache 2.0.
+2. **Maintenance posture** — mature (no obvious abandonment
+   risk), semver-stable across major versions.
+3. **MSRV verification** — documented MSRV ≤ Adamant's
+   `rust-toolchain.toml` channel. Verbatim verification
+   gate before promotion (paste the resolved version's
+   `Cargo.toml` `rust-version` field).
+4. **Transitive-dep review** — default features acceptable
+   (or specific features pinned with rationale); any
+   `unsafe` surface noted. No transitive dep that itself
+   needs auditing without prior approval.
+5. **`forbid(unsafe_code)` compatibility** — Adamant's
+   workspace `forbid(unsafe_code)` lint applies to first-
+   party code; deps with `unsafe` are permitted but the
+   surface is noted in this PROVENANCE.md and SECURITY.md.
+6. **Audit-template doc-comment** — inline in
+   `crates/adamant-vm/Cargo.toml` (or the relevant crate's
+   Cargo.toml) alongside the dep entry, summarizing the
+   above five checks plus the Phase 5/5b.x register
+   reference.
+7. **Why this dep rather than implementing in-house** —
+   register the implement-vs-adopt rationale. For mature
+   well-trodden code (graph algorithms, BCS, hashing), the
+   answer is usually "in-house implementation duplicates
+   well-audited code with no audit benefit"; for
+   cryptographic or consensus-binding code, the answer is
+   often "in-house implementation has different audit-cost
+   shape and may be preferred" — the question matters and
+   the rationale should be recorded.
+
+The audit applies to the major-version line within the
+SemVer-stable contract. Cargo resolves to latest patch
+within the workspace pin's range; resolution drift within a
+major line is acceptable. Bumping to a new major version
+requires audit re-run. The pin-vs-resolved distinction is
+a deliberate posture: the workspace pin (`^0.8.1`) is the
+audit-anchor declaration; the resolved patch (`0.8.3` at
+B-3.2) is what the build sees.
+
+Instances:
+
+- **petgraph 0.8.x** (B-3.2 — first instance). License
+  Apache-2.0/MIT dual; mature and semver-stable; MSRV
+  1.64 vs Adamant's 1.95.0; default features acceptable
+  (no `rayon` opt-in needed for our graph algorithms);
+  internal `unsafe` in graph indexing noted; in-house
+  implementation rationale: graph algorithms are well-
+  trodden code with no Adamant-specific audit benefit
+  from re-implementation.
+
+## Byte-faithful preservation of upstream consensus-affecting decisions
+
+Methodology principle registered at Phase 5/5b.2 B-3.3.
+Divergence from upstream changes rejection behavior or
+eager-error semantics; preserve byte-faithfully unless
+explicit redirect (with redirect documented in "Adamant
+deviations").
+
+Scope: all consensus-affecting decisions, not cardinality
+alone:
+
+- **Cardinality** — number of edges, error-variant counts,
+  iteration arities.
+- **Ordering** — sub-check order, table iteration order,
+  pipeline-stage order.
+- **Weighting** — node/edge weights in graph algorithms,
+  size weights in tree-traversal cost calculations.
+- **Default values** — config defaults, pre-mainnet
+  calibration anchors.
+- **Error precedence** — eager-error semantics, first-
+  offender reporting, sub-pass ordering for cross-pass
+  shared variants.
+
+Instances:
+
+- **Cardinality** — B-3.2 `RecursiveDataDefinition`
+  reuses `FieldOwnerKind` (`Struct | Enum`) rather than
+  introducing a parallel `DataDefKind` enum (Q3 from
+  B-2 plan). B-3.3 `TyConApp` edge cardinality preserves
+  one-edge-per-type-parameter in the actual-type's
+  preorder (Q1 from B-3.3 plan).
+- **Ordering** — B-3.1 `limits` six sub-checks preserve
+  upstream order: `verify_constants` →
+  `verify_function_handles` → `verify_datatype_handles`
+  → `verify_type_nodes` → `verify_identifiers` →
+  `verify_definitions` (Q5 from B-3 plan).
+- **Weighting** — B-3.1 `verify_type_node`'s `STRUCT_SIZE_WEIGHT
+  = 4`, `PARAM_SIZE_WEIGHT = 4`, primitives = 1 (Q6 from
+  B-3 plan).
+- **Error precedence** — B-3.1 + B-2.1
+  `MalformedConstantData` reuse: both passes can produce
+  the variant for ULEB128-malformed vector constants;
+  pipeline ordering (constants pass before limits per
+  §6.2.1.8 step 3) means constants pass typically wins
+  eager-error precedence. Defense-in-depth structural
+  redundancy.
+
+The principle generalizes: when in doubt, preserve
+upstream behaviour byte-faithfully. Divergence requires a
+deliberate redirect documented in "Adamant deviations"
+above. This is the methodology counterpart to the
+resistant-proof posture at the code level.
 
 ## Future maintenance
 
@@ -759,3 +1259,42 @@ exist" and "tests get run."
   test passes byte-identical to the vendored snapshot for
   every fixture exercised. Workspace test count 821 → 933
   (+112 across B-1 and B-2; 9 from B-1 + 103 from B-2.1-2.4).
+- **2026-05-08 (Phase 5/5b.2 B-3 closure):** Three large
+  module-level passes landed across B-3.1 through B-3.3,
+  closed by B-3.4's documentation batch. Cumulative file
+  LOC: ~2,399 across `limits.rs` (942), `recursive_data_def.rs`
+  (569), and `instantiation_loops.rs` (888); plus
+  error-variant additions in `validator/error.rs` (~240
+  LOC across the three sub-checkpoints). Test additions:
+  23 (limits) + 17 (recursive_data_def) + 18
+  (instantiation_loops) = **58 new tests** (sub-arc
+  delta), all passing in the workspace gauntlet. Workspace
+  test count progression for the B-3 sub-arc:
+  **933 → 991 (+58)**. One new public closed enum
+  (`HandleKind`: `DatatypeHandle | FunctionHandle`)
+  re-exported via `lib.rs`. Twelve new
+  `AdamantValidationError` variants (10 from B-3.1, 1
+  from B-3.2, 1 from B-3.3). `petgraph` promoted to
+  `adamant-vm`'s production `[dependencies]` at B-3.2 —
+  first non-Sui-vendor-derived production dep on
+  `adamant-vm`; audit template established. Three pass-
+  level `#![allow(dead_code)]` sunsets added by B-3.1 →
+  B-3.3 (totalling seven across the validator/module_pass
+  subtree); all pending B-5 pipeline integration. New
+  PROVENANCE.md sections added: "Structural-impossibility
+  checks pattern" (formalising three named sub-patterns:
+  explicit-macro defensive, implicit-filter exclusionary,
+  spec-pipeline-impossibility-pending-port — with four
+  pattern instances now: B-2.4 deprecated-arms, B-3.1
+  `<SELF>`, B-3.2 duplicate-handle + reference-field,
+  B-3.3 native-function filter); "External production dep
+  audit template" (seven-criterion template registered at
+  B-3.2 petgraph promotion); "Byte-faithful preservation
+  of upstream consensus-affecting decisions" (methodology
+  principle covering cardinality, ordering, weighting,
+  default values, error precedence). No upstream divergence
+  on accept/reject decisions at fork time — every Layer B
+  cross-validation test passes byte-identical to the
+  vendored snapshot for every fixture exercised, including
+  the byte-faithful component-summary parity test pinning
+  upstream's diagnostic format empirically.
