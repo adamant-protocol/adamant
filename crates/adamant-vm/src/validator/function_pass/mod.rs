@@ -23,19 +23,23 @@
 //!
 //! # Phase 5/5b.4 sub-arc
 //!
-//! - **D-1a (this commit).** CFG construction module
-//!   ([`cfg`]) + per-function dispatch stub
-//!   ([`verify_function_bodies`]). Strictly mechanical — no
-//!   typed-error variants ship at D-1a; D-2's control-flow
-//!   validation pass declares variants alongside their
-//!   producers + tests in one focused commit (Rust error-type
-//!   lifecycle: error variants declared with their first
-//!   producer). No call into [`super::verify_module`] yet —
-//!   that wiring lands at D-6. `#![allow(dead_code)]` is
-//!   module-scoped pending the wire-in.
-//! - D-1b. Abstract-interpretation framework (transfer
-//!   functions, meet operator, fixpoint iteration, branch-state
-//!   propagation).
+//! - **D-1a.** CFG construction module ([`cfg`]) +
+//!   per-function dispatch stub ([`verify_function_bodies`]).
+//!   Strictly mechanical — no typed-error variants ship at
+//!   D-1a; D-2's control-flow validation pass declares
+//!   variants alongside their producers + tests in one focused
+//!   commit (Rust error-type lifecycle). `#![allow(dead_code)]`
+//!   is module-scoped pending the D-6 wire-in.
+//! - **D-1b (this commit).** Abstract-interpretation framework
+//!   ([`absint`]): single consolidated [`absint::AbstractInterpreter`]
+//!   trait (mirrors upstream's three-piece-as-one shape) +
+//!   [`absint::analyze_function`] fixpoint engine + visitor
+//!   callbacks + RPO traversal + branch-state propagation.
+//!   Strictly mechanical — no typed-error variants ship at
+//!   D-1b; first consumer is D-3 (locals safety). Hard-wires
+//!   [`AdamantValidationError`][AVE] as the framework's error
+//!   type per Q2 plan-gate disposition (4th deliberate-Adamant-
+//!   decision instance).
 //! - D-2. Control-flow validation pass (fall-through +
 //!   reducibility); first consumer of [`cfg::AdamantControlFlowGraph`].
 //!   Declares + produces + tests all four CFG-related typed-
@@ -44,12 +48,16 @@
 //!   `IrreducibleControlFlow`).
 //! - D-3, D-4, D-5. Stack/type/locals/reference-safety + Rule 3
 //!   (call-graph) + Rules 4, 5 reaffirmation per Q1 disposition.
+//!   D-3 is first consumer of [`absint::AbstractInterpreter`].
 //! - D-6. Pipeline integration into [`super::verify_module`]
 //!   step 4; bridge tear-out lands with 5/5b.5.
 //! - D-7. Closure batch + CLAUDE.md state-bump.
+//!
+//! [AVE]: super::AdamantValidationError
 
-#![allow(dead_code)] // D-1a foundation; entry point wires in at D-6.
+#![allow(dead_code)] // D-1a/D-1b foundation; entry point wires in at D-6.
 
+pub(super) mod absint;
 pub(super) mod cfg;
 
 use crate::module::AdamantCompiledModule;

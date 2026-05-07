@@ -259,6 +259,32 @@ impl AdamantControlFlowGraph {
         self.traversal_successors.get(&block_id).copied()
     }
 
+    /// Returns an iterator over the instructions inside
+    /// `block_id`, paired with their bytecode offsets. Walks
+    /// from the block's `block_start` (entry) to its
+    /// `block_end` (terminator) inclusive, mirroring upstream's
+    /// `ControlFlowGraph::instructions` semantics.
+    ///
+    /// First consumer: D-1b's `execute_block` in
+    /// [`super::absint::analyze_function`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `block_id` is not a known block (via the
+    /// underlying `block_start` / `block_end` accessors), or if
+    /// any in-range bytecode offset exceeds `code.len()` —
+    /// neither can happen on a CFG built from the same code
+    /// vector by [`Self::new`].
+    pub(super) fn instructions<'a>(
+        &self,
+        code: &'a [BytecodeInstruction],
+        block_id: CodeOffset,
+    ) -> impl Iterator<Item = (CodeOffset, &'a BytecodeInstruction)> + 'a {
+        let start = self.block_start(block_id) as usize;
+        let end = self.block_end(block_id) as usize;
+        (start..=end).map(|pc| (pc_as_code_offset(pc), &code[pc]))
+    }
+
     /// Returns an iterator over every block's entry offset in
     /// ascending order.
     pub(super) fn blocks(&self) -> impl Iterator<Item = CodeOffset> + '_ {
@@ -582,6 +608,33 @@ mod tests {
         assert!(after_entry == 2);
         let tail = cfg.next_block(after_entry);
         assert!(tail.is_none(), "the last block in RPO has no next block");
+    }
+
+    /// `instructions(...)` walks every instruction inside a
+    /// block (start..=end inclusive), pairing each with its
+    /// bytecode offset. Direct pin for the D-1b accessor;
+    /// transitively exercised by every absint analysis test
+    /// via `execute_block`.
+    #[test]
+    fn instructions_iterates_block_range() {
+        // 0: Pop
+        // 1: Nop
+        // 2: Ret
+        let code = vec![pop(), nop(), ret()];
+        let cfg = AdamantControlFlowGraph::new(&code, &[]);
+        let pairs: Vec<(CodeOffset, &BytecodeInstruction)> = cfg.instructions(&code, 0).collect();
+        assert_eq!(pairs.len(), 3);
+        assert_eq!(pairs[0].0, 0);
+        assert_eq!(pairs[1].0, 1);
+        assert_eq!(pairs[2].0, 2);
+        assert!(matches!(
+            pairs[0].1,
+            BytecodeInstruction::Inherited(Bytecode::Pop)
+        ));
+        assert!(matches!(
+            pairs[2].1,
+            BytecodeInstruction::Inherited(Bytecode::Ret)
+        ));
     }
 
     /// `VariantSwitch` consumes its jump table for successor
