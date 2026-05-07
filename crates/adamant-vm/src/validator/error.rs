@@ -482,6 +482,55 @@ pub enum AdamantValidationError {
         /// offending Public function.
         function_index: FunctionDefinitionIndex,
     },
+
+    /// A `(FunctionDefinitionIndex, u8)` pair in a
+    /// `b"adamant.privacy"` entry's payload has a byte
+    /// outside the valid range `{0x00, 0x01}`. Per
+    /// §6.2.1.3, the privacy byte values are `0x00`
+    /// (transparent) and `0x01` (shielded); any other byte
+    /// is rejected.
+    ///
+    /// Phase 5/5b.2 B-4.2
+    /// (`module_pass::privacy_metadata_structure`).
+    InvalidPrivacyAnnotationByte {
+        /// The pair's `FunctionDefinitionIndex` (carried for
+        /// diagnostics; the pass doesn't validate the index
+        /// is in range here — the range check is a separate
+        /// path. The error refers to the byte, not the
+        /// index).
+        function_index: FunctionDefinitionIndex,
+        /// The offending byte value (anything outside
+        /// `{0x00, 0x01}`).
+        byte: u8,
+    },
+
+    /// A `(FunctionDefinitionIndex, u8)` pair in a
+    /// `b"adamant.privacy"` entry's payload has a function
+    /// index that is `>= function_defs.len()` — out of range
+    /// for the module's function-definition table.
+    ///
+    /// Phase 5/5b.2 B-4.2
+    /// (`module_pass::privacy_metadata_structure`).
+    PrivacyEntryOutOfRange {
+        /// The offending out-of-range index.
+        function_index: FunctionDefinitionIndex,
+        /// The current `function_defs.len()` for diagnostic
+        /// context.
+        function_defs_len: usize,
+    },
+
+    /// Two pairs in the same `b"adamant.privacy"` entry's
+    /// payload share the same `FunctionDefinitionIndex`. A
+    /// privacy table cannot carry contradictory annotations
+    /// for the same function.
+    ///
+    /// Phase 5/5b.2 B-4.2
+    /// (`module_pass::privacy_metadata_structure`).
+    DuplicatePrivacyEntry {
+        /// The duplicated index. The first pair was
+        /// accepted; the duplicate triggers the rejection.
+        function_index: FunctionDefinitionIndex,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 3, 6, 7 land in subsequent
@@ -793,6 +842,33 @@ impl core::fmt::Display for AdamantValidationError {
                 f,
                 "Public function {} has no entry in the `adamant.privacy` \
                  metadata table (whitepaper §6.2.1.6 Rule 2)",
+                function_index.0
+            ),
+            Self::InvalidPrivacyAnnotationByte {
+                function_index,
+                byte,
+            } => write!(
+                f,
+                "privacy entry for function {} has invalid byte 0x{byte:02X} \
+                 (expected 0x00 or 0x01) (whitepaper §6.2.1.3, \
+                 `module_pass::privacy_metadata_structure`)",
+                function_index.0
+            ),
+            Self::PrivacyEntryOutOfRange {
+                function_index,
+                function_defs_len,
+            } => write!(
+                f,
+                "privacy entry function index {} out of range (function_defs \
+                 has {function_defs_len} entries) (whitepaper §6.2.1.3, \
+                 `module_pass::privacy_metadata_structure`)",
+                function_index.0
+            ),
+            Self::DuplicatePrivacyEntry { function_index } => write!(
+                f,
+                "privacy entry for function {} appears more than once \
+                 (whitepaper §6.2.1.3, \
+                 `module_pass::privacy_metadata_structure`)",
                 function_index.0
             ),
         }

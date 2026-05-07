@@ -49,6 +49,7 @@ mod friends;
 mod instantiation_loops;
 mod instruction_consistency;
 mod limits;
+mod privacy_metadata_structure;
 mod recursive_data_def;
 
 #[cfg(test)]
