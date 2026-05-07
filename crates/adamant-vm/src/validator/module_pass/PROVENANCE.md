@@ -287,19 +287,85 @@ bytecode-verifier passes from `move-bytecode-verifier`.
   formatting isn't); future sub-arc can promote to typed
   if downstream consumers need pattern-matching.
 
+### Phase 5/5b.2 B-4.1 (`rule_02_privacy` Rule 2 — privacy-metadata):
+
+- `validator::rule_02_privacy::verify(module)` — Adamant-
+  specific Rule 2 per §6.2.1.6: every `Visibility::Public`
+  function must appear in the module's `b"adamant.privacy"`
+  metadata table. **Lands in
+  `crates/adamant-vm/src/validator/`, not in this
+  `module_pass/` subtree** — parallels
+  `rule_01_mutability.rs`'s placement (the rule_*.rs files
+  are step-5 Adamant rules per §6.2.1.8).
+- Walk-backs honored verbatim from this morning's spec
+  verification:
+  - **Q3 (visibility coverage):** Public-only per §6.2.1.3
+    line 387 + §6.2.1.6 Rule 2 (Friend not mentioned in
+    spec; original Friend-coverage approval was
+    extrapolation, not spec). Three Q3 behavioral lock
+    fixtures (`module_with_friend_only_no_privacy_entry_passes`,
+    `module_with_friend_and_public_friend_not_in_table_passes`,
+    `module_with_public_and_private_private_not_in_table_passes`)
+    pin Public-only coverage under realistic conditions.
+  - **Q4 (cardinality):** option (b) — zero entries
+    allowed iff no Public functions; one entry standard;
+    multiple always rejected.
+- Four new `AdamantValidationError` variants:
+  `MissingPrivacyMetadata`, `MultiplePrivacyMetadata`,
+  `MalformedPrivacyMetadata` (shared with B-4.2),
+  `MissingPrivacyAnnotation`.
+- BCS-decode of `Vec<(FunctionDefinitionIndex, u8)>`
+  payload at the n=1 cardinality arm; failure produces
+  `MalformedPrivacyMetadata { bcs_error: String }`. Coverage
+  check via `HashSet<FunctionDefinitionIndex>` lookup;
+  first-uncovered Public function reports
+  `MissingPrivacyAnnotation`.
+
+### Phase 5/5b.2 B-4.2 (`privacy_metadata_structure` module-level pass):
+
+- `module_pass::privacy_metadata_structure::verify(module)`
+  — Adamant-specific structural pass per §6.2.1.8 step 3,
+  sibling to the seven B-2/B-3 step-3 passes ported above.
+  For each `b"adamant.privacy"` metadata entry:
+  BCS-decodes payload; validates per-pair byte-in-set
+  (`{0x00, 0x01}`), index-in-range
+  (`< function_defs.len()`), and no-duplicate-within-entry.
+- **Cardinality is NOT checked here** — deferred to Rule 2
+  (B-4.1) per the §6.2.1.8 step-3-vs-step-5 split. Modules
+  with zero, one, or many entries pass this pass treats
+  them all the same way (one validation pass per entry).
+- Three new `AdamantValidationError` variants:
+  `InvalidPrivacyAnnotationByte`, `PrivacyEntryOutOfRange`,
+  `DuplicatePrivacyEntry`. Plus shared
+  `MalformedPrivacyMetadata` from B-4.1.
+- **Deliberate-Adamant-decision: per-pair check ordering.**
+  byte → range → duplicate (cheapest-check-first
+  rationale; alternative-orderings-defensible note). No
+  upstream Sui analog for `(FunctionDefinitionIndex, u8)`
+  list-payload validation; the ordering is a fresh Adamant
+  choice with rationale documented inline so future cross-
+  validation gaps don't get mischaracterized as porting
+  bugs. See "Deliberate-Adamant-decision pattern" section
+  below.
+- **No Layer B parity tests by design** — Adamant-specific
+  pass; no upstream Sui equivalent. See "No-Sui-parity-
+  claim posture" section below.
+
 ### Pending (later sub-arcs of Phase 5/5b.2):
 
-- **B-4:** Rule 2 (`rule_02_privacy.rs`) + privacy-metadata-
-  structure parallel module-level pass; Rule 2 lands in
-  `crates/adamant-vm/src/validator/`, not in this subtree.
 - **B-5:** Pipeline integration in
   `crates/adamant-vm/src/validator/mod.rs`; removal of the
-  seven pass-level `#![allow(dead_code)]` sunsets on
-  `constants.rs`, `friends.rs`, `ability_field_requirements.rs`,
+  **nine** pass-level `#![allow(dead_code)]` sunsets on
+  `constants.rs`, `friends.rs`,
+  `ability_field_requirements.rs`,
   `instruction_consistency.rs`, `limits.rs`,
-  `recursive_data_def.rs`, `instantiation_loops.rs`;
+  `recursive_data_def.rs`, `instantiation_loops.rs`,
+  `privacy_metadata_structure.rs`, `rule_02_privacy.rs`;
   threading `&AdamantStructuralLimits` to `limits::verify`
-  per its non-uniform signature shape.
+  per its non-uniform signature shape. Step-3 batch order:
+  the seven B-2/B-3 module-level passes plus B-4.2's
+  `privacy_metadata_structure`. Step-5 batch: Rule 1
+  (existing) + Rule 2 (B-4.1) + Rule 4 (existing).
 - **B-6:** Workspace test pass + final PROVENANCE.md batch +
   CLAUDE.md state-bump for Phase 5/5b.2 closure.
 
@@ -625,6 +691,103 @@ from upstream:
   faithful. Reason: `"caller/callee are paired upstream-
   faithful naming"`.
 
+**Phase 5/5b.2 B-4.1 deviations (`rule_02_privacy` Rule 2):**
+
+- **Adamant-specific rule.** No upstream Sui equivalent —
+  Rule 2 is one of the eight Adamant-specific rules per
+  §6.2.1.6. The "no Sui parity claim" posture applies; see
+  "No-Sui-parity-claim posture" section below.
+- **Q3 walk-back: visibility coverage is Public-only.** Per
+  §6.2.1.3 line 387 + §6.2.1.6 Rule 2 spec text, only
+  `Visibility::Public` functions are required to have a
+  privacy annotation. `Visibility::Friend` and
+  `Visibility::Private` functions MAY appear in the table
+  (the structural pass at B-4.2 validates byte/index/
+  duplicate well-formedness for any entry that does
+  appear), but they are NOT required to appear. The
+  original B-2-plan-time approval that included Friend
+  was an extrapolation, not a spec claim. Three Q3
+  behavioral lock fixtures pin the Public-only meaning
+  under realistic conditions (Friend-only-no-entry;
+  Friend+Public-Friend-not-in-table;
+  Public+Private-Private-not-in-table).
+- **Q4 walk-back: cardinality option (b).** Spec §6.2.1.3
+  line 377 uses "**a** Metadata entry" (singular indefinite
+  article) without the "exactly one" qualifier §6.2.1.3
+  line 375 uses for mutability. Spec is silent on
+  cardinality; option (b) means zero entries allowed iff
+  no Public functions; one entry standard; multiple
+  always rejected.
+- **`MalformedPrivacyMetadata` shared with B-4.2.** Pipeline
+  ordering at B-5 wiring puts B-4.2's structural pass at
+  step 3 before Rule 2 at step 5; B-4.2 typically wins
+  eager-error precedence on the same input. Second
+  instance of the shared-variant-with-pipeline-ordering-
+  eager-error sub-pattern after B-2.1 + B-3.1's
+  `MalformedConstantData`. See "Eager-error first-failure-
+  wins" section below.
+
+**Rule 1 / Rule 2 structural-pass-asymmetry rationale:**
+
+Rule 1 (mutability) does its own BCS decode within
+`rule_01_mutability::verify` without a parallel structural
+pass; Rule 2 has a parallel structural pass at B-4.2. The
+asymmetry is **metadata-payload-shape-driven**, not
+arbitrary:
+
+- **Rule 1's payload** is a single enum value
+  (`Mutability`) — one byte that BCS-decodes to a known
+  variant. The structural validity check (decodability
+  + variant-recognition) happens inline with the Rule 1
+  semantic check (cardinality). Splitting would duplicate
+  the BCS decode with no benefit.
+- **Rule 2's payload** is a list of `(FunctionDefinitionIndex,
+  u8)` pairs with multiple distinct structural checks
+  (byte values, index ranges, duplicates within list).
+  Splitting validates each pair structurally at step 3
+  (granular error variants per check type) before Rule 2
+  validates coverage at step 5 (list-as-set semantic
+  check). The split gives finer-grained error reporting
+  and matches §6.2.1.8's step-3-vs-step-5 architecture.
+
+If a future Rule N has a list-of-pairs payload structurally
+similar to Rule 2, the structural-pass split is the
+established pattern. If similar to Rule 1's single-enum-
+value, no split. Future readers should not see the asymmetry
+as inconsistency; it is metadata-shape-driven.
+
+**Phase 5/5b.2 B-4.2 deviations (`privacy_metadata_structure` pass):**
+
+- **Adamant-specific pass.** No upstream Sui equivalent —
+  no Sui pass validates the `b"adamant.privacy"` metadata
+  key or the `(FunctionDefinitionIndex, u8)` list-payload
+  shape. The "no Sui parity claim" posture applies; see
+  "No-Sui-parity-claim posture" section below.
+- **Deliberate-Adamant-decision: per-pair check ordering.**
+  The ordering byte → range → duplicate is a fresh
+  Adamant decision, not byte-faithful preservation of
+  upstream. Cheapest-check-first rationale: byte (single
+  comparison) before range (comparison + length lookup)
+  before duplicate (`HashSet::insert` allocation +
+  hashing). Alternative orderings are defensible (e.g.,
+  fail-fast on most-diagnostic-useful error first); the
+  ordering chosen is documented inline so future cross-
+  validation gaps don't get mischaracterized as porting
+  bugs. See "Deliberate-Adamant-decision pattern" section
+  below for the full pattern framing.
+- **`MalformedPrivacyMetadata` shared with B-4.1.** This
+  pass typically wins cross-pass eager-error precedence
+  over Rule 2 at B-5 wiring per §6.2.1.8 step-3-vs-step-5
+  ordering. See B-4.1 deviation note above and the
+  "Eager-error first-failure-wins" section below.
+- **Cardinality NOT checked here** — deferred to Rule 2
+  (B-4.1) per the §6.2.1.8 step-3-vs-step-5 split. The
+  pass iterates all entries with the privacy key and
+  validates each one independently; cardinality (zero/
+  one/many) is Rule 2's concern. A module with multiple
+  well-formed privacy entries passes this pass; Rule 2
+  rejects them at step 5.
+
 ## Byte-identity invariants
 
 For the resistant-proof posture to be sound, this subtree's
@@ -712,9 +875,30 @@ Specifically:
    test pinning the byte-faithful diagnostic format
    commitment empirically.
 
-Phase 5/5b.2 B-3 closes the invariants list at #9; B-4
-extends with the Rule 2 + privacy-metadata-structure
-parity claims.
+10. **`validator::rule_02_privacy::verify` carries no Sui
+    parity claim.** Rule 2 is one of the eight Adamant-
+    specific rules per §6.2.1.6; there is no upstream Sui
+    pass validating `b"adamant.privacy"` metadata
+    coverage. The pass's behaviour is anchored to the
+    walk-back-locked Q3 (Public-only visibility coverage)
+    and Q4 (option (b) cardinality) contracts rather than
+    a parity claim against an upstream pass. See
+    "No-Sui-parity-claim posture" section below.
+11. **`module_pass::privacy_metadata_structure::verify`
+    carries no Sui parity claim.** The pass validates an
+    Adamant-specific metadata key with an Adamant-specific
+    payload shape; no upstream Sui pass exists to compare
+    against. Behaviour is anchored to the deliberate-
+    Adamant-decision per-pair check ordering (byte →
+    range → duplicate, cheapest-check-first) documented
+    inline in the pass's doc-comment. See
+    "Deliberate-Adamant-decision pattern" section below.
+
+Phase 5/5b.2 B-4 closes the invariants list at #11. B-5
+(pipeline integration) and B-6 (closure) do not extend the
+list further — the invariants are accept/reject parity
+claims against upstream, and B-5/B-6 don't add new passes
+with parity to assert.
 
 ## Why a fork rather than a continued vendoring
 
@@ -1180,6 +1364,229 @@ deliberate redirect documented in "Adamant deviations"
 above. This is the methodology counterpart to the
 resistant-proof posture at the code level.
 
+## No-Sui-parity-claim posture
+
+When no upstream Sui equivalent exists or is reachable,
+Layer B is omitted by design and the test module's
+doc-comment plus the Byte-identity invariants entry both
+explicitly note the omission. The pattern is about explicit
+acknowledgment, not silent absence: future readers see "no
+Sui parity claim — Adamant-specific" or "no Sui parity
+claim — structurally unreachable" rather than wondering why
+Layer B is missing.
+
+Two reason-shapes:
+
+- **Adamant-specific** — the pass validates an Adamant-only
+  concern (Adamant-specific rule per §6.2.1.6, Adamant-
+  specific metadata key, Adamant-specific opcode). No
+  upstream Sui pass exists to compare against.
+- **Structurally unreachable** — the pass's check fires on
+  inputs that Adamant's pipeline can't construct (e.g.,
+  `<SELF>` identifier rejected by `Identifier::new` per
+  `is_valid_identifier_char`'s acceptance set). An upstream
+  Sui pass exists, but Adamant fixtures can't reach the
+  rejection path through any normal API; cross-validation
+  fixtures would need API-bypass machinery (`new_unchecked`,
+  `unsafe transmute`) that Adamant doesn't provide.
+
+Pattern instances:
+
+- **B-3.1 `<SELF>` rejection** (structurally unreachable —
+  see invariant #7). Sui has a `disallow_self_identifier`
+  check; Adamant inherits the check but can't reach it
+  through any normal path. Pinned by a structural-
+  impossibility test (`self_identifier_cannot_be_constructed_via_identifier_new`)
+  rather than a cross-validation parity test.
+- **B-4.1 Rule 2** (Adamant-specific — see invariant #10).
+  Rule 2 is one of the eight Adamant-specific rules per
+  §6.2.1.6; no upstream Sui equivalent. Layer A coverage
+  carries the load-bearing surface (14 tests with explicit
+  Q3 behavioral lock fixtures).
+- **B-4.2 `privacy_metadata_structure`** (Adamant-specific
+  — see invariant #11). No upstream Sui pass validates
+  `b"adamant.privacy"` metadata. Layer A coverage covers
+  the structural well-formedness checks (14 tests with
+  complete precedence-ordering coverage at every axis).
+
+For each instance, both the test module's doc-comment and
+the corresponding byte-identity invariant entry explicitly
+note the omission with the reason-shape. The pattern is
+defensive against silent-absence-as-implicit-claim: a
+future reader seeing Layer A but no Layer B might assume
+the pass has parity but tests are missing; the explicit
+"no Sui parity claim" framing prevents that misreading.
+
+## Eager-error first-failure-wins as Phase 5/5b.2-wide methodology principle
+
+When multiple violations exist, the verifier reports the
+first encountered in deterministic iteration order.
+Determinism matters for cross-validation parity — Sui and
+Adamant must agree on which error fires first for any
+given input.
+
+**Cross-validation parity is not just accept/reject — it
+includes eager-error precedence.** For shared variants
+where Adamant and Sui both reject the same input, both
+must report the same typed-error variant first. Layer B
+tests asserting accept/reject outcomes implicitly test
+this when the fixture has only one violation; multi-
+violation fixtures explicitly pin which-error-fires-first
+parity.
+
+Two precedence axes:
+
+- **Internal-to-pass:** within a single pass's logic (e.g.,
+  B-4.1's cardinality-before-BCS-decode-before-coverage;
+  B-4.2's byte-before-range-before-duplicate within a
+  pair). Pinned by precedence tests inside the pass's
+  test module.
+- **Cross-pass:** between two passes that can produce the
+  same shared variant. Pipeline ordering at B-5 wiring
+  determines which pass typically wins. Pinned implicitly
+  by pipeline ordering and explicitly by the "shared-
+  variant-with-pipeline-ordering-eager-error" sub-pattern
+  documented inline at each shared-variant call site.
+
+Pattern instances:
+
+- **B-3.2:** `petgraph::algo::toposort` returns first cycle
+  node it encounters; pass reports that node's def as the
+  offender.
+- **B-3.3:** `petgraph::algo::tarjan_scc` returns first
+  non-trivial SCC; pass filters to non-trivial-with-
+  TyConApp and reports the first one.
+- **B-4.1 internal-to-pass:** cardinality → BCS decode →
+  coverage (multiple wins over malformed; malformed wins
+  over coverage). Pinned by two precedence tests
+  (`multiple_entries_wins_over_malformed_eager_error`,
+  `malformed_wins_over_coverage_eager_error`).
+- **B-4.2 internal-to-pass:** byte → range → duplicate
+  within a pair; first failing pair within an entry;
+  first failing entry across entries. Pinned by four
+  precedence tests covering all three transitions plus
+  cross-axis (`within_entry_first_invalid_pair_wins`,
+  `cross_entry_first_failing_entry_wins`,
+  `overlapping_failure_modes_byte_check_wins_over_range_and_duplicate`,
+  `overlapping_range_and_duplicate_range_check_wins`).
+- **Cross-pass `MalformedConstantData`:** B-2.1 constants
+  pass typically wins over B-3.1 limits' vector-length
+  sub-check on the same malformed-ULEB128 input per
+  pipeline ordering at B-5 wiring.
+- **Cross-pass `MalformedPrivacyMetadata`:** B-4.2
+  privacy_metadata_structure pass typically wins over
+  B-4.1 Rule 2 on the same malformed-BCS input per
+  pipeline ordering at B-5 wiring.
+
+**Sub-principle: complete precedence-ordering test
+coverage.** When a pass has multi-axis precedence ordering
+(e.g., byte-vs-range, range-vs-duplicate, within-pair-vs-
+across-pairs), pin every axis with a dedicated test.
+B-4.2's three precedence tests cover all three transitions
+explicitly rather than partial pinning. Future passes with
+multi-axis precedence should follow the same complete-
+coverage pattern rather than relying on single-violation
+fixtures to implicitly cover all precedence axes.
+
+## Deliberate-Adamant-decision pattern
+
+When a pass has no direct upstream analog, ordering and
+precedence decisions are deliberate Adamant choices, not
+preservation. Document the rationale inline in the pass's
+doc-comment so future cross-validation gaps don't get
+mischaracterized as porting bugs against a non-existent
+upstream-parity claim.
+
+This pattern is the **complement** to the
+"byte-faithful preservation of upstream consensus-affecting
+decisions" pattern above. The two patterns together cover
+both cases:
+
+- **Upstream analog exists** → preserve byte-faithfully
+  unless explicit redirect (with redirect documented in
+  "Adamant deviations").
+- **No upstream analog exists** → document the decision
+  deliberately so future divergence claims have a textual
+  anchor.
+
+Pattern instance:
+
+- **B-4.2: byte → range → duplicate per-pair check
+  ordering.** Cheapest-check-first rationale (byte =
+  single comparison; range = comparison + length lookup;
+  duplicate = `HashSet::insert` allocation + hashing).
+  Alternative orderings would be defensible (e.g., range-
+  first to fail-fast on out-of-range indices that can't
+  be valid under any interpretation; or
+  most-diagnostic-useful-first). What matters is
+  documenting the chosen ordering as a fresh Adamant
+  decision rather than implying upstream parity.
+
+Future Adamant-specific passes with non-trivial ordering
+or precedence decisions follow this pattern: document the
+chosen shape with rationale (cost-driven, security-driven,
+diagnostic-driven, or other) inline in the pass's doc-
+comment. The rationale is not consensus-binding (the
+acceptance set is) but the audit-trail anchor it provides
+prevents mischaracterization of future divergence.
+
+## Per-pass doc-comment as methodology-pattern co-location
+
+PROVENANCE.md is the cross-pass audit anchor; per-pass
+doc-comments are the per-pass details. When a pass
+surfaces methodology patterns (eager-error precedence,
+no-Sui-parity, deliberate-decision rationale, shared-
+variant cross-references), the per-pass doc-comment
+carries the local instance with cross-references to
+PROVENANCE.md sections. Bidirectional anchoring: future
+readers can navigate from per-pass detail to cross-pass
+context, or from cross-pass pattern to per-pass instance.
+
+**Seven-section doc-comment template** (established by
+B-4.2):
+
+1. **Pass scope.** What the pass does, what error variants
+   it produces, what step (3 or 5) of §6.2.1.8 it runs at.
+2. **No-Sui-parity-claim posture** (where applicable).
+   Whether Layer B is omitted by design, with reason-shape
+   ("Adamant-specific" or "structurally unreachable").
+3. **Deliberate-Adamant-decision** (where applicable).
+   For Adamant-specific passes with non-trivial ordering
+   or precedence decisions, the chosen shape + rationale +
+   alternative-orderings-defensible note.
+4. **Eager-error first-failure-wins.** The pass's internal
+   precedence ordering (within-pair, within-entry, across-
+   entries; or sub-check ordering for multi-sub-check
+   passes).
+5. **Shared-variant cross-pass precedence** (where
+   applicable). For shared error variants, which pass
+   typically wins eager-error precedence at B-5 wiring,
+   with cross-references to the pass that consumes the
+   variant from the other side.
+6. **Dead-code allow sunset.** When the module-level
+   `#![allow(dead_code)]` is removed (typically B-5
+   pipeline integration).
+7. **References to PROVENANCE.md cross-pass audit anchors.**
+   Explicit forward references to the relevant
+   PROVENANCE.md sections (e.g., "see 'Eager-error first-
+   failure-wins' section in `module_pass/PROVENANCE.md`")
+   so a reader of the per-pass doc-comment can navigate
+   to the cross-pass context.
+
+Sections 2, 3, 5 are conditional (only included if the
+pass has those properties); 1, 4, 6, 7 are always present.
+B-4.2's doc-comment is the template; future passes should
+follow the same shape.
+
+The pattern's reverse direction is also load-bearing:
+PROVENANCE.md sections name the per-pass instances by
+sub-checkpoint identifier (e.g., "B-4.2 byte → range →
+duplicate ordering" in the deliberate-Adamant-decision
+section). Cross-references are bidirectional: per-pass
+doc-comment → PROVENANCE.md section name + section title;
+PROVENANCE.md section → sub-checkpoint identifier + pass
+file name.
+
 ## Future maintenance
 
 When the vendored Sui crates are refreshed to a new tag, Layer B
@@ -1298,3 +1705,50 @@ exist" and "tests get run."
   vendored snapshot for every fixture exercised, including
   the byte-faithful component-summary parity test pinning
   upstream's diagnostic format empirically.
+- **2026-05-08 (Phase 5/5b.2 B-4 closure):** Two
+  Adamant-specific privacy-metadata passes landed across
+  B-4.1 + B-4.2, closed by B-4.3's documentation batch.
+  Cumulative file LOC: ~905 across `rule_02_privacy.rs`
+  (416, in `validator/`, not in this `module_pass/`
+  subtree) + `module_pass/privacy_metadata_structure.rs`
+  (489); plus error-variant additions in
+  `validator/error.rs` (~159 LOC across the two sub-
+  checkpoints). Test additions: 14 (Rule 2) + 14
+  (privacy_metadata_structure) = **28 new tests** (sub-arc
+  delta), all passing in the workspace gauntlet. Workspace
+  test count progression for the B-4 sub-arc:
+  **991 → 1019 (+28)**. Seven new typed-error variants
+  (4 from B-4.1, 3 from B-4.2). One shared variant
+  (`MalformedPrivacyMetadata`) introduced at B-4.1 and
+  consumed by B-4.2. No new public enums. No new
+  dependencies. Two pass-level
+  `#![allow(dead_code)]` sunsets added (totalling **nine
+  pending B-5**). Walk-backs from this morning's spec
+  verification honored verbatim in code: Q3 (Rule 2
+  Public-only visibility coverage per §6.2.1.3 line 387 +
+  §6.2.1.6 Rule 2) and Q4 (option (b) cardinality —
+  zero entries allowed iff no Public functions).
+  Three Q3 behavioral lock fixtures pin Public-only
+  coverage under realistic conditions
+  (Friend-only-no-entry; Friend+Public-Friend-not-in-table;
+  Public+Private-Private-not-in-table). New PROVENANCE.md
+  sections added: "No-Sui-parity-claim posture" (formalising
+  three pattern instances: B-3.1 `<SELF>` structurally
+  unreachable, B-4.1 Rule 2 Adamant-specific, B-4.2
+  privacy_metadata_structure Adamant-specific);
+  "Eager-error first-failure-wins as Phase 5/5b.2-wide
+  methodology principle" (two precedence axes: internal-
+  to-pass and cross-pass; six pattern instances; sub-
+  principle for complete precedence-ordering test
+  coverage); "Deliberate-Adamant-decision pattern" (one
+  pattern instance: B-4.2 byte → range → duplicate
+  cheapest-check-first ordering); "Per-pass doc-comment
+  as methodology-pattern co-location" (seven-section
+  template established by B-4.2 with bidirectional cross-
+  references to PROVENANCE.md). Rule 1 / Rule 2
+  structural-pass-asymmetry rationale registered under
+  "Adamant deviations" — metadata-payload-shape-driven,
+  not arbitrary. No upstream divergence on accept/reject
+  decisions for inherited-subset modules at fork time;
+  the two B-4 passes are Adamant-specific and carry no
+  Sui parity claim by design.
