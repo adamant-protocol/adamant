@@ -82,7 +82,7 @@ mod rule_04_no_natives;
 mod test_fixtures;
 
 pub use config::AdamantVerifierConfig;
-pub use error::AdamantValidationError;
+pub use error::{AdamantValidationError, MalformedConstantReason};
 
 use move_binary_format::{errors::Location, file_format::CompiledModule};
 

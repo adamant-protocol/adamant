@@ -10,7 +10,7 @@
 //! Eager semantics: callers receive the first violation
 //! encountered.
 
-use adamant_bytecode_format::FunctionDefinitionIndex;
+use adamant_bytecode_format::{ConstantPoolIndex, FunctionDefinitionIndex};
 use move_binary_format::errors::VMError;
 
 use crate::module_wire::AdamantDeserializeError;
@@ -150,10 +150,90 @@ pub enum AdamantValidationError {
         /// index) is reported per the eager error semantics.
         function_index: FunctionDefinitionIndex,
     },
+
+    /// A constant in the module's constant pool has a type that
+    /// is not valid for constants per
+    /// [`adamant_bytecode_format::SignatureToken::is_valid_for_constant`].
+    /// Constant types must be primitives (`Bool`, `U8`–`U256`),
+    /// `Address`, or `Vector<...>` recursively over those;
+    /// `Datatype`, `DatatypeInstantiation`, references,
+    /// `Signer`, and `TypeParameter` are rejected.
+    ///
+    /// Phase 5/5b.2 B-2.1 (`module_pass::constants`).
+    InvalidConstantType {
+        /// Index into the module's `constant_pool` of the
+        /// offending entry.
+        idx: ConstantPoolIndex,
+    },
+
+    /// A constant in the module's constant pool has a byte
+    /// payload that is not a well-formed BCS encoding of a
+    /// value of its declared type. Catches truncated payloads,
+    /// invalid `Bool` byte values (any byte > 1), malformed
+    /// ULEB128 length prefixes on vector payloads, and
+    /// trailing bytes after a complete value.
+    ///
+    /// Phase 5/5b.2 B-2.1 (`module_pass::constants`).
+    MalformedConstantData {
+        /// Index into the module's `constant_pool` of the
+        /// offending entry.
+        idx: ConstantPoolIndex,
+        /// Structured reason for the rejection. See
+        /// [`MalformedConstantReason`].
+        reason: MalformedConstantReason,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 2, 3, 6, 7 land in subsequent
     // waves.
+}
+
+/// Structured reason for an
+/// [`AdamantValidationError::MalformedConstantData`] rejection.
+///
+/// Phase 5/5b.2 B-2.1 (`module_pass::constants`).
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum MalformedConstantReason {
+    /// The byte stream ended before a value of the declared
+    /// type could be decoded. Sub-cases: a fixed-width primitive
+    /// (`U16`, `U32`, ...) ran out mid-byte, a `Vector` ran out
+    /// before reaching the declared element count, or the stream
+    /// ended on a length-prefix read for a nested vector.
+    UnexpectedEof,
+    /// A `Bool` was decoded with a byte value other than `0x00`
+    /// or `0x01`. BCS-canonical bool encoding admits only those
+    /// two values.
+    InvalidBool {
+        /// The offending byte.
+        byte: u8,
+    },
+    /// A ULEB128 length prefix on a `Vector<...>` was malformed
+    /// (overlong encoding, no terminator, or otherwise not
+    /// canonical).
+    InvalidUleb128,
+    /// The byte stream contained additional bytes after a
+    /// complete value of the declared type was decoded.
+    /// BCS-canonical encoding requires exact byte consumption.
+    TrailingBytes {
+        /// Number of bytes remaining in the stream after the
+        /// complete value.
+        remaining: usize,
+    },
+}
+
+impl core::fmt::Display for MalformedConstantReason {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnexpectedEof => write!(f, "unexpected end of byte stream"),
+            Self::InvalidBool { byte } => {
+                write!(f, "invalid bool byte 0x{byte:02X} (expected 0x00 or 0x01)")
+            }
+            Self::InvalidUleb128 => write!(f, "malformed ULEB128 length prefix"),
+            Self::TrailingBytes { remaining } => {
+                write!(f, "{remaining} trailing byte(s) after complete value")
+            }
+        }
+    }
 }
 
 impl core::fmt::Display for AdamantValidationError {
@@ -196,6 +276,18 @@ impl core::fmt::Display for AdamantValidationError {
                 "native function (function definition index {}) is forbidden \
                  (whitepaper §6.2.1.6 Rule 4)",
                 function_index.0
+            ),
+            Self::InvalidConstantType { idx } => write!(
+                f,
+                "constant pool entry {} has a type not valid for constants \
+                 (whitepaper §6.2.1.8 step 3, `module_pass::constants`)",
+                idx.0
+            ),
+            Self::MalformedConstantData { idx, reason } => write!(
+                f,
+                "constant pool entry {} has malformed data: {reason} \
+                 (whitepaper §6.2.1.8 step 3, `module_pass::constants`)",
+                idx.0
             ),
         }
     }

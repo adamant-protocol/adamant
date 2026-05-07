@@ -43,3 +43,4 @@
 //! out with workspace test-pass + CLAUDE.md state-bump.
 
 mod ability_cache;
+mod constants;
