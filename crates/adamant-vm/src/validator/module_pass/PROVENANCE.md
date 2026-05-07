@@ -41,27 +41,169 @@ bytecode-verifier passes from `move-bytecode-verifier`.
     (Phase 5/5b.2 B-3; generic-instantiation-loop detector;
     Adamant naming: `instantiation_loops`)
 - **Source license:** Apache-2.0 (preserved here)
-- **Date of fork:** 7 May 2026 (B-1: `ability_cache`)
+- **Date of fork:** 7 May 2026 (B-1: `ability_cache`); extended
+  through 8 May 2026 (B-2.1 → B-2.4 closure).
 
 ## What was forked
 
-Phase 5/5b.2 B-1 (this commit):
+### Phase 5/5b.2 B-1 (foundation):
 
 - `AdamantAbilityCache` (port of upstream `AbilityCache`).
   Memoized resolver for the [`AbilitySet`] of a
   [`SignatureToken`], used by the `ability_field_requirements`
-  pass landing in B-2.
+  pass landing in B-2.3.
 
-Subsequent B-2 / B-3 / B-4 / B-5 / B-6 sub-arcs extend the fork:
+### Phase 5/5b.2 B-2.1 (`constants` pass):
 
-- **B-2:** `constants`, `friends`, `instruction_consistency`,
-  `ability_field_requirements`
+- `module_pass::constants::verify` — entry point validating the
+  module's constant pool per upstream
+  `move-bytecode-verifier::constants`. Two checks per constant:
+  (a) `SignatureToken::is_valid_for_constant` returns true,
+  (b) byte payload BCS-deserializes as the declared type.
+- `validate_constant_data(&[u8], &SignatureToken)` — Adamant-
+  native type-directed BCS validator (cursor-based walker).
+  Replaces upstream's path through `MoveValue::simple_deserialize`
+  (which would require a production dep on
+  `move_core_types::runtime_value`). Acceptance set is byte-
+  identical to upstream; verified by 16 Layer B parity tests.
+  Scoped `pub(in crate::validator)` with a forward-looking note
+  for potential reuse by per-instruction `LdU64`/`LdU256`/
+  `LdConst` operand-bytes validation in Phase 5/5b.4 → 5/5b.5.
+- New `AdamantValidationError` variants:
+  - `InvalidConstantType { idx: ConstantPoolIndex }`
+  - `MalformedConstantData { idx: ConstantPoolIndex, reason:
+    MalformedConstantReason }`
+- New public closed enum `MalformedConstantReason`
+  (`UnexpectedEof`, `InvalidBool { byte: u8 }`,
+  `InvalidUleb128`, `TrailingBytes { remaining: usize }`)
+  re-exported via `validator/mod.rs` and `lib.rs`.
+
+### Phase 5/5b.2 B-2.2 (`friends` pass):
+
+- `module_pass::friends::verify` — entry point validating the
+  module's friend declarations per upstream
+  `move-bytecode-verifier::friends`. Two assertions: (a)
+  module's own `self_handle` does not appear in `friend_decls`;
+  (b) every friend's address (resolved through
+  `address_identifiers`) equals the module's self-address.
+- New `AdamantValidationError` variants:
+  - `SelfFriendDeclaration` (no fields)
+  - `CrossAccountFriendDeclaration { idx: TableIndex,
+    foreign_address: Address }` (reuses
+    `adamant_types::Address` per Phase 5/5b.1b's address-pool
+    reuse decision)
+- Shared `assert_pass_parity` test helper extracted at N=2
+  (byte-identical match-body trigger) into
+  `module_pass/mod.rs::test_helpers` with visibility
+  `pub(in crate::validator::module_pass)`. `constants`'s Layer
+  B helper refactored to consume it; `friends` and subsequent
+  B-2 passes use it from inception.
+
+### Phase 5/5b.2 B-2.3 (`ability_field_requirements` pass + `AbilityCache` consumer):
+
+- `module_pass::ability_field_requirements::verify` — entry
+  point validating struct/enum-field ability requirements per
+  upstream `move-bytecode-verifier::ability_field_requirements`.
+  For each owning datatype, every field's effective `AbilitySet`
+  must contain the abilities required by the parent type's
+  declared `AbilitySet` (where required-set is the union of
+  `Ability::requires()` over each declared ability).
+- First sub-checkpoint to consume `AdamantAbilityCache` from
+  B-1. Cache instantiated once at pass entry and reused across
+  all struct/enum traversals.
+- Cache-error handling: `expect()` with structural-impossibility
+  message rather than typed-error variant. At
+  `ability_field_requirements`' pipeline position — after the
+  bounds-checker pass per §6.2.1.8 step 3 ordering — cache
+  errors are structurally impossible (bounds checker has
+  already validated type-parameter indices fit handles'
+  declared counts and generic-instantiation arities match). A
+  fired `expect` indicates an Adamant implementation bug
+  (broken bounds checker or wrong pipeline ordering), not a
+  module-level rejection.
+- New `AdamantValidationError` variant:
+  - `FieldMissingTypeAbility { def_idx: TableIndex, kind:
+    FieldOwnerKind, variant_idx: Option<TableIndex>, field_idx:
+    TableIndex }`
+- New public closed enum `FieldOwnerKind` (`Struct`, `Enum`)
+  re-exported via `validator/mod.rs` and `lib.rs`.
+- B-1's module-level `#![allow(dead_code)]` on
+  `module_pass/ability_cache.rs` removed; build clean post-
+  removal confirms genuine consumption.
+- New `[dev-dependencies]` entry: `move-bytecode-verifier-meter`
+  (Sui's `ability_field_requirements::verify_module` takes a
+  `Meter` parameter; cross-validation tests pass `DummyMeter`
+  from this crate). Test-only — never reaches the production
+  binary's dependency graph (consistent with §6.2.1.8's
+  carve-out for test-only, build-tooling-only, and CI-only
+  dependencies on vendored Sui-Move).
+
+### Phase 5/5b.2 B-2.4 (`instruction_consistency` pass):
+
+- `module_pass::instruction_consistency::verify` — entry point
+  validating per-instruction generic/non-generic flavor pairing
+  across function bodies per upstream
+  `move-bytecode-verifier::instruction_consistency`. Three
+  checks: (a) generic vs non-generic flavor pairing across 5
+  paired-instruction families (field-borrow, function-call,
+  struct-pack/unpack, variant-pack/unpack-with-three-flavors,
+  plus the implicit pairing on the instantiation tables);
+  (b) `VecPack`/`VecUnpack` element-count operand fits
+  `u16::MAX`; (c) Adamant extensions per §6.2.1.4 traverse
+  without flagging (no extension has generic/non-generic
+  flavor pairs).
+- New `AdamantValidationError` variants:
+  - `GenericMemberOpcodeMismatch { fn_def_idx:
+    FunctionDefinitionIndex, code_offset: CodeOffset }`
+  - `VecPackUnpackArgOutOfRange { fn_def_idx:
+    FunctionDefinitionIndex, code_offset: CodeOffset, num: u64 }`
+- **Deprecated-arms disposition (option (b) per redirect).**
+  The 10 deprecated global-storage opcodes
+  (`ExistsDeprecated`, `MoveFromDeprecated`, `MoveToDeprecated`,
+  `MutBorrowGlobalDeprecated`, `ImmBorrowGlobalDeprecated`,
+  plus their `*_Generic` counterparts) are handled by an
+  OR-pattern `unreachable!` arm that preserves match
+  exhaustiveness while pinning the structural argument:
+
+  > Sui's `safe_assert!(!config.deprecate_global_storage_ops)`
+  > is defense-in-depth at the verifier layer in Sui's
+  > architecture where the deserializer is permissive.
+  > Adamant's pipeline rejects the 10 deprecated global-
+  > storage opcodes at deserialize-time per §6.2.1.6 Rule 5
+  > (Phase 5/5a `adamant_deserialize` strict mode). By the
+  > time a module reaches the verifier's module-level passes,
+  > deprecated opcodes are structurally impossible. The
+  > verifier-level assertion is redundant by construction in
+  > Adamant's pipeline, not by hope.
+
+  Empirical backing: `bytecode_wire.rs:1242
+  strict_mode_rejects_each_deprecated_opcode` covers all 10
+  deprecated opcodes exhaustively, plus pipeline-level
+  coverage at `validator/mod.rs::tests::rejects_module_with_deprecated_global_storage_opcode`
+  (Wave 3a). The `unreachable!` message in
+  `instruction_consistency.rs` references both tests so an
+  auditor reading the source can verify the structural
+  argument empirically.
+
+  Exhaustiveness preservation rationale: if upstream Sui adds
+  a new `Bytecode` variant in a future tag, Rust's compiler
+  flags the missing arm at Adamant compile time, surfacing
+  the divergence as a development-time signal per the
+  resistant-proof posture's vendor-refresh pattern.
+
+### Pending (later sub-arcs of Phase 5/5b.2):
+
 - **B-3:** `limits`, `recursive_data_def`, `instantiation_loops`
-- **B-4:** Rule 2 (`rule_02_privacy.rs`); landing in
+- **B-4:** Rule 2 (`rule_02_privacy.rs`) + privacy-metadata-
+  structure parallel module-level pass; Rule 2 lands in
   `crates/adamant-vm/src/validator/`, not in this subtree
 - **B-5:** Pipeline integration in
-  `crates/adamant-vm/src/validator/mod.rs`
-- **B-6:** Workspace test pass + CLAUDE.md state-bump
+  `crates/adamant-vm/src/validator/mod.rs`; removal of the
+  four pass-level `#![allow(dead_code)]` sunsets on
+  `constants.rs`, `friends.rs`, `ability_field_requirements.rs`,
+  `instruction_consistency.rs`
+- **B-6:** Workspace test pass + final PROVENANCE.md batch +
+  CLAUDE.md state-bump for Phase 5/5b.2 closure
 
 ## What was NOT forked
 
@@ -132,6 +274,116 @@ from upstream:
   rationale. The cache's memoization tables are otherwise
   byte-faithful to upstream.
 
+**Phase 5/5b.2 B-2.1 deviations (`constants` pass):**
+
+- **Typed-error fork.** Upstream returns
+  `PartialVMResult<()>` carrying `PartialVMError`/`StatusCode`.
+  Adamant returns `Result<(), AdamantValidationError>` with
+  closed variants `InvalidConstantType` and
+  `MalformedConstantData { reason: MalformedConstantReason }`.
+  Avoids pulling Sui's full error machinery into the
+  production graph; gives callers structured pattern-matching
+  access; consistent with the typed-error shape established
+  in B-1's `AbilityCacheError`.
+- **Type-directed BCS validator is Adamant-native.** Upstream's
+  data-validity check calls `Constant::deserialize_constant`,
+  which uses `MoveValue::simple_deserialize` from
+  `move_core_types::runtime_value`. Adamant has no production
+  dep on `move_core_types::runtime_value` per the resistant-
+  proof posture (§6.2.1.8). Replacement is
+  `validate_constant_data(&[u8], &SignatureToken)` — a cursor-
+  based walker that consumes bytes per type primitive
+  (1/2/4/8/16/32 for fixed-width primitives, 1 byte for `Bool`
+  with `0/1` strict check, ULEB128 length + recursive walk
+  for `Vector`). Acceptance set is byte-identical to upstream.
+
+**Phase 5/5b.2 B-2.2 deviations (`friends` pass):**
+
+- **Typed-error fork.** Upstream returns
+  `PartialVMResult<()>`. Adamant returns
+  `Result<(), AdamantValidationError>` with closed variants
+  `SelfFriendDeclaration` and `CrossAccountFriendDeclaration
+  { idx, foreign_address }`. Same rationale as B-2.1.
+- **Direct algorithmic port.** No Adamant-native algorithm
+  replacement; the structural shape of the pass carries over
+  byte-faithfully. Upstream's note that the cross-account
+  check is "a policy decision rather than a technical
+  requirement... we may consider lifting this limitation in
+  the future" applies to Adamant's port too: future relaxation
+  is a deliberate Adamant-side decision rather than tracking
+  a Sui upstream change.
+
+**Phase 5/5b.2 B-2.3 deviations (`ability_field_requirements` pass):**
+
+- **Typed-error fork.** Upstream returns
+  `PartialVMResult<()>`. Adamant returns
+  `Result<(), AdamantValidationError>` with closed variant
+  `FieldMissingTypeAbility { def_idx, kind, variant_idx,
+  field_idx }`. Same rationale as B-2.1.
+- **`Meter`/`Scope` parameters dropped.** Inherits the cache-
+  level deviation from B-1 — the pass's call to
+  `AdamantAbilityCache::abilities` does not thread metering.
+  Upstream's `verify_module` takes
+  `&mut AbilityCache<'env>, &mut (impl Meter + ?Sized)`;
+  Adamant's takes only `&AdamantCompiledModule` (the cache
+  is constructed internally, no metering surface).
+- **Cache-error handling: `expect()` with structural-
+  impossibility message rather than typed-error
+  propagation.** The `AdamantAbilityCache` returns typed
+  `AbilityCacheError` for caller-side correctness violations.
+  At `ability_field_requirements`' pipeline position — after
+  the bounds-checker pass per §6.2.1.8 step 3 ordering —
+  these errors are structurally impossible (bounds checker
+  has already validated type-parameter indices and generic
+  instantiation arities). A typed
+  `AdamantValidationError::AbilityCacheFailure` variant would
+  propagate as a *validation rejection*, masking the real bug
+  (broken bounds checker) by treating it as a module-level
+  rejection. The `expect()` form pins the structural argument:
+  a fired `expect` indicates an Adamant implementation bug,
+  not malformed input. Consistent with CLAUDE.md's "no
+  `unwrap()` outside tests; use `expect()` with a helpful
+  message" discipline applied to structural impossibilities.
+
+**Phase 5/5b.2 B-2.4 deviations (`instruction_consistency` pass):**
+
+- **Typed-error fork.** Upstream returns
+  `PartialVMResult<()>`. Adamant returns
+  `Result<(), AdamantValidationError>` with closed variants
+  `GenericMemberOpcodeMismatch { fn_def_idx, code_offset }`
+  and `VecPackUnpackArgOutOfRange { fn_def_idx, code_offset,
+  num }`. Same rationale as B-2.1.
+- **Adamant extensions handled via early-return Ok arm.**
+  Upstream's match exhaustively covers Sui's `Bytecode`.
+  Adamant's pass dispatches first on `BytecodeInstruction::Inherited(_) | Adamant(_)`;
+  the `Adamant(_)` arm returns `Ok(())` without further
+  inspection (per Q6 from the original B-2 design proposal:
+  none of the 17 extensions per §6.2.1.4 have generic/non-
+  generic flavor pairs).
+- **Deprecated-arms disposition: `unreachable!` rather than
+  `safe_assert!(!config.deprecate_global_storage_ops)`.** See
+  the "What was forked" B-2.4 entry above for the verbatim
+  structural argument. The 10 deprecated arms remain in the
+  match (preserving exhaustiveness so future Sui upstream
+  additions surface as Rust compile-time errors), with bodies
+  that panic via `unreachable!` rather than no-op or
+  `safe_assert`. The `unreachable!` message references the
+  empirical-backing tests
+  (`bytecode_wire.rs:1242 strict_mode_rejects_each_deprecated_opcode`,
+  `validator/mod.rs::tests::rejects_module_with_deprecated_global_storage_opcode`)
+  so an auditor reading the source can verify the structural
+  argument without external context.
+- **`#[allow(clippy::too_many_lines)]` on
+  `AdamantValidationError`'s `Display::fmt`.** The variant
+  count (now 8 with B-2.1 → B-2.4 additions) pushes `fmt`
+  past clippy's 100-line threshold. The lint is correct in
+  the abstract; in this case the long match IS the dispatch
+  table for diagnostic messages, and splitting obscures the
+  table shape. Allow with reason
+  `"dispatch over AdamantValidationError variants; the long
+  match IS the table"`. Same reasoning would apply to future
+  variant additions; the allow stays.
+
 ## Byte-identity invariants
 
 For the resistant-proof posture to be sound, this subtree's
@@ -149,9 +401,46 @@ Specifically:
    type_parameter_abilities.len()` exactly as upstream does;
    the typed-error variant differs but the acceptance set is
    unchanged.
+3. **`module_pass::constants::verify`** accepts the same
+   constant-pool configurations as Sui's
+   `move_bytecode_verifier::constants::verify_module` for any
+   module whose constant pool contains only types Sui's
+   `is_valid_for_constant` accepts (i.e., primitives,
+   `Address`, `Vector<...>` recursively over those). Asserted
+   by 16 Layer B parity tests covering 9 primitive accept
+   paths, 4 reject paths per malformed-data failure mode, and
+   3 reject paths per invalid-for-constant `SignatureToken`.
+4. **`module_pass::friends::verify`** accepts the same
+   `friend_decls` configurations as Sui's
+   `move_bytecode_verifier::friends::verify_module` for any
+   module shape produceable through `to_sui_module`'s BCS
+   round-trip. Asserted by 5 Layer B parity tests (3 accept
+   paths covering empty, single same-account, and multi-same-
+   account friends; 2 reject paths covering self-friend and
+   cross-account friend).
+5. **`module_pass::ability_field_requirements::verify`**
+   accepts the same `(struct_defs, enum_defs)` configurations
+   as Sui's
+   `move_bytecode_verifier::ability_field_requirements::verify_module`
+   for any module whose datatype handles satisfy the bounds
+   checker's preconditions (no out-of-range type-parameter
+   indices, matching generic-instantiation arities). Asserted
+   by 7 Layer B parity tests covering struct/enum positives,
+   the `key`/`store` ability-implication path, native-struct
+   skip, and missing-ability rejections.
+6. **`module_pass::instruction_consistency::verify`** accepts
+   the same `(function_defs)` configurations as Sui's
+   `move_bytecode_verifier::instruction_consistency::InstructionConsistency::verify_module`
+   for any module whose function bodies use only non-deprecated
+   opcodes (the deprecated 10 are upstream's concern via
+   Phase 5/5a's `adamant_deserialize` strict mode; Layer B
+   fixtures explicitly exclude them). Asserted by 8 Layer B
+   parity tests covering paired-flavor accept/reject across
+   the 5 paired-instruction families plus VecPack/VecUnpack
+   bound checks.
 
-Subsequent B-2 / B-3 sub-arcs extend the invariants list as
-each pass lands.
+Subsequent B-3 sub-arcs extend the invariants list as each
+pass lands.
 
 ## Why a fork rather than a continued vendoring
 
@@ -349,6 +638,37 @@ deliberately not included; each lives at a different layer:
   flags governing Sui's verifier behaviour; do not apply to
   Adamant's fully Adamant-native verifier per §6.2.1.8.
 
+### Test-time-only dependencies on vendored Sui-Move
+
+The following `[dev-dependencies]` are required by Layer B
+cross-validation tests but are explicitly permitted by
+§6.2.1.8's carve-out for test-only, build-tooling-only, and
+CI-only dependencies on vendored Sui-Move. They are **never
+reached by the production binary's dependency graph**:
+
+- **`move-bytecode-verifier-meter` (added at B-2.3).** Sui's
+  `ability_field_requirements::verify_module` takes a
+  `&mut (impl Meter + ?Sized)` parameter; Adamant's Layer B
+  helper `cross_validate_pass` passes `DummyMeter` from this
+  crate. Phase 5/5b.5's resistant-proof posture is "remove
+  `move-*` from the production-target dependency graph", not
+  "remove all `move-*` deps" — this dev-dep stays through and
+  beyond Phase 5/5b.5 alongside the other test-time-only
+  vendored Sui surface.
+- **`move_vm_config::verifier::VerifierConfig` (already in
+  scope; consumed at B-2.4 cross-validation).** Sui's
+  `instruction_consistency::InstructionConsistency::verify_module`
+  takes a `&VerifierConfig` parameter for its
+  `safe_assert!(!config.deprecate_global_storage_ops)` check.
+  Adamant's Layer B helper passes
+  `VerifierConfig::default()` (which sets
+  `deprecate_global_storage_ops = true`, exercising the
+  fully-deprecated-opcode-rejection path Sui ships in
+  production). No production-side use of `VerifierConfig` for
+  this pass — the dependency is already in scope from the
+  validator wrapper bridge and is removed alongside it in
+  Phase 5/5b.5.
+
 ## §6.2.1.7 spec-amendment workstream
 
 §6.2.1.7 specifies structural limits as genesis-fixed but does
@@ -413,3 +733,29 @@ exist" and "tests get run."
   identical to the vendored snapshot for every input the
   inline unit tests exercise; Layer B cross-validation lands
   alongside `ability_field_requirements` in B-2.
+- **2026-05-08 (Phase 5/5b.2 B-2 closure):** Four small/medium
+  module-level passes landed across B-2.1 through B-2.4.
+  Cumulative file LOC: ~3,065 across `constants.rs` (680),
+  `friends.rs` (341), `ability_field_requirements.rs` (738),
+  and `instruction_consistency.rs` (1024); plus error-variant
+  additions in `validator/error.rs` (~280 LOC across the four
+  sub-checkpoints). Test additions: 39 (constants) + 12
+  (friends) + 22 (ability_field_requirements) + 30
+  (instruction_consistency) = 103 new tests, all passing in
+  the workspace gauntlet. Two new public closed enums
+  (`MalformedConstantReason`, `FieldOwnerKind`) re-exported via
+  `lib.rs`. Six new `AdamantValidationError` variants
+  (`InvalidConstantType`, `MalformedConstantData`,
+  `SelfFriendDeclaration`, `CrossAccountFriendDeclaration`,
+  `FieldMissingTypeAbility`, `GenericMemberOpcodeMismatch`,
+  `VecPackUnpackArgOutOfRange`). Shared `assert_pass_parity`
+  test helper extracted at N=2 (B-2.2) into
+  `module_pass/mod.rs::test_helpers`. New `[dev-dependencies]`
+  on `move-bytecode-verifier-meter` (B-2.3). B-1's module-
+  level `#![allow(dead_code)]` on `ability_cache.rs` removed
+  (B-2.3). Four pass-level `#![allow(dead_code)]` sunsets
+  remain pending B-5 pipeline integration. No upstream
+  divergence at fork time — every Layer B cross-validation
+  test passes byte-identical to the vendored snapshot for
+  every fixture exercised. Workspace test count 821 → 933
+  (+112 across B-1 and B-2; 9 from B-1 + 103 from B-2.1-2.4).
