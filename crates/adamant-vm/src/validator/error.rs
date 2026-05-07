@@ -603,6 +603,34 @@ pub enum AdamantValidationError {
         /// `Vec::len()` for the `DatatypeInstantiation` form.
         actual: usize,
     },
+
+    /// A function definition declares more locals than the
+    /// binary format's per-function local-pool can address.
+    /// Locals count is the sum of the locals signature length
+    /// and the function's parameter count (per upstream's
+    /// `locals.len().saturating_add(parameters.len())`); the
+    /// bound is `LocalIndex::MAX` (`u8::MAX = 255`) per the
+    /// `LocalIndex` type alias in `adamant-bytecode-format`.
+    ///
+    /// Mirrors upstream's `StatusCode::TOO_MANY_LOCALS` error
+    /// in `BoundsChecker::check_code`.
+    ///
+    /// Phase 5/5b.3 C-1.4a
+    /// (`module_pass::bounds_checker::check_function_def`,
+    /// sub-step 4).
+    TooManyLocals {
+        /// Index of the offending function definition. Lowest-
+        /// index offender is reported per the eager-error
+        /// semantics.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Computed locals count
+        /// (`locals.len() + parameters.len()`, saturating).
+        count: usize,
+        /// The maximum allowed locals count. Equal to
+        /// `LocalIndex::MAX as usize` (255 at the binary-format
+        /// version pinned by §6.2.1.2).
+        max: usize,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 3, 6, 7 land in subsequent
@@ -967,6 +995,17 @@ impl core::fmt::Display for AdamantValidationError {
                 "datatype handle {} expects {expected} type argument(s), got {actual} \
                  (whitepaper §6.2.1.8 step 3, `module_pass::bounds_checker`)",
                 datatype_handle_idx.0
+            ),
+            Self::TooManyLocals {
+                fn_def_idx,
+                count,
+                max,
+            } => write!(
+                f,
+                "function definition {}: locals count {count} exceeds maximum {max} \
+                 (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::bounds_checker::check_function_def`)",
+                fn_def_idx.0
             ),
         }
     }

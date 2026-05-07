@@ -40,7 +40,7 @@
 //!   three instantiation tables (struct/function/field) — the
 //!   enum-instantiations and variant-instantiation-handles
 //!   land at C-1.3.
-//! - **C-1.3 (this sub-checkpoint):** `check_struct_defs`,
+//! - **C-1.3 (landed):** `check_struct_defs`,
 //!   `check_enum_defs`, `check_enum_instantiations`,
 //!   `check_variant_handles`,
 //!   `check_variant_instantiation_handles`. Five sub-checks
@@ -54,10 +54,26 @@
 //!   Sui inlines the body in both `check_struct_def` and
 //!   `check_enum_def`; the helper name is chosen for parallel
 //!   structure with the existing per-def validators.
-//! - **C-1.4:** `check_function_defs` including code-unit body
-//!   checks and jump-table validation. One sub-check (position
-//!   17), but the widest one — covers per-bytecode bounds
-//!   across the entire instruction set.
+//! - **C-1.4 (split into C-1.4a + C-1.4b per plan-gate Q1):**
+//!   `check_function_defs` covering the widest sub-check —
+//!   per-bytecode bounds across the entire instruction set.
+//!   Position 17 of upstream `verify_impl`'s 17-call sequence,
+//!   but the most complex single sub-check (estimated
+//!   ~1,300–1,800 LOC). Split at sub-step boundary; C-1 sub-arc
+//!   adapts from 4 → 5 sub-checkpoints. The empirical-
+//!   complexity-drives-sub-checkpoint-shape pattern is registered
+//!   for C-5 PROVENANCE.md.
+//!   - **C-1.4a (this sub-checkpoint):** sub-steps 1–4 of
+//!     `check_function_def` (function-def header validation +
+//!     native-function early-return + function-handle intra-pass
+//!     structural-impossibility re-checks + locals signature/count/
+//!     type-parameter validation including `LocalIndex::MAX`
+//!     saturating math). Adds `TooManyLocals` typed-error variant.
+//!   - **C-1.4b:** sub-steps 5–7 (wide bytecode match covering
+//!     50+ variants + jump-table validation + Adamant-extension
+//!     per-instruction semantics). Adds `CodeIndexOutOfBounds` and
+//!     `InvalidEnumSwitch` typed-error variants. Reaches 17 of 17
+//!     upstream sub-checks.
 //!
 //! Error variants produced at C-1.1:
 //!
@@ -100,6 +116,16 @@
 //! Plus [`AdamantValidationError::NumberOfTypeArgumentsMismatch`] from
 //! C-1.1 may fire via [`check_type`] recursion on field signatures
 //! within `check_struct_defs` / `check_enum_defs`.
+//!
+//! C-1.4a adds **1 new error variant:**
+//! [`AdamantValidationError::TooManyLocals`] — fires when
+//! `locals.len() + parameters.len() > LocalIndex::MAX as usize`
+//! (saturating add per upstream's overflow-safety pattern).
+//! `LocalIndex` is `u8` per `adamant-bytecode-format`, so the
+//! upper bound is 255 locals total. Module-level
+//! `IndexOutOfBounds` from C-1.1 is reused for the function-handle
+//! and locals-signature bounds checks (no `code_offset` context
+//! at sub-step 4 — bytecode iteration begins at C-1.4b).
 //!
 //! # No-Sui-parity-claim posture (section 2)
 //!
@@ -170,6 +196,15 @@
 //!   vs-count check. The latter dereferences via the addressed
 //!   `EnumDefinition`'s `variants.len()` — safe by virtue of
 //!   the prior bounds check.
+//! - Within `check_function_def` (C-1.4a): function-handle
+//!   bounds check first, then `acquires_global_resources`
+//!   bounds checks (per-entry, in iteration order), then
+//!   native early-return (no further checks for native), then
+//!   the intra-pass structural-impossibility `debug_assert!`
+//!   pins for function-handle/parameters defensive re-checks,
+//!   then locals signature bounds → locals-count overflow →
+//!   per-local `TypeParameter` recursion. C-1.4b will append
+//!   bytecode iteration after locals validation.
 //!
 //! # Shared-variant cross-pass precedence (section 5)
 //!
@@ -222,7 +257,9 @@
     reason = "Pass not wired into verify_module until Phase 5/5b.3 C-4."
 )]
 
-use adamant_bytecode_format::{ModuleIndex, SignatureToken, TableIndex};
+use adamant_bytecode_format::{
+    FunctionDefinitionIndex, LocalIndex, ModuleIndex, SignatureToken, TableIndex,
+};
 
 use crate::module::AdamantCompiledModule;
 
@@ -231,17 +268,12 @@ use super::super::error::AdamantValidationError;
 /// Verify the deserialized module's index references against
 /// §6.2.1.8 step 3 / position 1 (`module_pass::bounds_checker`).
 ///
-/// As of C-1.3 the pass covers positions 1–16 of upstream
-/// `BoundsChecker::verify_impl`'s 17 sub-checks: an
-/// empty-module-handles short-circuit followed by signatures,
-/// constants, module-handles, self-module-handle,
-/// datatype-handles, function-handles, field-handles,
-/// friend-decls, the three module-level instantiation tables
-/// (struct/function/field), struct-defs, enum-defs,
-/// enum-instantiations, variant-handles, and
-/// variant-instantiation-handles. Sub-checkpoint C-1.4 lands the
-/// remaining 1 sub-check (function-defs, the widest one — covers
-/// per-bytecode bounds across the entire instruction set).
+/// As of C-1.4a the pass covers positions 1–16 of upstream
+/// `BoundsChecker::verify_impl` plus sub-steps 1–4 of position 17
+/// (`check_function_def`'s function-def header validation and
+/// locals validation). C-1.4b appends sub-steps 5–7 (per-bytecode
+/// wide match + jump-tables + Adamant-extension semantics) to
+/// reach 17 of 17.
 ///
 /// Eager-error semantics: returns the first violation encountered
 /// in upstream sub-check order.
@@ -267,6 +299,7 @@ pub(in crate::validator) fn verify(
     check_enum_instantiations(module)?;
     check_variant_handles(module)?;
     check_variant_instantiation_handles(module)?;
+    check_function_defs(module)?;
     Ok(())
 }
 
@@ -719,6 +752,120 @@ fn check_variant_instantiation_handles(
     Ok(())
 }
 
+/// For each function definition, run the per-function bounds
+/// checks. C-1.4a covers sub-steps 1–4 of upstream's
+/// `check_function_def` (header validation + locals validation);
+/// C-1.4b appends sub-steps 5–7 (bytecode iteration +
+/// jump-tables + Adamant-extension semantics).
+fn check_function_defs(module: &AdamantCompiledModule) -> Result<(), AdamantValidationError> {
+    for (fd_idx, function_def) in module.function_defs.iter().enumerate() {
+        check_function_def(module, fd_idx, function_def)?;
+    }
+    Ok(())
+}
+
+/// Per-function-def validator. C-1.4a sub-steps:
+///
+/// 1. **Header validation:** `function` ∈ `function_handles`;
+///    each `acquires_global_resources` entry ∈ `struct_defs`.
+///    The `acquires_global_resources` list is always empty in
+///    valid Adamant modules per §6.2.1.6 Rule 5 (no global
+///    storage); the iteration is preserved structurally for
+///    byte-faithful upstream parity (Rule 5 is enforced at a
+///    different pipeline stage — Phase 5/5a deserializer's
+///    strict mode rejects deprecated global-storage opcodes
+///    at parse time, but module-level `acquires` lists could
+///    in principle persist; this iteration handles them).
+///
+/// 2. **Native early-return:** `function_def.code: None`
+///    indicates a native function (Sui's marker per
+///    `FunctionDefinition::is_native()`). §6.2.1.6 Rule 4
+///    rejects native functions at a different pipeline stage;
+///    the bounds checker's responsibility ends here for
+///    natives — there's no body to validate.
+///
+/// 3. **Function-handle intra-pass structural-impossibility
+///    re-checks:** upstream defensively re-validates
+///    `function_def.function ∈ function_handles` and
+///    `function_handle.parameters ∈ signatures`. Both are
+///    structurally unreachable given prior bounds checks
+///    (sub-step 1 enforced the first; C-1.2's
+///    `check_function_handles` enforced the second for every
+///    entry in `function_handles`). Adamant uses
+///    `debug_assert!` to pin the structural argument
+///    empirically — second instance of the intra-sub-checkpoint
+///    structural-impossibility sub-pattern after C-1.3's
+///    `check_variant_instantiation_handles`.
+///
+/// 4. **Locals validation:** `code_unit.locals ∈ signatures`;
+///    `locals.len() + parameters.len() <= LocalIndex::MAX`
+///    (saturating add per upstream's overflow-safety pattern;
+///    `LocalIndex` is `u8`, so the bound is 255 total locals);
+///    each local's signature recursively bounds-checks
+///    `TypeParameter(idx)` against the function-handle's
+///    declared type-parameter count.
+fn check_function_def(
+    module: &AdamantCompiledModule,
+    fd_idx: usize,
+    function_def: &crate::module::AdamantFunctionDefinition,
+) -> Result<(), AdamantValidationError> {
+    let fn_def_idx = FunctionDefinitionIndex(u16::try_from(fd_idx).expect(
+        "function-def count fits u16; binary format precludes overflow \
+             (FUNCTION_DEFINITION_INDEX_MAX = u16::MAX)",
+    ));
+
+    // Sub-step 1: header validation.
+    check_index(module.function_handles.len(), function_def.function)?;
+    for ty in &function_def.acquires_global_resources {
+        check_index(module.struct_defs.len(), *ty)?;
+    }
+
+    // Sub-step 2: native early-return.
+    let Some(code_unit) = &function_def.code else {
+        return Ok(());
+    };
+
+    // Sub-step 3: intra-pass structural-impossibility pins.
+    debug_assert!(
+        function_def.function.into_index() < module.function_handles.len(),
+        "intra-sub-checkpoint structural impossibility: sub-step 1 of \
+         check_function_def already enforced function_def.function ∈ \
+         function_handles via check_index ?. A fired debug_assert here \
+         indicates a logic bug at sub-step 1."
+    );
+    let function_handle = &module.function_handles[function_def.function.into_index()];
+    debug_assert!(
+        function_handle.parameters.into_index() < module.signatures.len(),
+        "intra-sub-checkpoint structural impossibility: check_function_handles \
+         (verify_impl position 6) validated function_handle.parameters ∈ \
+         signatures for every entry in function_handles before \
+         check_function_defs (position 17) reached this dereference. A fired \
+         debug_assert here indicates a cross-sub-check ordering bug in verify()."
+    );
+    let parameters_sig = &module.signatures[function_handle.parameters.into_index()];
+
+    // Sub-step 4: locals validation.
+    check_index(module.signatures.len(), code_unit.locals)?;
+    let locals_sig = &module.signatures[code_unit.locals.into_index()];
+    let locals_count = locals_sig.0.len().saturating_add(parameters_sig.0.len());
+    let locals_max = LocalIndex::MAX as usize;
+    if locals_count > locals_max {
+        return Err(AdamantValidationError::TooManyLocals {
+            fn_def_idx,
+            count: locals_count,
+            max: locals_max,
+        });
+    }
+    let type_param_count = function_handle.type_parameters.len();
+    for local in &locals_sig.0 {
+        check_type_parameter(local, type_param_count)?;
+    }
+
+    // C-1.4b will append: bytecode iteration + jump-table
+    // validation + Adamant-extension semantics here.
+    Ok(())
+}
+
 /// Generic `idx < pool_len` check returning a typed
 /// [`AdamantValidationError::IndexOutOfBounds`] tagged with the
 /// addressed pool's `IndexKind`.
@@ -750,11 +897,14 @@ mod tests {
         AbilitySet, AddressIdentifierIndex, Constant, DatatypeHandle, DatatypeHandleIndex,
         DatatypeTyParameter, EnumDefInstantiation, EnumDefInstantiationIndex, EnumDefinition,
         EnumDefinitionIndex, FieldDefinition, FieldHandle, FieldHandleIndex, FieldInstantiation,
-        FunctionHandle, FunctionHandleIndex, FunctionInstantiation, Identifier, IdentifierIndex,
-        IndexKind, ModuleHandle, ModuleHandleIndex, Signature, SignatureIndex, SignatureToken,
-        StructDefInstantiation, StructDefinition, StructDefinitionIndex, StructFieldInformation,
-        TypeSignature, VariantDefinition, VariantHandle, VariantInstantiationHandle,
+        FunctionDefinitionIndex, FunctionHandle, FunctionHandleIndex, FunctionInstantiation,
+        Identifier, IdentifierIndex, IndexKind, ModuleHandle, ModuleHandleIndex, Signature,
+        SignatureIndex, SignatureToken, StructDefInstantiation, StructDefinition,
+        StructDefinitionIndex, StructFieldInformation, TypeSignature, VariantDefinition,
+        VariantHandle, VariantInstantiationHandle, Visibility,
     };
+
+    use crate::module::{AdamantCodeUnit, AdamantFunctionDefinition};
     use adamant_types::Address as AccountAddress;
 
     use crate::module::AdamantCompiledModule;
@@ -2682,6 +2832,333 @@ mod tests {
                 enum_def: EnumDefInstantiationIndex(0),
                 variant: 2,
             });
+        cross_validate_bounds_pass(&m);
+    }
+
+    // --- Layer A: C-1.4a sub-checks (sub-steps 1–4 of position 17) ---
+
+    /// Build a fixture extending [`module_with_one_function_handle`]
+    /// with a single native function def (`code: None`). The
+    /// function handle wired at index 0 is reused; the
+    /// function-def's `function` field points at it.
+    fn module_with_one_native_function_def() -> AdamantCompiledModule {
+        let mut m = module_with_one_function_handle();
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: None,
+        });
+        m
+    }
+
+    /// Build a fixture extending [`module_with_one_function_handle`]
+    /// with a single function def carrying an empty body and a
+    /// locals signature. The locals signature lands at the next
+    /// available signature-pool slot (after the parameters/return
+    /// signatures from the function-handle fixture, which occupy
+    /// indices 0 and 1). Returns the locals' `SignatureIndex` so
+    /// callers can mutate the signature directly for negative
+    /// fixtures.
+    fn module_with_one_function_def_with_body(
+        locals_tokens: Vec<SignatureToken>,
+    ) -> (AdamantCompiledModule, SignatureIndex) {
+        let mut m = module_with_one_function_handle();
+        let locals_idx = SignatureIndex(
+            u16::try_from(m.signatures.len()).expect("test fixture has < u16::MAX signatures"),
+        );
+        m.signatures.push(Signature(locals_tokens));
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: locals_idx,
+                code: vec![],
+                jump_tables: vec![],
+            }),
+        });
+        (m, locals_idx)
+    }
+
+    // Sub-step 1: header validation -------------------------------------------
+
+    #[test]
+    fn function_def_with_valid_handle_and_no_acquires_passes() {
+        let m = module_with_one_native_function_def();
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_function_def_oob_function_handle() {
+        let mut m = module_with_one_native_function_def();
+        m.function_defs[0].function = FunctionHandleIndex(9);
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::FunctionHandle,
+                idx: 9,
+                pool_len: 1,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(FunctionHandle, 9, 1), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_function_def_oob_acquires_global_resources_entry() {
+        let mut m = module_with_one_native_function_def();
+        // acquires_global_resources is always-empty in valid
+        // Adamant per Rule 5; the bounds check is structurally
+        // preserved for upstream-byte-faithful coverage. Adding
+        // an OOB struct_def index empirically pins the
+        // bounds-check arm.
+        m.function_defs[0].acquires_global_resources = vec![StructDefinitionIndex(7)];
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::StructDefinition,
+                idx: 7,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(StructDefinition, 7, 0), got {other:?}"),
+        }
+    }
+
+    // Sub-step 2: native early-return -----------------------------------------
+
+    #[test]
+    fn native_function_def_skips_body_validation() {
+        // Native function-def passes the bounds checker
+        // unconditionally — the body validation (sub-steps 4+)
+        // doesn't apply. Rule 4 will reject natives at a
+        // different pipeline stage.
+        let m = module_with_one_native_function_def();
+        assert!(verify(&m).is_ok());
+    }
+
+    // Sub-step 4: locals validation -------------------------------------------
+
+    #[test]
+    fn function_def_with_empty_locals_and_empty_parameters_passes() {
+        let (m, _locals_idx) = module_with_one_function_def_with_body(vec![]);
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn function_def_with_nonempty_locals_passes() {
+        let (m, _locals_idx) =
+            module_with_one_function_def_with_body(vec![SignatureToken::U64, SignatureToken::Bool]);
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn function_def_with_locals_referencing_valid_type_parameter_passes() {
+        // Locals signature references TypeParameter(0); function
+        // handle declares one type parameter. In bounds.
+        let (mut m, _locals_idx) =
+            module_with_one_function_def_with_body(vec![SignatureToken::TypeParameter(0)]);
+        m.function_handles[0].type_parameters = vec![AbilitySet::EMPTY];
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_function_def_oob_locals_signature() {
+        let (mut m, _locals_idx) = module_with_one_function_def_with_body(vec![]);
+        // Override the function-def's locals to an OOB index.
+        m.function_defs[0].code.as_mut().unwrap().locals = SignatureIndex(99);
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::Signature,
+                idx: 99,
+                pool_len: 3,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(Signature, 99, 3), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_function_def_locals_count_exceeds_max() {
+        // LocalIndex::MAX = u8::MAX = 255. A locals signature
+        // with 256 tokens (and 0 parameters) triggers
+        // TooManyLocals.
+        let many_locals = vec![SignatureToken::U64; 256];
+        let (m, _locals_idx) = module_with_one_function_def_with_body(many_locals);
+        match verify(&m) {
+            Err(AdamantValidationError::TooManyLocals {
+                fn_def_idx: FunctionDefinitionIndex(0),
+                count: 256,
+                max: 255,
+            }) => {}
+            other => panic!("expected TooManyLocals(0, 256, 255), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_function_def_locals_count_via_parameters_overflow() {
+        // 200 locals + 100 parameters = 300 > 255. Pin that the
+        // saturating add over locals.len() + parameters.len()
+        // catches overflows that arise from the SUM, not just
+        // either count alone.
+        let locals_tokens = vec![SignatureToken::U64; 200];
+        let (mut m, _locals_idx) = module_with_one_function_def_with_body(locals_tokens);
+        // Replace SignatureIndex(0) with a 100-element parameters
+        // signature. The function handle's parameters points at
+        // SignatureIndex(0).
+        m.signatures[0] = Signature(vec![SignatureToken::U64; 100]);
+        match verify(&m) {
+            Err(AdamantValidationError::TooManyLocals {
+                fn_def_idx: FunctionDefinitionIndex(0),
+                count: 300,
+                max: 255,
+            }) => {}
+            other => panic!("expected TooManyLocals(0, 300, 255), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_function_def_local_with_oob_type_parameter() {
+        // Function handle declares zero type parameters; locals
+        // signature references TypeParameter(3).
+        let (m, _locals_idx) =
+            module_with_one_function_def_with_body(vec![SignatureToken::TypeParameter(3)]);
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::TypeParameter,
+                idx: 3,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(TypeParameter, 3, 0), got {other:?}"),
+        }
+    }
+
+    // Cross-sub-step preservation pin -----------------------------------------
+
+    #[test]
+    fn function_handle_bounds_fires_before_locals_validation() {
+        // OOB function-handle on the function-def AND a locals
+        // signature that would also fail (TooManyLocals). The
+        // function-handle bounds check (sub-step 1) fires first;
+        // the locals validation (sub-step 4) never runs.
+        let many_locals = vec![SignatureToken::U64; 300];
+        let (mut m, _locals_idx) = module_with_one_function_def_with_body(many_locals);
+        m.function_defs[0].function = FunctionHandleIndex(7);
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::FunctionHandle,
+                idx: 7,
+                pool_len: 1,
+            }) => {}
+            other => panic!(
+                "expected function-handle bounds (sub-step 1) to win over locals \
+                 validation (sub-step 4), got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn function_def_iteration_reports_lowest_index_offender() {
+        // Two function-defs: the first has an OOB function-handle;
+        // the second is well-formed. Iteration is in storage order;
+        // the first offender's error is reported regardless of
+        // whether later defs are also malformed.
+        let mut m = module_with_one_function_handle();
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(9),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: None,
+        });
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: None,
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::FunctionHandle,
+                idx: 9,
+                pool_len: 1,
+            }) => {}
+            other => panic!("expected first-offender (function_def 0) win, got {other:?}"),
+        }
+    }
+
+    // Cross-sub-check preservation pin (function_defs at position 17) ----------
+
+    #[test]
+    fn c14a_variant_instantiation_handles_before_function_defs() {
+        // OOB variant_instantiation_handle (position 16) AND
+        // OOB function_handle on a function_def (position 17).
+        // Position 16 fires first.
+        let mut m = empty_module();
+        m.variant_instantiation_handles
+            .push(VariantInstantiationHandle {
+                enum_def: EnumDefInstantiationIndex(9),
+                variant: 0,
+            });
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(7),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: None,
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::EnumDefInstantiation,
+                idx: 9,
+                pool_len: 0,
+            }) => {}
+            other => panic!(
+                "expected position 16 (variant-instantiation-handles) to win over \
+                 position 17 (function-defs), got {other:?}"
+            ),
+        }
+    }
+
+    // --- Layer B: C-1.4a cross-validation ---
+
+    #[test]
+    fn cross_validation_accepts_module_with_native_function_def() {
+        let m = module_with_one_native_function_def();
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_module_with_function_def_with_body() {
+        let (m, _locals_idx) =
+            module_with_one_function_def_with_body(vec![SignatureToken::U64, SignatureToken::Bool]);
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_function_def_oob_function_handle() {
+        let mut m = module_with_one_native_function_def();
+        m.function_defs[0].function = FunctionHandleIndex(9);
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_function_def_locals_count_exceeds_max() {
+        let many_locals = vec![SignatureToken::U64; 256];
+        let (m, _locals_idx) = module_with_one_function_def_with_body(many_locals);
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_function_def_local_with_oob_type_parameter() {
+        let (m, _locals_idx) =
+            module_with_one_function_def_with_body(vec![SignatureToken::TypeParameter(3)]);
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_function_def_oob_locals_signature() {
+        let (mut m, _locals_idx) = module_with_one_function_def_with_body(vec![]);
+        m.function_defs[0].code.as_mut().unwrap().locals = SignatureIndex(99);
         cross_validate_bounds_pass(&m);
     }
 }
