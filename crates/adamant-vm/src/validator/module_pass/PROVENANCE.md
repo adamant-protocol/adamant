@@ -353,21 +353,78 @@ bytecode-verifier passes from `move-bytecode-verifier`.
 
 ### Pending (later sub-arcs of Phase 5/5b.2):
 
-- **B-5:** Pipeline integration in
-  `crates/adamant-vm/src/validator/mod.rs`; removal of the
-  **nine** pass-level `#![allow(dead_code)]` sunsets on
+### Phase 5/5b.2 B-5 (pipeline integration):
+
+- `validator::verify_module` wires 8 module-level passes
+  at step 3 + 3 Adamant rules at step 5 per §6.2.1.8
+  five-step ordering. Step 3 batch in cross-pass-
+  precedence-driven invocation order (constants at
+  position 1; positions 2–8 alphabetical for audit-
+  friendliness). Step 5 batch in numerical rule order
+  (Rule 1, Rule 2, Rule 4).
+- **Cross-pass eager-error precedence** is consensus-
+  binding from B-5 forward. Constants wins over limits
+  on `MalformedConstantData`; privacy_metadata_structure
+  wins over Rule 2 on `MalformedPrivacyMetadata` via
+  step-3-before-step-5 ordering.
+- **Threading `&AdamantStructuralLimits`** to
+  `limits::verify` per its signature divergence (B-3.1
+  carry-forward). Other step-3 passes take only
+  `&module`.
+- **Nine module-level `#![allow(dead_code)]` sunsets
+  removed** in the same commit as the wiring:
   `constants.rs`, `friends.rs`,
   `ability_field_requirements.rs`,
   `instruction_consistency.rs`, `limits.rs`,
   `recursive_data_def.rs`, `instantiation_loops.rs`,
-  `privacy_metadata_structure.rs`, `rule_02_privacy.rs`;
-  threading `&AdamantStructuralLimits` to `limits::verify`
-  per its non-uniform signature shape. Step-3 batch order:
-  the seven B-2/B-3 module-level passes plus B-4.2's
-  `privacy_metadata_structure`. Step-5 batch: Rule 1
-  (existing) + Rule 2 (B-4.1) + Rule 4 (existing).
-- **B-6:** Workspace test pass + final PROVENANCE.md batch +
-  CLAUDE.md state-bump for Phase 5/5b.2 closure.
+  `privacy_metadata_structure.rs`, `rule_02_privacy.rs`.
+  Build clean post-removal confirms genuine consumption
+  via `verify_module` wiring.
+- **Sui-verifier-bridge transitional** retained behind
+  `if !module.contains_adamant_extensions()` guard for
+  inherited-subset modules. Defense-in-depth on inherited
+  subset; tears out at 5/5b.5 when per-function passes
+  land.
+- **16 new integration + precedence-parity tests** added
+  at `validator/mod.rs::tests`: 6 cross-pass eager-error
+  precedence tests (3 for `MalformedConstantData`, 3 for
+  `MalformedPrivacyMetadata`) + 10 full-pipeline
+  integration tests covering breadth across each step-3
+  pass and each step-5 rule.
+
+### Phase 5/5b.2 B-6 (closure batch):
+
+- Documentation-only sub-checkpoint closing Phase 5/5b.2.
+- This section update + the changelog entry below + the
+  CLAUDE.md state-bump together capture the Phase 5/5b.2
+  outcome.
+
+### Remaining Phase 5/5b work (post-Phase-5/5b.2):
+
+Phase 5/5b.2 closes at B-6. Remaining Phase 5/5b sub-arcs:
+
+- **Phase 5/5b.3:** Three large module-level passes
+  deferred from Phase 5/5b.2's plan: `BoundsChecker`,
+  `DuplicationChecker`, `SignatureChecker`. These are
+  the upstream Sui passes with the highest LOC counts
+  (873 + 412 + 524 ≈ 1809 upstream LOC). They sit at
+  step 3 alongside the eight passes already ported.
+  When 5/5b.3 lands, the §6.2.1.8 step-3 batch becomes
+  11 passes; cross-pass precedence ordering is re-
+  evaluated per any new shared-variant claims.
+- **Phase 5/5b.4:** Per-function passes infrastructure
+  (CFG construction; abstract-interpreter framework;
+  borrow-graph framework) + Rule 3 (privacy
+  consistency). Step-4 of §6.2.1.8 currently delegates
+  to the transitional Sui-verifier bridge; 5/5b.4
+  begins the Adamant-native port of step-4 passes.
+- **Phase 5/5b.5:** Type-safety + reference-safety per-
+  function passes + Rules 6, 7 + final pipeline
+  integration with Sui-verifier bridge fully removed +
+  build-system independence check via
+  `tests/no_sui_in_production_deps.rs`. After 5/5b.5,
+  the production binary's dependency graph contains
+  zero `move-*` crates per the resistant-proof posture.
 
 ## What was NOT forked
 
@@ -788,6 +845,135 @@ as inconsistency; it is metadata-shape-driven.
   well-formed privacy entries passes this pass; Rule 2
   rejects them at step 5.
 
+**Phase 5/5b.2 B-5 deviations (pipeline integration):**
+
+- **Within-step invocation order is implementation-
+  discretionary per §6.2.1.8 line 563.** Step-3 batch
+  uses cross-pass-precedence-driven ordering: constants
+  at position 1 (precedence-driven; before limits per
+  `MalformedConstantData` shared-variant precedence);
+  positions 2–8 alphabetical for audit-friendliness.
+  Step-5 batch uses numerical rule order (Rule 1, 2, 4).
+  See "Wiring conventions" sub-section below for the
+  established pattern.
+- **Cross-pass eager-error precedence becomes consensus-
+  binding from B-5 forward.** Two shared variants:
+  `MalformedConstantData` (constants wins over limits)
+  and `MalformedPrivacyMetadata` (privacy_metadata_
+  structure wins over Rule 2 via step-3-before-step-5
+  ordering). The accept/reject behaviour Adamant's
+  verifier exhibits is consensus-binding per §6.2.1.8
+  line 563; cross-pass precedence is part of accept/
+  reject-behaviour-on-malformed-input. See "Eager-error
+  first-failure-wins" pattern section below.
+- **Sui-verifier-bridge transitional retained.** Step-3
+  Adamant-native passes run unconditionally; the Sui
+  bridge runs conditionally (`if
+  !module.contains_adamant_extensions()`) for inherited-
+  subset modules as defense-in-depth. The bridge tears
+  out at 5/5b.5 when per-function passes land. During
+  the transitional period, Adamant-native passes and
+  the Sui bridge produce partially-overlapping coverage
+  on inherited-subset module-level checks; the
+  redundancy is intentional.
+
+### Wiring conventions
+
+Established at Phase 5/5b.2 B-5 for module visibility
+and pipeline ordering. Future pass additions follow the
+same pattern.
+
+**Module visibility:**
+
+- Modules in `module_pass/` that are wired into
+  `verify_module` use `pub(super) mod foo;` so the
+  parent `validator` module can reach `module_pass::foo::verify`.
+- Modules used only internally by another pass (e.g.,
+  `ability_cache` consumed only by
+  `ability_field_requirements`) use private `mod foo;`.
+- The convention surfaced when initial B-5 wiring
+  failed with private-module errors; the eight wired
+  passes were promoted in the same commit as the
+  wiring.
+
+**Pipeline ordering within a §6.2.1.8 step:**
+
+- Cross-pass eager-error precedence is the binding
+  constraint: any pass whose first-error variant is
+  shared with another pass must run before the other
+  pass for the precedence claim to hold. See "Eager-
+  error first-failure-wins" pattern section below.
+- Beyond cross-pass-precedence, ordering is alphabetical
+  by pass name for audit-friendliness. Future readers
+  scanning `verify_module` can predict pass-position
+  from pass-name without looking at the source.
+- §6.2.1.8 line 563 explicitly classifies within-step
+  pass-orchestration as implementation-discretionary;
+  cross-pass-precedence-driven plus alphabetical-of-
+  remainder is an Adamant convention, not a spec
+  prescription.
+
+### Wiring-time fixture-update methodology pattern
+
+Established at Phase 5/5b.2 B-5 when wiring Rule 2.
+
+When a previously-unwired rule becomes live via wiring
+into `verify_module`, existing fixtures may need updates
+to satisfy the now-live rule. Future wiring sub-arcs
+follow the same pattern.
+
+Pattern instances:
+
+- **B-5 instance:** `rich_valid_module()` fixture in
+  `validator/test_fixtures.rs` had a `Visibility::Public`
+  function but no `b"adamant.privacy"` metadata entry.
+  When Rule 2 (B-4.1) was wired at B-5, the fixture
+  became invalid under the now-live coverage check;
+  `rich_canonical_module_round_trips` test failed.
+  Fixed by adding a privacy entry covering the Public
+  function with byte `0x00` (transparent).
+- **Future expected instances:** Phase 5/5b.5 Sui-
+  verifier-bridge tear-out — when the bridge is
+  removed, Adamant-native per-function passes become
+  the only path; existing fixtures may have shapes that
+  the Sui bridge accepted but Adamant-native passes
+  reject (or vice versa). When pre-mainnet calibration
+  changes structural-limits values from `None` to
+  concrete bounds (B-1 carry-forward), existing
+  fixtures may exceed new bounds and need adjustment.
+
+The pattern's audit anchor: any sub-arc that wires
+previously-unwired rules or removes transitional
+passes carries a fixture-update review as part of its
+implementation gate.
+
+### Integration-test depth limitation
+
+Established at Phase 5/5b.2 B-5 with the
+`limits_alone_fires_on_input_triggering_only_limits`
+fixture pivot.
+
+The limits-alone-fires precedence pin under genesis
+defaults requires a fixture that exceeds
+`max_constant_vector_len` (1 MiB), impractical for test
+fixtures. The integration-level pin is omitted; depth
+coverage lives at the per-pass Layer A level (23 tests
+covering each limits sub-check independently). If
+future test work wants integration-level limits-alone-
+fires coverage, the path is a test-only
+`AdamantVerifierConfig::with_structural_limits`
+builder; this is deferred as a known follow-up rather
+than added speculatively.
+
+The B-5 fixture
+(`limits_alone_fires_on_input_triggering_only_limits`)
+landed as a structural-shape pass-through under genesis
+defaults (well-formed vector constant within bounds;
+both passes accept) rather than the symmetric reject-
+parity assertion. The 5 other precedence-parity tests
+plus the per-pass Layer A coverage carry the load-
+bearing precedence claim.
+
 ## Byte-identity invariants
 
 For the resistant-proof posture to be sound, this subtree's
@@ -1137,16 +1323,75 @@ reached by the production binary's dependency graph**:
   validator wrapper bridge and is removed alongside it in
   Phase 5/5b.5.
 
-## §6.2.1.7 spec-amendment workstream
+## Spec amendment workstream
 
-§6.2.1.7 specifies structural limits as genesis-fixed but does
-not enumerate values. The Phase 5/5b.2 B-1 implementation
-ships provisional values per the buckets above; pre-mainnet
-workstream raises a §6.2.1.7 amendment proposal to enumerate
-them in the spec, parallel to the per-instruction gas-cost
-appendix pattern. Registered in CLAUDE.md "Open properties to
-track" at B-6 closure, distinct from the genesis-pool
-calibration item.
+Phase 5/5b.2 surfaced two §6.2.1 spec-amendment carry-
+forwards that don't block phase closure but should be
+tracked together for the §6.2.1 family. Both registered in
+CLAUDE.md "Open properties to track" at B-6 closure,
+distinct from the genesis-pool calibration item.
+
+### §6.2.1.7 structural-limits values
+
+§6.2.1.7 specifies structural limits as genesis-fixed but
+does not enumerate values. The Phase 5/5b.2 B-1
+implementation ships provisional values per the
+Bucket A/B/C disposition documented above (the "Genesis
+structural-limits values" section earlier). Adamant's
+verifier is the consensus boundary for structural limits;
+unlike Sui, no protocol-config layer backstops missing
+bounds, so every field is concrete rather than `None`.
+
+Pre-mainnet workstream raises a §6.2.1.7 amendment
+proposal to enumerate the values in the spec, parallel to
+the per-instruction gas-cost appendix pattern. The
+provisional values in B-1 are not arbitrary — they're
+derived from Sui's commented alternatives (Bucket A),
+Sui's literal defaults (Bucket B), and DoS/memory/
+practical-use reasoning (Bucket C) — but the spec
+amendment makes the values part of the canonical spec
+text rather than implementation-discretionary defaults.
+
+Registered at B-1; reaffirmed at B-3.4 and B-6.
+
+### §6.2.1.8 cross-pass eager-error precedence
+
+§6.2.1.8 line 563 classifies within-step pass-
+orchestration as implementation-discretionary while
+pinning accept/reject behaviour as fixed. Phase 5/5b.2
+established that **cross-pass eager-error precedence is
+part of accept/reject behaviour**: when a shared error
+variant can be produced by two passes for the same input,
+which-error-fires-first is a consensus-binding property,
+not implementation-discretionary.
+
+Two shared-variant precedence claims are consensus-binding
+from B-5 forward:
+
+- `MalformedConstantData` shared between B-2.1
+  `module_pass::constants` and B-3.1 `module_pass::limits`
+  vector-length sub-check. Pipeline ordering: constants
+  at step-3 position 1; limits at position 6. Constants
+  wins on the same malformed-ULEB128 input.
+- `MalformedPrivacyMetadata` shared between B-4.2
+  `module_pass::privacy_metadata_structure` and B-4.1
+  `validator::rule_02_privacy`. Pipeline ordering:
+  structural pass at step 3; Rule 2 at step 5.
+  privacy_metadata_structure wins via spec-pinned step-3-
+  before-step-5 ordering.
+
+Pre-mainnet workstream raises a §6.2.1.8 amendment
+proposal to capture cross-pass eager-error precedence
+explicitly in the spec, similar in shape to the §6.2.1.7
+amendment for structural limits. Currently the precedence
+claims are anchored in this PROVENANCE.md ("Eager-error
+first-failure-wins" pattern section below) and in the
+verbatim test fixtures at `validator/mod.rs::tests` —
+both are audit-trail anchors, but the spec-text amendment
+makes the property normative for any future
+implementation.
+
+Registered at B-5; carried forward to B-6.
 
 ## Structural-impossibility checks pattern
 
@@ -1752,3 +1997,98 @@ exist" and "tests get run."
   decisions for inherited-subset modules at fork time;
   the two B-4 passes are Adamant-specific and carry no
   Sui parity claim by design.
+- **2026-05-08 (Phase 5/5b.2 B-5: pipeline integration):**
+  Eight module-level passes wired into
+  `validator::verify_module` at step 3 + three Adamant
+  rules at step 5 per §6.2.1.8 five-step ordering. Step-3
+  invocation order: constants at position 1 (precedence-
+  driven; before limits per `MalformedConstantData`
+  shared-variant precedence); positions 2–8 alphabetical
+  (`ability_field_requirements`, `friends`,
+  `instantiation_loops`, `instruction_consistency`,
+  `limits`, `privacy_metadata_structure`,
+  `recursive_data_def`). Step-5 batch: Rule 1, Rule 2
+  (B-4.1), Rule 4 in numerical order. Threading
+  `&AdamantStructuralLimits` to `limits::verify` per
+  B-3.1 carry-forward. Nine module-level
+  `#![allow(dead_code)]` sunsets removed in same commit
+  as wiring (eight `module_pass` files +
+  `rule_02_privacy.rs`). Sui-verifier-bridge transitional
+  retained behind `if !module.contains_adamant_extensions()`
+  guard for inherited-subset modules; tears out at
+  5/5b.5. 16 new tests at `validator/mod.rs::tests`: 6
+  cross-pass eager-error precedence parity tests + 10
+  full-pipeline integration tests. All 1019 previously
+  existing tests pass unchanged. Workspace test count:
+  1019 → 1035 (+16). Two transient fixes: pub(super)
+  visibility on the eight wired pass modules; privacy
+  entry added to `rich_valid_module()` test fixture
+  (wiring-time fixture-update methodology pattern,
+  registered above). Integration-test depth limitation
+  registered: limits-alone-fires precedence pin under
+  genesis defaults requires fixture exceeding 1 MiB
+  vector length; deferred to test-only
+  `AdamantVerifierConfig::with_structural_limits`
+  builder rather than added speculatively. §6.2.1.8
+  cross-pass eager-error precedence registered as
+  spec-amendment carry-forward alongside §6.2.1.7
+  structural-limits values.
+- **2026-05-08 (Phase 5/5b.2 B-6 closure: Phase 5/5b.2
+  closes):** Documentation-only sub-checkpoint. No
+  source-code changes; tests unchanged at 1035. This
+  PROVENANCE.md update batches the B-5 wiring
+  documentation, the wiring conventions sub-section, the
+  wiring-time fixture-update methodology pattern, the
+  integration-test depth limitation, and the §6.2.1.8
+  spec-amendment carry-forward into the existing
+  document. CLAUDE.md state-bump for Phase 5/5b.2 closure
+  lands in the same commit per the deferred-to-phase-
+  closure pattern (commits 180d67f precedent for Phase
+  5/5b.1a + 5/5b.1b closure).
+
+  **Sub-arc delta (B-6 alone):** 0 source-code changes;
+  documentation-only; tests unchanged at 1035; ~500–750
+  LOC of net edits to PROVENANCE.md + CLAUDE.md.
+
+  **Cumulative phase delta (Phase 5/5b.2, B-1 through
+  B-6):** 14 commits on origin. Workspace test count
+  progression: 821 → 1035 (+214). Nine module-level
+  passes ported Adamant-native (`constants`, `friends`,
+  `ability_field_requirements`, `instruction_consistency`
+  from B-2; `limits`, `recursive_data_def`,
+  `instantiation_loops` from B-3;
+  `privacy_metadata_structure` from B-4) plus one rule
+  (`rule_02_privacy` from B-4 — Rule 1 and Rule 4 were
+  already wired pre-B-5, so B-5 added only Rule 2 to
+  the step-5 batch). 20 new typed-error variants on
+  `AdamantValidationError`. Three new public closed
+  enums: `MalformedConstantReason` (B-2.1),
+  `FieldOwnerKind` (B-2.3), `HandleKind` (B-3.1). One
+  new production dependency: `petgraph 0.8.x` (B-3.2;
+  first non-Sui-vendor-derived production dep on
+  `adamant-vm`; seven-criterion external-production-dep
+  audit template established). Seven named methodology
+  patterns formalized in this PROVENANCE.md:
+  structural-impossibility checks (3 sub-patterns + 4
+  instances); external production dep audit template
+  (7-criterion); byte-faithful preservation principle
+  (5-axis scope); no-Sui-parity-claim posture (2
+  reason-shapes + 3 instances); eager-error first-
+  failure-wins as Phase 5/5b.2-wide methodology
+  principle (2 axes + sub-principle for complete
+  precedence-ordering test coverage + 6 instances);
+  deliberate-Adamant-decision pattern (1 instance);
+  per-pass doc-comment as methodology-pattern co-
+  location (7-section template). Two §6.2.1 spec-
+  amendment carry-forwards registered: §6.2.1.7
+  structural-limits values (B-1) and §6.2.1.8 cross-
+  pass eager-error precedence (B-5). Phase 5/5b.2
+  closes; Phase 5/5b sub-arcs remaining: 5/5b.3
+  (BoundsChecker, DuplicationChecker, SignatureChecker
+  — three large module-level passes deferred from
+  Phase 5/5b.2's plan), 5/5b.4 (per-function passes
+  infrastructure + Rule 3), 5/5b.5 (type-safety/
+  reference-safety per-function passes + Rules 6, 7 +
+  final pipeline integration with Sui-verifier bridge
+  fully removed + `tests/no_sui_in_production_deps.rs`
+  build-system independence check).
