@@ -19,20 +19,35 @@
 //! [`AdamantCompiledModule`] resolves to an in-range slot of its
 //! addressed pool. Upstream `BoundsChecker::verify_module` runs
 //! 17 sub-checks across the module's tables; Phase 5/5b.3 ports
-//! them across four sub-checkpoints:
+//! them across four sub-checkpoints (positions taken from
+//! upstream's `verify_impl` enumeration, not plan-text named
+//! counts — the latter are illustrative per the C-1.1
+//! calibration registration):
 //!
-//! - **C-1.1 (this sub-checkpoint):** initial empty-module-handles
+//! - **C-1.1 (landed):** initial empty-module-handles
 //!   short-circuit + `check_signatures` + `check_constants` +
 //!   `check_module_handles` + `check_self_module_handle` +
-//!   `check_datatype_handles`. Five of upstream's seventeen
-//!   sub-checks plus the precondition.
-//! - **C-1.2:** function-handle, field-handle, friend-decl, and
-//!   the five instantiation tables (struct/function/enum/field/
-//!   variant).
-//! - **C-1.3:** struct/enum definitions, variant-handles, and
-//!   variant-instantiation-handles.
-//! - **C-1.4:** function definitions including code-unit body
-//!   checks and jump-table validation.
+//!   `check_datatype_handles`. Five sub-checks plus the
+//!   precondition (positions 1–5).
+//! - **C-1.2 (this sub-checkpoint):** `check_function_handles`,
+//!   `check_field_handles`, `check_friend_decls`,
+//!   `check_struct_instantiations`,
+//!   `check_function_instantiations`,
+//!   `check_field_instantiations`. Six sub-checks (positions
+//!   6–11). Plan-text initially named "five instantiation
+//!   tables (struct/function/enum/field/variant)"; empirical
+//!   re-baseline per upstream `verify_impl` corrects this to
+//!   three instantiation tables (struct/function/field) — the
+//!   enum-instantiations and variant-instantiation-handles
+//!   land at C-1.3.
+//! - **C-1.3:** `check_struct_defs`, `check_enum_defs`,
+//!   `check_enum_instantiations`, `check_variant_handles`,
+//!   `check_variant_instantiation_handles`. Five sub-checks
+//!   (positions 12–16).
+//! - **C-1.4:** `check_function_defs` including code-unit body
+//!   checks and jump-table validation. One sub-check (position
+//!   17), but the widest one — covers per-bytecode bounds
+//!   across the entire instruction set.
 //!
 //! Error variants produced at C-1.1:
 //!
@@ -51,6 +66,17 @@
 //!   `DatatypeInstantiation(idx, type_args)` supplies a different
 //!   number than the handle declares. Both code paths fire the
 //!   same variant; `expected`/`actual` discriminate the sub-case.
+//!
+//! C-1.2 adds **0 new error variants.** All six sub-checks reuse
+//! [`AdamantValidationError::IndexOutOfBounds`] from C-1.1 with
+//! `IndexKind::MemberCount` (field-offset within a struct) and
+//! `IndexKind::TypeParameter` (type-parameter index inside a
+//! function-handle's signature) as additional discriminators.
+//! Both `IndexKind` variants are existing values from
+//! `adamant-bytecode-format`. Plus the existing
+//! `IndexKind::ModuleHandle`/`Identifier`/`Signature`/
+//! `StructDefinition`/`FunctionHandle`/`FieldHandle` discriminators
+//! cover the bulk of C-1.2's bounds checks.
 //!
 //! # No-Sui-parity-claim posture (section 2)
 //!
@@ -80,9 +106,13 @@
 //!   before invoking any sub-check. A module with both an empty
 //!   `module_handles` table and an out-of-range signature reports
 //!   `NoModuleHandles`.
-//! - Sub-check ordering: signatures → constants → module-handles
-//!   → self-module-handle → datatype-handles. First-encountered
-//!   violation wins. (Upstream order; preserved byte-faithfully.)
+//! - Sub-check ordering after C-1.2: signatures → constants →
+//!   module-handles → self-module-handle → datatype-handles →
+//!   function-handles → field-handles → friend-decls →
+//!   struct-instantiations → function-instantiations →
+//!   field-instantiations. First-encountered violation wins.
+//!   (Upstream order; preserved byte-faithfully — see
+//!   `bounds_checker_sub_check_ordering` test.)
 //! - Within a sub-check, iteration is in storage order (table
 //!   index ascending); the lowest-index offender is reported.
 //! - Within `check_type`'s match arms: `Datatype(idx)` and
@@ -90,6 +120,18 @@
 //!   `idx` first, then (only if bounds succeed) the type-argument
 //!   arity check. Upstream is explicit about this pairing; the
 //!   port preserves it.
+//! - Within `check_function_handle`: bounds checks on `module`,
+//!   `name`, `parameters`, `return_` fire before `check_type_parameter`
+//!   recursion over the parameters/return signatures. Upstream's
+//!   `?` ordering preserved byte-faithfully.
+//! - Within `check_field_handle`: bounds check on `owner` fires
+//!   before the field-offset-within-struct check. Native-struct
+//!   semantics: `fields_count = 0`, so any field index rejects
+//!   (preserved byte-faithfully — see
+//!   `field_handle_field_offset_against_native_struct_*` tests).
+//! - Within each instantiation sub-check: bounds check on the
+//!   handle/def field fires before the bounds check on the
+//!   `type_parameters` signature index.
 //!
 //! # Shared-variant cross-pass precedence (section 5)
 //!
@@ -151,12 +193,16 @@ use super::super::error::AdamantValidationError;
 /// Verify the deserialized module's index references against
 /// §6.2.1.8 step 3 / position 1 (`module_pass::bounds_checker`).
 ///
-/// C-1.1 batch covers the initial subset of upstream
+/// As of C-1.2 the pass covers positions 1–11 of upstream
 /// `BoundsChecker::verify_impl`'s 17 sub-checks: an
 /// empty-module-handles short-circuit followed by signatures,
-/// constants, module-handles, self-module-handle, and datatype-
-/// handles. Sub-checkpoints C-1.2 / C-1.3 / C-1.4 land the
-/// remainder.
+/// constants, module-handles, self-module-handle,
+/// datatype-handles, function-handles, field-handles,
+/// friend-decls, and the three module-level instantiation tables
+/// (struct/function/field). Sub-checkpoints C-1.3 / C-1.4 land
+/// the remaining 6 sub-checks (struct-defs, enum-defs,
+/// enum-instantiations, variant-handles,
+/// variant-instantiation-handles, function-defs).
 ///
 /// Eager-error semantics: returns the first violation encountered
 /// in upstream sub-check order.
@@ -171,6 +217,12 @@ pub(in crate::validator) fn verify(
     check_module_handles(module)?;
     check_self_module_handle(module)?;
     check_datatype_handles(module)?;
+    check_function_handles(module)?;
+    check_field_handles(module)?;
+    check_friend_decls(module)?;
+    check_struct_instantiations(module)?;
+    check_function_instantiations(module)?;
+    check_field_instantiations(module)?;
     Ok(())
 }
 
@@ -198,12 +250,27 @@ fn check_constants(module: &AdamantCompiledModule) -> Result<(), AdamantValidati
 
 /// For each module-handle entry, validate that its `address`
 /// resolves into the address-identifier pool and its `name`
-/// resolves into the identifier pool.
+/// resolves into the identifier pool. Reused by
+/// [`check_friend_decls`] over `module.friend_decls`, since
+/// upstream models friend declarations as the same `ModuleHandle`
+/// shape.
 fn check_module_handles(module: &AdamantCompiledModule) -> Result<(), AdamantValidationError> {
     for module_handle in &module.module_handles {
-        check_index(module.address_identifiers.len(), module_handle.address)?;
-        check_index(module.identifiers.len(), module_handle.name)?;
+        check_module_handle(module, module_handle)?;
     }
+    Ok(())
+}
+
+/// Per-handle validator extracted at C-1.2 so [`check_friend_decls`]
+/// can reuse it. Mirrors upstream's
+/// `BoundsChecker::check_module_handle` byte-faithfully:
+/// bounds-check `address` first, then `name`.
+fn check_module_handle(
+    module: &AdamantCompiledModule,
+    module_handle: &adamant_bytecode_format::ModuleHandle,
+) -> Result<(), AdamantValidationError> {
+    check_index(module.address_identifiers.len(), module_handle.address)?;
+    check_index(module.identifiers.len(), module_handle.name)?;
     Ok(())
 }
 
@@ -285,6 +352,154 @@ fn check_type(
     Ok(())
 }
 
+/// For each function-handle entry, validate its referenced
+/// indices and recurse into parameter/return signatures to
+/// bounds-check any `TypeParameter(idx)` against the handle's
+/// declared type-parameter count.
+///
+/// Upstream's `?` ordering pins bounds-then-recursion: the
+/// `module`/`name`/`parameters`/`return_` bounds checks fire
+/// before the `check_type_parameter` recursion. The recursion
+/// is skipped automatically on bounds failure via the `?`
+/// operator (the in-bounds `parameters`/`return_` lookup never
+/// runs).
+fn check_function_handles(module: &AdamantCompiledModule) -> Result<(), AdamantValidationError> {
+    for function_handle in &module.function_handles {
+        check_function_handle(module, function_handle)?;
+    }
+    Ok(())
+}
+
+/// Per-handle validator. See [`check_function_handles`] for the
+/// pairing-order rationale.
+fn check_function_handle(
+    module: &AdamantCompiledModule,
+    function_handle: &adamant_bytecode_format::FunctionHandle,
+) -> Result<(), AdamantValidationError> {
+    check_index(module.module_handles.len(), function_handle.module)?;
+    check_index(module.identifiers.len(), function_handle.name)?;
+    check_index(module.signatures.len(), function_handle.parameters)?;
+    check_index(module.signatures.len(), function_handle.return_)?;
+    let type_param_count = function_handle.type_parameters.len();
+    let parameters_sig = &module.signatures[function_handle.parameters.into_index()];
+    for ty in &parameters_sig.0 {
+        check_type_parameter(ty, type_param_count)?;
+    }
+    let return_sig = &module.signatures[function_handle.return_.into_index()];
+    for ty in &return_sig.0 {
+        check_type_parameter(ty, type_param_count)?;
+    }
+    Ok(())
+}
+
+/// Preorder-traverse a signature token tree and bounds-check
+/// every `TypeParameter(idx)` against `type_param_count`.
+///
+/// Mirrors upstream's `BoundsChecker::check_type_parameter`. The
+/// non-`TypeParameter` arms are no-ops; the preorder traversal
+/// already descends into containers (`Vector`, `Reference`,
+/// `MutableReference`, `DatatypeInstantiation`) so each visited
+/// node's match arm only handles the leaf-shape decision.
+fn check_type_parameter(
+    ty: &SignatureToken,
+    type_param_count: usize,
+) -> Result<(), AdamantValidationError> {
+    for visited in ty.preorder_traversal() {
+        if let SignatureToken::TypeParameter(idx) = visited {
+            if (*idx as usize) >= type_param_count {
+                return Err(AdamantValidationError::IndexOutOfBounds {
+                    kind: adamant_bytecode_format::IndexKind::TypeParameter,
+                    idx: *idx,
+                    pool_len: type_param_count,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// For each field-handle entry, validate `owner` ∈ `struct_defs`
+/// and `field` < the addressed struct's field count.
+///
+/// **Native-struct semantics:** `fields_count = 0` for
+/// [`adamant_bytecode_format::StructFieldInformation::Native`];
+/// any field index rejects (preserved byte-faithfully from
+/// upstream's `match`-then-`>=` pattern). Pinned by the
+/// `field_handle_field_offset_against_native_struct_*` tests.
+///
+/// **Inline check rather than the generic
+/// [`check_index`] helper:** `MemberCount` is a `u16` typedef
+/// (not a `*Index` newtype implementing
+/// [`adamant_bytecode_format::ModuleIndex`]), so the generic
+/// helper signature doesn't apply. The inline form keeps the
+/// kind explicit at the call site and matches upstream's
+/// equivalent inline `bounds_error(...)` shape.
+fn check_field_handles(module: &AdamantCompiledModule) -> Result<(), AdamantValidationError> {
+    for field_handle in &module.field_handles {
+        check_index(module.struct_defs.len(), field_handle.owner)?;
+        let struct_def = &module.struct_defs[field_handle.owner.into_index()];
+        let fields_count = match &struct_def.field_information {
+            adamant_bytecode_format::StructFieldInformation::Native => 0,
+            adamant_bytecode_format::StructFieldInformation::Declared(fields) => fields.len(),
+        };
+        if (field_handle.field as usize) >= fields_count {
+            return Err(AdamantValidationError::IndexOutOfBounds {
+                kind: adamant_bytecode_format::IndexKind::MemberCount,
+                idx: field_handle.field,
+                pool_len: fields_count,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// For each friend declaration, run the same per-handle
+/// validation as [`check_module_handle`]. Upstream models friend
+/// declarations as `ModuleHandle` values stored in a separate
+/// list; the bounds-checking shape is identical.
+fn check_friend_decls(module: &AdamantCompiledModule) -> Result<(), AdamantValidationError> {
+    for friend in &module.friend_decls {
+        check_module_handle(module, friend)?;
+    }
+    Ok(())
+}
+
+/// For each struct-def-instantiation entry, validate `def` ∈
+/// `struct_defs` and `type_parameters` ∈ signatures.
+fn check_struct_instantiations(
+    module: &AdamantCompiledModule,
+) -> Result<(), AdamantValidationError> {
+    for struct_inst in &module.struct_def_instantiations {
+        check_index(module.struct_defs.len(), struct_inst.def)?;
+        check_index(module.signatures.len(), struct_inst.type_parameters)?;
+    }
+    Ok(())
+}
+
+/// For each function-instantiation entry, validate `handle` ∈
+/// `function_handles` and `type_parameters` ∈ signatures.
+fn check_function_instantiations(
+    module: &AdamantCompiledModule,
+) -> Result<(), AdamantValidationError> {
+    for function_inst in &module.function_instantiations {
+        check_index(module.function_handles.len(), function_inst.handle)?;
+        check_index(module.signatures.len(), function_inst.type_parameters)?;
+    }
+    Ok(())
+}
+
+/// For each field-instantiation entry, validate `handle` ∈
+/// `field_handles` and `type_parameters` ∈ signatures.
+fn check_field_instantiations(
+    module: &AdamantCompiledModule,
+) -> Result<(), AdamantValidationError> {
+    for field_inst in &module.field_instantiations {
+        check_index(module.field_handles.len(), field_inst.handle)?;
+        check_index(module.signatures.len(), field_inst.type_parameters)?;
+    }
+    Ok(())
+}
+
 /// Generic `idx < pool_len` check returning a typed
 /// [`AdamantValidationError::IndexOutOfBounds`] tagged with the
 /// addressed pool's `IndexKind`.
@@ -314,8 +529,11 @@ fn check_index<I: ModuleIndex>(pool_len: usize, idx: I) -> Result<(), AdamantVal
 mod tests {
     use adamant_bytecode_format::{
         AbilitySet, AddressIdentifierIndex, Constant, DatatypeHandle, DatatypeHandleIndex,
-        DatatypeTyParameter, Identifier, IdentifierIndex, IndexKind, ModuleHandle,
-        ModuleHandleIndex, Signature, SignatureToken,
+        DatatypeTyParameter, FieldDefinition, FieldHandle, FieldHandleIndex, FieldInstantiation,
+        FunctionHandle, FunctionHandleIndex, FunctionInstantiation, Identifier, IdentifierIndex,
+        IndexKind, ModuleHandle, ModuleHandleIndex, Signature, SignatureIndex, SignatureToken,
+        StructDefInstantiation, StructDefinition, StructDefinitionIndex, StructFieldInformation,
+        TypeSignature,
     };
     use adamant_types::Address as AccountAddress;
 
@@ -352,6 +570,80 @@ mod tests {
             constraints: AbilitySet::EMPTY,
             is_phantom,
         }
+    }
+
+    /// Build a fixture extending `empty_module()` with one
+    /// declared struct definition carrying `field_count` fields
+    /// of type `u64`. The struct's `struct_handle` is set to
+    /// a freshly-added in-bounds [`DatatypeHandle`]; the field
+    /// names are auto-generated (`f0`, `f1`, ...). Pre-condition:
+    /// no other modifications to the input fixture's
+    /// `datatype_handles` table; the new handle lands at index 0.
+    fn module_with_one_declared_struct_def(field_count: u16) -> AdamantCompiledModule {
+        let mut m = empty_module();
+        m.identifiers.push(Identifier::new("S").unwrap());
+        m.datatype_handles.push(DatatypeHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            abilities: AbilitySet::EMPTY,
+            type_parameters: vec![],
+        });
+        let mut fields = Vec::with_capacity(field_count as usize);
+        for i in 0..field_count {
+            m.identifiers
+                .push(Identifier::new(format!("f{i}")).unwrap());
+            // identifiers[0] = "M", [1] = "S", [2..] = field names
+            fields.push(FieldDefinition {
+                name: IdentifierIndex(2 + i),
+                signature: TypeSignature(SignatureToken::U64),
+            });
+        }
+        m.struct_defs.push(StructDefinition {
+            struct_handle: DatatypeHandleIndex(0),
+            field_information: StructFieldInformation::Declared(fields),
+        });
+        m
+    }
+
+    /// Build a fixture extending `empty_module()` with one
+    /// **native** struct definition. The pass's per-handle
+    /// validator computes `fields_count = 0` for native structs;
+    /// any field index against this struct rejects.
+    fn module_with_one_native_struct_def() -> AdamantCompiledModule {
+        let mut m = empty_module();
+        m.identifiers.push(Identifier::new("N").unwrap());
+        m.datatype_handles.push(DatatypeHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            abilities: AbilitySet::EMPTY,
+            type_parameters: vec![],
+        });
+        m.struct_defs.push(StructDefinition {
+            struct_handle: DatatypeHandleIndex(0),
+            field_information: StructFieldInformation::Native,
+        });
+        m
+    }
+
+    /// Build a fixture extending `empty_module()` with two
+    /// signatures (empty parameter list at index 0, empty return
+    /// list at index 1) and a single function handle pointing at
+    /// them with no type parameters. Used as the C-1.2
+    /// function-handle "all-valid" base; negative-case fixtures
+    /// override individual indices.
+    fn module_with_one_function_handle() -> AdamantCompiledModule {
+        let mut m = empty_module();
+        m.signatures.push(Signature(vec![])); // parameters at SignatureIndex(0)
+        m.signatures.push(Signature(vec![])); // return at SignatureIndex(1)
+        m.identifiers.push(Identifier::new("foo").unwrap());
+        m.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(1),
+            type_parameters: vec![],
+        });
+        m
     }
 
     // --- Layer A: positive cases ---
@@ -689,6 +981,567 @@ mod tests {
         }
     }
 
+    // --- Layer A: C-1.2 sub-checks (positions 6–11 of upstream verify_impl) ---
+
+    // check_function_handles ---------------------------------------------------
+
+    #[test]
+    fn function_handle_with_valid_indices_passes() {
+        let m = module_with_one_function_handle();
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn function_handle_with_type_parameter_in_parameters_passes() {
+        let mut m = module_with_one_function_handle();
+        // Replace SignatureIndex(0) with a single-token signature
+        // referencing TypeParameter(0); add a single type
+        // parameter to the function handle so the index is in
+        // range.
+        m.signatures[0] = Signature(vec![SignatureToken::TypeParameter(0)]);
+        m.function_handles[0].type_parameters = vec![AbilitySet::EMPTY];
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_function_handle_oob_module() {
+        let mut m = module_with_one_function_handle();
+        m.function_handles[0].module = ModuleHandleIndex(9);
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::ModuleHandle,
+                idx: 9,
+                pool_len: 1,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(ModuleHandle, 9, 1), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_function_handle_oob_name() {
+        let mut m = module_with_one_function_handle();
+        m.function_handles[0].name = IdentifierIndex(13);
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::Identifier,
+                idx: 13,
+                pool_len: 2,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(Identifier, 13, 2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_function_handle_oob_parameters() {
+        let mut m = module_with_one_function_handle();
+        m.function_handles[0].parameters = SignatureIndex(7);
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::Signature,
+                idx: 7,
+                pool_len: 2,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(Signature, 7, 2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_function_handle_oob_return() {
+        let mut m = module_with_one_function_handle();
+        m.function_handles[0].return_ = SignatureIndex(11);
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::Signature,
+                idx: 11,
+                pool_len: 2,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(Signature, 11, 2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_function_handle_parameter_with_oob_type_parameter() {
+        let mut m = module_with_one_function_handle();
+        // Parameters carry TypeParameter(5) but the function
+        // handle declares zero type parameters.
+        m.signatures[0] = Signature(vec![SignatureToken::TypeParameter(5)]);
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::TypeParameter,
+                idx: 5,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(TypeParameter, 5, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_function_handle_return_with_oob_type_parameter() {
+        let mut m = module_with_one_function_handle();
+        // Return signature carries TypeParameter(2) but the
+        // function handle declares zero type parameters.
+        // Parameters stay empty so the recursion reaches the
+        // return signature.
+        m.signatures[1] = Signature(vec![SignatureToken::TypeParameter(2)]);
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::TypeParameter,
+                idx: 2,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(TypeParameter, 2, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn function_handle_bounds_check_fires_before_type_parameter_recursion() {
+        // Both an OOB `parameters` index (signature OOB) AND a
+        // type-parameter violation in the (would-be) parameters
+        // signature. The bounds check on `parameters` fires
+        // first; the type-parameter recursion never runs.
+        let mut m = module_with_one_function_handle();
+        // OOB parameters signature index
+        m.function_handles[0].parameters = SignatureIndex(7);
+        // Modify SignatureIndex(0) to carry a TypeParameter(99)
+        // — would trigger the recursion check if reached. With
+        // OOB parameters, the recursion is gated behind the
+        // bounds check and never runs.
+        m.signatures[0] = Signature(vec![SignatureToken::TypeParameter(99)]);
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::Signature,
+                idx: 7,
+                pool_len: 2,
+            }) => {}
+            other => panic!(
+                "expected bounds-check OOB on parameters to win over recursion, got {other:?}"
+            ),
+        }
+    }
+
+    // check_field_handles ------------------------------------------------------
+
+    #[test]
+    fn field_handle_with_valid_owner_and_field_passes() {
+        let mut m = module_with_one_declared_struct_def(2);
+        m.field_handles.push(FieldHandle {
+            owner: StructDefinitionIndex(0),
+            field: 1, // < 2
+        });
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_field_handle_oob_owner() {
+        let mut m = empty_module();
+        m.field_handles.push(FieldHandle {
+            owner: StructDefinitionIndex(3),
+            field: 0,
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::StructDefinition,
+                idx: 3,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(StructDefinition, 3, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn field_handle_field_offset_against_native_struct_field_zero_rejects() {
+        // Per implementation-gate item #3: native-struct
+        // semantics → fields_count = 0 → any field index
+        // rejects. Pin field=0 explicitly so future regressions
+        // (e.g., "native means fields_count = u32::MAX") get
+        // caught.
+        let mut m = module_with_one_native_struct_def();
+        m.field_handles.push(FieldHandle {
+            owner: StructDefinitionIndex(0),
+            field: 0,
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::MemberCount,
+                idx: 0,
+                pool_len: 0,
+            }) => {}
+            other => panic!(
+                "expected IndexOutOfBounds(MemberCount, 0, 0) on native struct, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn field_handle_field_offset_against_native_struct_field_five_rejects() {
+        // Same pin but with field=5 to confirm the rejection
+        // shape is uniform across all field indices when the
+        // owning struct is native.
+        let mut m = module_with_one_native_struct_def();
+        m.field_handles.push(FieldHandle {
+            owner: StructDefinitionIndex(0),
+            field: 5,
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::MemberCount,
+                idx: 5,
+                pool_len: 0,
+            }) => {}
+            other => panic!(
+                "expected IndexOutOfBounds(MemberCount, 5, 0) on native struct, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn rejects_field_handle_field_at_or_above_declared_count() {
+        let mut m = module_with_one_declared_struct_def(2);
+        m.field_handles.push(FieldHandle {
+            owner: StructDefinitionIndex(0),
+            field: 2, // == fields_count, rejects
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::MemberCount,
+                idx: 2,
+                pool_len: 2,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(MemberCount, 2, 2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn field_handle_owner_bounds_fires_before_field_offset_check() {
+        // OOB owner AND a high field index (would fire on
+        // fields_count if reached). Owner bounds wins.
+        let mut m = empty_module();
+        m.field_handles.push(FieldHandle {
+            owner: StructDefinitionIndex(9),
+            field: 1000,
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::StructDefinition,
+                idx: 9,
+                pool_len: 0,
+            }) => {}
+            other => panic!(
+                "expected IndexOutOfBounds(StructDefinition, 9, 0) (owner wins), got {other:?}"
+            ),
+        }
+    }
+
+    // check_friend_decls -------------------------------------------------------
+
+    #[test]
+    fn friend_decl_with_valid_indices_passes() {
+        let mut m = empty_module();
+        m.identifiers.push(Identifier::new("F").unwrap());
+        m.friend_decls.push(ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(1),
+        });
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_friend_decl_oob_address() {
+        let mut m = empty_module();
+        m.friend_decls.push(ModuleHandle {
+            address: AddressIdentifierIndex(7),
+            name: IdentifierIndex(0),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::AddressIdentifier,
+                idx: 7,
+                pool_len: 1,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(AddressIdentifier, 7, 1), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_friend_decl_oob_name() {
+        let mut m = empty_module();
+        m.friend_decls.push(ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(13),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::Identifier,
+                idx: 13,
+                pool_len: 1,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(Identifier, 13, 1), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn friend_decls_iterates_in_storage_order_lowest_offender_wins() {
+        // Two friend decls — one OOB at index 0, one OOB at
+        // index 1. Iteration order reports decl 0's OOB first.
+        let mut m = empty_module();
+        m.friend_decls.push(ModuleHandle {
+            address: AddressIdentifierIndex(7), // OOB at decl 0
+            name: IdentifierIndex(0),
+        });
+        m.friend_decls.push(ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(99), // OOB at decl 1
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::AddressIdentifier,
+                idx: 7,
+                pool_len: 1,
+            }) => {}
+            other => panic!("expected decl 0's address OOB to win, got {other:?}"),
+        }
+    }
+
+    // check_struct_instantiations ----------------------------------------------
+
+    #[test]
+    fn struct_instantiation_with_valid_def_and_signature_passes() {
+        let mut m = module_with_one_declared_struct_def(0);
+        m.signatures.push(Signature(vec![SignatureToken::U64]));
+        m.struct_def_instantiations.push(StructDefInstantiation {
+            def: StructDefinitionIndex(0),
+            type_parameters: SignatureIndex(0),
+        });
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_struct_instantiation_oob_def() {
+        let mut m = empty_module();
+        m.signatures.push(Signature(vec![]));
+        m.struct_def_instantiations.push(StructDefInstantiation {
+            def: StructDefinitionIndex(5),
+            type_parameters: SignatureIndex(0),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::StructDefinition,
+                idx: 5,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(StructDefinition, 5, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_struct_instantiation_oob_type_parameters() {
+        let mut m = module_with_one_declared_struct_def(0);
+        m.struct_def_instantiations.push(StructDefInstantiation {
+            def: StructDefinitionIndex(0),
+            type_parameters: SignatureIndex(7),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::Signature,
+                idx: 7,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(Signature, 7, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn struct_instantiation_def_bounds_fires_before_type_parameters_bounds() {
+        // OOB def + OOB type_parameters. Def wins per upstream's
+        // ? ordering.
+        let mut m = empty_module();
+        m.struct_def_instantiations.push(StructDefInstantiation {
+            def: StructDefinitionIndex(9),
+            type_parameters: SignatureIndex(99),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::StructDefinition,
+                idx: 9,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected def bounds to win over type_parameters, got {other:?}"),
+        }
+    }
+
+    // check_function_instantiations --------------------------------------------
+
+    #[test]
+    fn function_instantiation_with_valid_handle_and_signature_passes() {
+        let mut m = module_with_one_function_handle();
+        m.signatures.push(Signature(vec![SignatureToken::U64]));
+        m.function_instantiations.push(FunctionInstantiation {
+            handle: FunctionHandleIndex(0),
+            type_parameters: SignatureIndex(2),
+        });
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_function_instantiation_oob_handle() {
+        let mut m = empty_module();
+        m.signatures.push(Signature(vec![]));
+        m.function_instantiations.push(FunctionInstantiation {
+            handle: FunctionHandleIndex(4),
+            type_parameters: SignatureIndex(0),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::FunctionHandle,
+                idx: 4,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(FunctionHandle, 4, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_function_instantiation_oob_type_parameters() {
+        let mut m = module_with_one_function_handle();
+        m.function_instantiations.push(FunctionInstantiation {
+            handle: FunctionHandleIndex(0),
+            type_parameters: SignatureIndex(11),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::Signature,
+                idx: 11,
+                pool_len: 2,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(Signature, 11, 2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn function_instantiation_handle_bounds_fires_before_type_parameters_bounds() {
+        let mut m = empty_module();
+        m.function_instantiations.push(FunctionInstantiation {
+            handle: FunctionHandleIndex(7),
+            type_parameters: SignatureIndex(13),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::FunctionHandle,
+                idx: 7,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected handle bounds to win, got {other:?}"),
+        }
+    }
+
+    // check_field_instantiations -----------------------------------------------
+
+    #[test]
+    fn field_instantiation_with_valid_handle_and_signature_passes() {
+        let mut m = module_with_one_declared_struct_def(2);
+        m.field_handles.push(FieldHandle {
+            owner: StructDefinitionIndex(0),
+            field: 0,
+        });
+        m.signatures.push(Signature(vec![SignatureToken::U64]));
+        m.field_instantiations.push(FieldInstantiation {
+            handle: FieldHandleIndex(0),
+            type_parameters: SignatureIndex(0),
+        });
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_field_instantiation_oob_handle() {
+        let mut m = empty_module();
+        m.signatures.push(Signature(vec![]));
+        m.field_instantiations.push(FieldInstantiation {
+            handle: FieldHandleIndex(3),
+            type_parameters: SignatureIndex(0),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::FieldHandle,
+                idx: 3,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(FieldHandle, 3, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_field_instantiation_oob_type_parameters() {
+        let mut m = module_with_one_declared_struct_def(2);
+        m.field_handles.push(FieldHandle {
+            owner: StructDefinitionIndex(0),
+            field: 0,
+        });
+        m.field_instantiations.push(FieldInstantiation {
+            handle: FieldHandleIndex(0),
+            type_parameters: SignatureIndex(8),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::Signature,
+                idx: 8,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(Signature, 8, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn field_instantiation_handle_bounds_fires_before_type_parameters_bounds() {
+        let mut m = empty_module();
+        m.field_instantiations.push(FieldInstantiation {
+            handle: FieldHandleIndex(5),
+            type_parameters: SignatureIndex(7),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::FieldHandle,
+                idx: 5,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected handle bounds to win, got {other:?}"),
+        }
+    }
+
+    // Cross-sub-check ordering pin ---------------------------------------------
+
+    #[test]
+    fn bounds_checker_sub_check_ordering_function_handles_before_field_handles() {
+        // OOB function-handle module + OOB field-handle owner.
+        // function-handles is at position 6; field-handles at 7.
+        // The function-handle violation wins.
+        let mut m = empty_module();
+        m.signatures.push(Signature(vec![]));
+        m.signatures.push(Signature(vec![]));
+        m.identifiers.push(Identifier::new("foo").unwrap());
+        m.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(99), // OOB
+            name: IdentifierIndex(1),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(1),
+            type_parameters: vec![],
+        });
+        m.field_handles.push(FieldHandle {
+            owner: StructDefinitionIndex(99), // OOB
+            field: 0,
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::ModuleHandle,
+                idx: 99,
+                pool_len: 1,
+            }) => {}
+            other => panic!(
+                "expected function-handle OOB at position 6 to win over field-handle OOB \
+                 at position 7, got {other:?}"
+            ),
+        }
+    }
+
     // --- Layer B: cross-validation against vendored Sui ---
     //
     // For each fixture below, run Adamant's `verify` and Sui's
@@ -834,6 +1687,132 @@ mod tests {
     #[test]
     fn cross_validation_rejects_no_module_handles() {
         let m = AdamantCompiledModule::default();
+        cross_validate_bounds_pass(&m);
+    }
+
+    // --- Layer B: C-1.2 cross-validation ---
+
+    #[test]
+    fn cross_validation_accepts_module_with_function_handle() {
+        let m = module_with_one_function_handle();
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_function_handle_oob_module() {
+        let mut m = module_with_one_function_handle();
+        m.function_handles[0].module = ModuleHandleIndex(9);
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_module_with_field_handle() {
+        let mut m = module_with_one_declared_struct_def(2);
+        m.field_handles.push(FieldHandle {
+            owner: StructDefinitionIndex(0),
+            field: 1,
+        });
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_field_handle_oob_owner() {
+        let mut m = empty_module();
+        m.field_handles.push(FieldHandle {
+            owner: StructDefinitionIndex(3),
+            field: 0,
+        });
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_module_with_valid_friend_decl() {
+        let mut m = empty_module();
+        m.identifiers.push(Identifier::new("F").unwrap());
+        m.friend_decls.push(ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(1),
+        });
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_friend_decl_oob_address() {
+        let mut m = empty_module();
+        m.friend_decls.push(ModuleHandle {
+            address: AddressIdentifierIndex(7),
+            name: IdentifierIndex(0),
+        });
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_module_with_struct_instantiation() {
+        let mut m = module_with_one_declared_struct_def(0);
+        m.signatures.push(Signature(vec![SignatureToken::U64]));
+        m.struct_def_instantiations.push(StructDefInstantiation {
+            def: StructDefinitionIndex(0),
+            type_parameters: SignatureIndex(0),
+        });
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_struct_instantiation_oob_def() {
+        let mut m = empty_module();
+        m.signatures.push(Signature(vec![]));
+        m.struct_def_instantiations.push(StructDefInstantiation {
+            def: StructDefinitionIndex(5),
+            type_parameters: SignatureIndex(0),
+        });
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_module_with_function_instantiation() {
+        let mut m = module_with_one_function_handle();
+        m.signatures.push(Signature(vec![SignatureToken::U64]));
+        m.function_instantiations.push(FunctionInstantiation {
+            handle: FunctionHandleIndex(0),
+            type_parameters: SignatureIndex(2),
+        });
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_function_instantiation_oob_handle() {
+        let mut m = empty_module();
+        m.signatures.push(Signature(vec![]));
+        m.function_instantiations.push(FunctionInstantiation {
+            handle: FunctionHandleIndex(4),
+            type_parameters: SignatureIndex(0),
+        });
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_module_with_field_instantiation() {
+        let mut m = module_with_one_declared_struct_def(2);
+        m.field_handles.push(FieldHandle {
+            owner: StructDefinitionIndex(0),
+            field: 0,
+        });
+        m.signatures.push(Signature(vec![SignatureToken::U64]));
+        m.field_instantiations.push(FieldInstantiation {
+            handle: FieldHandleIndex(0),
+            type_parameters: SignatureIndex(0),
+        });
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_field_instantiation_oob_handle() {
+        let mut m = empty_module();
+        m.signatures.push(Signature(vec![]));
+        m.field_instantiations.push(FieldInstantiation {
+            handle: FieldHandleIndex(3),
+            type_parameters: SignatureIndex(0),
+        });
         cross_validate_bounds_pass(&m);
     }
 }
