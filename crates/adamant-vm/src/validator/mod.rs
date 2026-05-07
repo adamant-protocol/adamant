@@ -51,14 +51,25 @@
 //! Eager error semantics: returns the first violation
 //! encountered at any pipeline stage.
 //!
-//! # Module-level pass coverage (Phase 5/5b.2)
+//! # Module-level pass coverage (Phase 5/5b.3 closure)
 //!
-//! Eight Adamant-native module-level passes wired at step 3:
+//! Eleven Adamant-native module-level passes wired at step 3.
+//! Eight landed at Phase 5/5b.2 B-5; three new at C-4 (Phase
+//! 5/5b.3 pipeline integration of the `BoundsChecker` /
+//! `DuplicationChecker` / `SignatureChecker` fork-from-upstream
+//! ports). Order is precedence-driven (`bounds_checker` first
+//! for IndexOutOfBounds-vs-limits-overflow); remainder
+//! alphabetical for audit-friendliness:
 //!
-//! - [`module_pass::constants`] (B-2.1) — constant-pool
-//!   validation
+//! - [`module_pass::bounds_checker`] (C-1) — bytecode-format
+//!   bounds checking; **position 1 precedence-driven**
 //! - [`module_pass::ability_field_requirements`] (B-2.3) —
 //!   struct/enum field ability requirements
+//! - [`module_pass::constants`] (B-2.1) — constant-pool
+//!   validation; preserves `MalformedConstantData` precedence
+//!   over `limits` (position 8)
+//! - [`module_pass::duplication_checker`] (C-2) — handle-and-
+//!   identifier duplication checking
 //! - [`module_pass::friends`] (B-2.2) — friend-declaration
 //!   validation
 //! - [`module_pass::instantiation_loops`] (B-3.3) — generic-
@@ -71,6 +82,17 @@
 //!   privacy-metadata structural well-formedness
 //! - [`module_pass::recursive_data_def`] (B-3.2) — recursive
 //!   data-definition cycle detection
+//! - [`module_pass::signature_checker`] (C-3) — signature
+//!   well-formedness, phantom-param positions, generic-
+//!   instance arity + ability constraints
+//!
+//! Per §6.2.1.8 line 524, the spec enumerates 10 passes
+//! (bounds, limits, duplication, signature, instruction-
+//! consistency, constants, friends, ability-field, recursive-
+//! data, instantiation-loops); the 11th
+//! (`privacy_metadata_structure`) is an Adamant-specific
+//! addition per the line 524 "extended where necessary"
+//! clause for the `b"adamant.privacy"` metadata entry.
 //!
 //! Three Adamant-specific rules wired at step 5:
 //!
@@ -219,18 +241,50 @@ pub fn verify_module(
     // Adamant decision documented in
     // `module_pass/PROVENANCE.md`.
     //
-    // All eight passes run unconditionally — they handle
+    // All eleven passes run unconditionally — they handle
     // both inherited-subset and Adamant-extension modules
     // correctly. The Sui-verifier-bridge transitional step
     // below provides defense-in-depth for inherited modules
     // only; Phase 5/5b.5 removes the bridge.
-    module_pass::constants::verify(&module)?;
+    //
+    // C-4 invocation order (Phase 5/5b.3): two precedence-
+    // driven passes ahead of alphabetical-of-remainder:
+    //
+    //   1. bounds_checker (C-1) — first; its IndexOutOfBounds
+    //      reaches first on overlapping inputs against
+    //      limits' count overflow.
+    //   2..9. alphabetical remainder.
+    //   10. signature_checker (C-3) — placed deliberately
+    //       before recursive_data_def (which alphabetically
+    //       would precede it) because recursive_data_def's
+    //       `unreachable!` for refs-in-field-type positions
+    //       depends on signature_checker having already
+    //       rejected RefAsFieldType. Without this ordering,
+    //       a malformed module with a ref in a field would
+    //       panic recursive_data_def instead of producing a
+    //       typed InvalidSignatureToken error.
+    //   11. recursive_data_def — alphabetical end.
+    //
+    // duplication_checker is naturally alphabetical-before
+    // recursive_data_def (d < r); no separate precedence
+    // ordering needed there. The same structural-impossibility
+    // argument applies (duplication_checker enforces handle
+    // uniqueness before recursive_data_def's handle-to-def
+    // map fires `assert!`).
+    //
+    // MalformedConstantData precedence preserved: constants
+    // (position 3) still wins over limits (position 8) under
+    // the alphabetical-of-remainder ordering.
+    module_pass::bounds_checker::verify(&module)?;
     module_pass::ability_field_requirements::verify(&module)?;
+    module_pass::constants::verify(&module)?;
+    module_pass::duplication_checker::verify(&module)?;
     module_pass::friends::verify(&module)?;
     module_pass::instantiation_loops::verify(&module)?;
     module_pass::instruction_consistency::verify(&module)?;
     module_pass::limits::verify(&module, config.structural_limits())?;
     module_pass::privacy_metadata_structure::verify(&module)?;
+    module_pass::signature_checker::verify(&module)?;
     module_pass::recursive_data_def::verify(&module)?;
 
     // Step 3 + 4 transitional: inherited Sui-Move verifier
@@ -976,5 +1030,162 @@ mod tests {
             verify_module(&bytes, &config).is_ok(),
             "full happy-path module must pass verify_module"
         );
+    }
+
+    // --- C-4 (Phase 5/5b.3): pipeline integration of bounds_checker /
+    //                         duplication_checker / signature_checker ---
+
+    #[test]
+    fn integration_rejects_oob_self_module_handle_via_bounds_checker() {
+        // bounds_checker fires IndexOutOfBounds(ModuleHandle, ...)
+        // when self_module_handle_idx points past module_handles.
+        // Pin: BoundsChecker is wired and reaches this rejection
+        // through the full verify_module pipeline.
+        let mut m = integration_base_module();
+        m.self_module_handle_idx = ModuleHandleIndex(7);
+        let bytes = serialize_module(&m);
+        let config = AdamantVerifierConfig::new();
+        match verify_module(&bytes, &config) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: adamant_bytecode_format::IndexKind::ModuleHandle,
+                idx: 7,
+                pool_len: 1,
+            }) => {}
+            other => panic!(
+                "expected IndexOutOfBounds(ModuleHandle, 7, 1) via bounds_checker, \
+                 got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn integration_rejects_duplicate_identifier_via_duplication_checker() {
+        // duplication_checker fires DuplicateElement(Identifier, _)
+        // on a module with two identical identifier entries.
+        let mut m = integration_base_module();
+        m.identifiers.push(Identifier::new("dup").unwrap());
+        m.identifiers.push(Identifier::new("dup").unwrap());
+        let bytes = serialize_module(&m);
+        let config = AdamantVerifierConfig::new();
+        match verify_module(&bytes, &config) {
+            Err(AdamantValidationError::DuplicateElement {
+                kind: adamant_bytecode_format::IndexKind::Identifier,
+                ..
+            }) => {}
+            other => panic!(
+                "expected DuplicateElement(Identifier, ...) via duplication_checker, \
+                 got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn integration_rejects_ref_inside_vector_via_signature_checker() {
+        // signature_checker fires InvalidSignatureToken
+        // (RefInsideContainer) on a module with a Vector<&u64>
+        // signature.
+        let mut m = integration_base_module();
+        m.signatures.push(adamant_bytecode_format::Signature(vec![
+            adamant_bytecode_format::SignatureToken::Vector(Box::new(
+                adamant_bytecode_format::SignatureToken::Reference(Box::new(
+                    adamant_bytecode_format::SignatureToken::U64,
+                )),
+            )),
+        ]));
+        let bytes = serialize_module(&m);
+        let config = AdamantVerifierConfig::new();
+        match verify_module(&bytes, &config) {
+            Err(AdamantValidationError::InvalidSignatureToken {
+                reason: crate::validator::error::InvalidSignatureReason::RefInsideContainer,
+            }) => {}
+            other => panic!(
+                "expected InvalidSignatureToken(RefInsideContainer) via signature_checker, \
+                 got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn precedence_duplication_checker_wins_over_signature_checker() {
+        // Q2 Claim 3 empirical resolution: a fixture with two
+        // identical `Vec<&u64>` signatures triggers BOTH passes:
+        //  - duplication_checker fires DuplicateElement(Signature)
+        //    because signatures[0] == signatures[1].
+        //  - signature_checker fires InvalidSignatureToken
+        //    (RefInsideContainer) because signatures[0] has a
+        //    ref inside vector.
+        // duplication_checker at position 4 wins over
+        // signature_checker at position 10. Cross-pass eager-
+        // error precedence claim #3 (after MalformedConstantData
+        // and MalformedPrivacyMetadata) — different variants on
+        // overlapping inputs (not shared-variant precedence).
+        let mut m = integration_base_module();
+        let bad_sig = adamant_bytecode_format::Signature(vec![
+            adamant_bytecode_format::SignatureToken::Vector(Box::new(
+                adamant_bytecode_format::SignatureToken::Reference(Box::new(
+                    adamant_bytecode_format::SignatureToken::U64,
+                )),
+            )),
+        ]);
+        m.signatures.push(bad_sig.clone());
+        m.signatures.push(bad_sig);
+        let bytes = serialize_module(&m);
+        let config = AdamantVerifierConfig::new();
+        match verify_module(&bytes, &config) {
+            Err(AdamantValidationError::DuplicateElement {
+                kind: adamant_bytecode_format::IndexKind::Signature,
+                ..
+            }) => {}
+            other => panic!(
+                "expected duplication_checker to win (DuplicateElement(Signature)) \
+                 over signature_checker on overlapping input, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn precedence_signature_checker_wins_over_recursive_data_def() {
+        // Cross-sub-check ordering pin (precedence-driven):
+        // signature_checker (position 10) is placed before
+        // recursive_data_def (position 11) so that ref-in-field-
+        // type rejection produces typed InvalidSignatureToken
+        // rather than panicking recursive_data_def's
+        // unreachable! arm. A struct with a `&u64` field
+        // exercises this ordering.
+        let mut m = integration_base_module();
+        m.identifiers.push(Identifier::new("S").unwrap());
+        m.identifiers.push(Identifier::new("f").unwrap());
+        m.datatype_handles
+            .push(adamant_bytecode_format::DatatypeHandle {
+                module: ModuleHandleIndex(0),
+                name: adamant_bytecode_format::IdentifierIndex(1),
+                abilities: adamant_bytecode_format::AbilitySet::EMPTY,
+                type_parameters: vec![],
+            });
+        m.struct_defs
+            .push(adamant_bytecode_format::StructDefinition {
+                struct_handle: adamant_bytecode_format::DatatypeHandleIndex(0),
+                field_information: adamant_bytecode_format::StructFieldInformation::Declared(vec![
+                    adamant_bytecode_format::FieldDefinition {
+                        name: adamant_bytecode_format::IdentifierIndex(2),
+                        signature: adamant_bytecode_format::TypeSignature(
+                            adamant_bytecode_format::SignatureToken::Reference(Box::new(
+                                adamant_bytecode_format::SignatureToken::U64,
+                            )),
+                        ),
+                    },
+                ]),
+            });
+        let bytes = serialize_module(&m);
+        let config = AdamantVerifierConfig::new();
+        match verify_module(&bytes, &config) {
+            Err(AdamantValidationError::InvalidSignatureToken {
+                reason: crate::validator::error::InvalidSignatureReason::RefAsFieldType,
+            }) => {}
+            other => panic!(
+                "expected signature_checker to fire RefAsFieldType before \
+                 recursive_data_def's unreachable! arm, got {other:?}"
+            ),
+        }
     }
 }

@@ -141,11 +141,6 @@
 //! [`DefKind`]: crate::validator::error::DefKind
 //! [`FieldOwnerKind`]: crate::validator::error::FieldOwnerKind
 
-#![allow(
-    dead_code,
-    reason = "Pass not wired into verify_module until Phase 5/5b.3 C-4."
-)]
-
 use std::collections::HashSet;
 use std::hash::Hash;
 

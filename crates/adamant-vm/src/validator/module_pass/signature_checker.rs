@@ -140,11 +140,6 @@
 //! [`AdamantValidationError`]: crate::validator::error::AdamantValidationError
 //! [`InvalidSignatureReason`]: crate::validator::error::InvalidSignatureReason
 
-#![allow(
-    dead_code,
-    reason = "Pass not wired into verify_module until Phase 5/5b.3 C-4."
-)]
-
 use std::collections::{HashMap, HashSet};
 
 use adamant_bytecode_format::{

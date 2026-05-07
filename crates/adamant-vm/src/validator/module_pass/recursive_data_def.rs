@@ -43,26 +43,41 @@
 //!
 //! 1. **Duplicate handle-to-def mapping.** Upstream: a struct
 //!    or enum handle index maps to two different def positions.
-//!    The `DuplicationChecker` pass (one of the three large
-//!    module-level passes; not yet ported in Phase 5/5b.2)
-//!    would catch this earlier in the pipeline.
+//!    The [`module_pass::duplication_checker`][super::duplication_checker]
+//!    pass (Phase 5/5b.3 C-2; `verify_impl` positions 14 and
+//!    16) catches this earlier in the pipeline via
+//!    `check_struct_definitions` (struct-handle uniqueness)
+//!    and `check_enum_definitions` (joint struct/enum handle
+//!    uniqueness).
 //! 2. **Reference field in a datatype position.** Upstream:
 //!    a struct or enum field's signature is a `Reference(_)`
 //!    or `MutableReference(_)` token (references are not
-//!    permitted as field types). The `SignatureChecker` pass
-//!    (also one of the three large passes; not yet ported)
-//!    would catch this earlier.
+//!    permitted as field types). The
+//!    [`module_pass::signature_checker`][super::signature_checker]
+//!    pass (Phase 5/5b.3 C-3; `verify_impl` positions 3-4
+//!    `verify_struct_fields` / `verify_enum_fields`) catches
+//!    this earlier via `check_field_signature_token`'s
+//!    `RefAsFieldType` rejection.
 //!
 //! Both are treated as Adamant implementation bugs at this
-//! pass's pipeline position — `expect()` with structural-
-//! impossibility messages noting that the upstream pass is
-//! "not yet ported" (a known cleanup item: when
-//! `DuplicationChecker` and `SignatureChecker` land in a
-//! later sub-arc, the "not yet ported" qualifier drops).
-//! Same shape as B-2.4's deprecated-arms `unreachable!` and
-//! B-3.1's `<SELF>` rejection pin — third instance of the
-//! structural-impossibility-checks pattern named in B-3.4
-//! PROVENANCE.md batch.
+//! pass's pipeline position — `assert!`/`unreachable!` with
+//! structural-impossibility messages naming the
+//! upstream-of-this-pass pass that enforces the property.
+//! Per the C-4 wiring (Phase 5/5b.3), both `duplication_checker`
+//! (alphabetical-before, position 4) and `signature_checker`
+//! (precedence-driven, position 10) run before
+//! `recursive_data_def` (position 11) in
+//! [`super::super::verify_module`]. `signature_checker`'s
+//! position is precedence-driven specifically because
+//! `recursive_data_def`'s structural argument requires it —
+//! pure alphabetical ordering would place `signature_checker`
+//! after `recursive_data_def`, which would let a malformed
+//! ref-in-field-type module panic `recursive_data_def`
+//! instead of producing a typed `InvalidSignatureToken`
+//! error. Same shape as B-2.4's deprecated-arms
+//! `unreachable!` and B-3.1's `<SELF>` rejection pin —
+//! third instance of the structural-impossibility-checks
+//! pattern named in B-3.4 PROVENANCE.md batch.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -129,10 +144,12 @@ fn build_handle_to_def(module: &AdamantCompiledModule) -> BTreeMap<DatatypeHandl
         assert!(
             prev.is_none(),
             "duplicate struct_handle in handle_to_def map: \
-             DuplicationChecker pass guarantees uniqueness, but that pass \
-             is not yet ported (Phase 5/5b.2 B-3 large-pass set). When \
-             DuplicationChecker lands, the 'not yet ported' qualifier \
-             drops from this assertion message."
+             check_struct_definitions in module_pass::duplication_checker \
+             (Phase 5/5b.3 C-2; verify_impl position 14) guarantees \
+             uniqueness via first_duplicate_element over struct_defs by \
+             struct_handle. A fired assert here indicates duplication_checker \
+             is broken or the cross-pass invocation order has been violated \
+             — an Adamant implementation bug, not a module-level rejection."
         );
     }
     for (idx, enum_def) in module.enum_defs.iter().enumerate() {
@@ -144,10 +161,13 @@ fn build_handle_to_def(module: &AdamantCompiledModule) -> BTreeMap<DatatypeHandl
         assert!(
             prev.is_none(),
             "duplicate enum_handle in handle_to_def map: \
-             DuplicationChecker pass guarantees uniqueness, but that pass \
-             is not yet ported (Phase 5/5b.2 B-3 large-pass set). When \
-             DuplicationChecker lands, the 'not yet ported' qualifier \
-             drops from this assertion message."
+             check_enum_definitions in module_pass::duplication_checker \
+             (Phase 5/5b.3 C-2; verify_impl position 16) guarantees \
+             uniqueness across struct_defs AND enum_defs jointly via \
+             first_duplicate_element by DatatypeHandleIndex. A fired \
+             assert here indicates duplication_checker is broken or the \
+             cross-pass invocation order has been violated — an Adamant \
+             implementation bug, not a module-level rejection."
         );
     }
     handle_to_def
@@ -209,15 +229,23 @@ fn add_signature_token(
         | SignatureToken::TypeParameter(_) => (),
         SignatureToken::Reference(_) | SignatureToken::MutableReference(_) => {
             // Reference fields in datatype positions are a
-            // SignatureChecker-pass concern (not yet ported).
-            // Same structural-impossibility pattern as B-2.4
-            // and B-3.1 — see the module-level doc comment.
+            // SignatureChecker-pass concern. Per Phase 5/5b.3
+            // C-3 + C-4 wiring, signature_checker runs before
+            // recursive_data_def in verify_module's step-3
+            // batch and rejects RefAsFieldType via
+            // check_field_signature_token. Same structural-
+            // impossibility pattern as B-2.4 and B-3.1 — see
+            // the module-level doc comment.
             unreachable!(
-                "reference field in a datatype position: SignatureChecker \
-                 pass guarantees absence, but that pass is not yet ported \
-                 (Phase 5/5b.2 B-3 large-pass set). When SignatureChecker \
-                 lands, the 'not yet ported' qualifier drops from this \
-                 unreachable! message."
+                "reference field in a datatype position: \
+                 module_pass::signature_checker (Phase 5/5b.3 C-3; \
+                 verify_impl positions 3-4 verify_struct_fields / \
+                 verify_enum_fields) rejects refs at struct/enum field \
+                 positions via check_field_signature_token. A fired \
+                 unreachable here indicates signature_checker is broken \
+                 or the cross-pass invocation order has been violated \
+                 — an Adamant implementation bug, not a module-level \
+                 rejection."
             );
         }
         SignatureToken::Vector(inner) => add_signature_token(neighbors, handle_to_def, cur, inner),

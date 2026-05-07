@@ -254,11 +254,6 @@
 //! [`AdamantValidationError`]: crate::validator::error::AdamantValidationError
 //! [`verify_impl`]: https://github.com/MystenLabs/sui/blob/mainnet-v1.66.2/external-crates/move/crates/move-binary-format/src/check_bounds.rs#L52
 
-#![allow(
-    dead_code,
-    reason = "Pass not wired into verify_module until Phase 5/5b.3 C-4."
-)]
-
 use adamant_bytecode_format::{
     Bytecode, CodeOffset, FunctionDefinitionIndex, IndexKind, JumpTableInner, LocalIndex,
     ModuleIndex, SignatureIndex, SignatureToken, TableIndex,
