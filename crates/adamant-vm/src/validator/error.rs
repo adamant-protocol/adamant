@@ -823,6 +823,97 @@ pub enum AdamantValidationError {
         /// Index of the offending handle.
         idx: TableIndex,
     },
+
+    /// A reference (`&T` or `&mut T`) appears in a signature
+    /// position where references are not allowed. The
+    /// `reason` field discriminates the rejection context:
+    /// `RefInsideContainer` for refs nested inside vector or
+    /// datatype-instantiation tokens; `RefAsFieldType` for
+    /// refs at the top level of a struct/enum field signature.
+    ///
+    /// Mirrors upstream's `StatusCode::INVALID_SIGNATURE_TOKEN`
+    /// produced by `SignatureChecker::check_signature_token`'s
+    /// reference-rejection arm.
+    ///
+    /// Phase 5/5b.3 C-3
+    /// (`module_pass::signature_checker`).
+    InvalidSignatureToken {
+        /// Discriminator for the rejection context. See
+        /// [`InvalidSignatureReason`].
+        reason: InvalidSignatureReason,
+    },
+
+    /// A generic-instance type-argument list has a different
+    /// number of arguments than the addressed handle's
+    /// declared type-parameter count. Distinct from
+    /// [`Self::NumberOfTypeArgumentsMismatch`] (which fires at
+    /// the bounds-check layer for `Datatype` /
+    /// `DatatypeInstantiation` signature-token references);
+    /// this variant fires at generic-call-site mismatches in
+    /// the signature-checker layer (`CallGeneric`,
+    /// `PackGeneric`, `PackVariantGeneric`, etc.).
+    ///
+    /// Mirrors upstream's
+    /// `StatusCode::NUMBER_OF_TYPE_ARGUMENTS_MISMATCH` from
+    /// `SignatureChecker::check_generic_instance`.
+    ///
+    /// Phase 5/5b.3 C-3
+    /// (`module_pass::signature_checker`).
+    TypeArgumentsArityMismatch {
+        /// Type-parameter count declared by the addressed
+        /// handle.
+        expected: usize,
+        /// Type-argument count supplied by the call site.
+        actual: usize,
+    },
+
+    /// A generic-instance type argument's effective ability
+    /// set doesn't contain the constraint declared by the
+    /// addressed handle's type parameter. The
+    /// `type_param_idx` field identifies which type parameter
+    /// the violation belongs to.
+    ///
+    /// Mirrors upstream's `StatusCode::CONSTRAINT_NOT_SATISFIED`
+    /// from `SignatureChecker::check_generic_instance`.
+    ///
+    /// Phase 5/5b.3 C-3
+    /// (`module_pass::signature_checker`).
+    ConstraintNotSatisfied {
+        /// Index (within the constraints list) of the
+        /// type parameter whose constraint wasn't satisfied.
+        type_param_idx: u16,
+    },
+
+    /// A phantom type parameter is used in a non-phantom
+    /// position. Phantom parameters can only appear at
+    /// positions whose enclosing instantiation flags them as
+    /// phantom; using one in a non-phantom slot is rejected.
+    ///
+    /// Mirrors upstream's
+    /// `StatusCode::INVALID_PHANTOM_TYPE_PARAM_POSITION` from
+    /// `SignatureChecker::check_phantom_params`.
+    ///
+    /// Phase 5/5b.3 C-3
+    /// (`module_pass::signature_checker`).
+    InvalidPhantomTypeParamPosition,
+
+    /// A vec-op instruction (`VecPack`, `VecLen`, `VecImmBorrow`,
+    /// `VecMutBorrow`, `VecPushBack`, `VecPopBack`, `VecUnpack`,
+    /// `VecSwap`) carries a type-argument signature whose
+    /// length is not exactly 1. Vec ops require exactly one
+    /// type argument (the element type).
+    ///
+    /// Mirrors upstream's "expected 1 type token for vector
+    /// operations" rejection from
+    /// `SignatureChecker::verify_code`.
+    ///
+    /// Phase 5/5b.3 C-3
+    /// (`module_pass::signature_checker`).
+    VecOpExpectedSingleTypeArgument {
+        /// Actual type-argument count supplied by the vec-op
+        /// instruction's signature.
+        actual: usize,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 3, 6, 7 land in subsequent
@@ -886,6 +977,56 @@ impl core::fmt::Display for DefKind {
             Self::Struct => write!(f, "struct"),
             Self::Enum => write!(f, "enum"),
             Self::Function => write!(f, "function"),
+        }
+    }
+}
+
+/// Discriminator for [`AdamantValidationError::InvalidSignatureToken`]
+/// rejection contexts.
+///
+/// Per Q3 disposition at the C-3 plan-gate: start with 2
+/// variants (`RefInsideContainer` for refs nested inside
+/// vector/datatype-instantiation; `RefAsFieldType` for refs at
+/// the top level of struct/enum-variant field signatures);
+/// evaluate adding `RefInVecOpTypeArg` if structurally distinct
+/// at implementation. Resolved at implementation: vec-op
+/// type-argument context shares the `check_signature_tokens`
+/// shape with field-context (both reject all references at
+/// the same recursion entry), so a third variant didn't
+/// surface. Plan-gate's plan-incremental-disposition-resolved-
+/// empirically pattern applied (5th plan-gate resolution
+/// shape).
+///
+/// Phase 5/5b.3 C-3
+/// (`module_pass::signature_checker`).
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum InvalidSignatureReason {
+    /// A reference appears nested inside a `Vector(_)` or
+    /// `DatatypeInstantiation(_)` token. References are
+    /// allowed at the top level of a function-signature token
+    /// only; nested positions reject.
+    RefInsideContainer,
+    /// A reference appears at the top level of a struct or
+    /// enum-variant field signature. Field signatures reject
+    /// references entirely (no top-level allowance).
+    RefAsFieldType,
+}
+
+impl core::fmt::Display for InvalidSignatureReason {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::RefInsideContainer => {
+                write!(
+                    f,
+                    "reference nested inside container token (vector or datatype instantiation)"
+                )
+            }
+            Self::RefAsFieldType => {
+                write!(
+                    f,
+                    "reference appearing as a struct or enum-variant field type"
+                )
+            }
         }
     }
 }
@@ -1300,6 +1441,32 @@ impl core::fmt::Display for AdamantValidationError {
                 "{kind} {idx} references the module's self-handle but has no \
                  corresponding definition (whitepaper §6.2.1.8 step 3, \
                  `module_pass::duplication_checker`)"
+            ),
+            Self::InvalidSignatureToken { reason } => write!(
+                f,
+                "invalid signature token: {reason} \
+                 (whitepaper §6.2.1.8 step 3, `module_pass::signature_checker`)"
+            ),
+            Self::TypeArgumentsArityMismatch { expected, actual } => write!(
+                f,
+                "generic instance expects {expected} type argument(s), got {actual} \
+                 (whitepaper §6.2.1.8 step 3, `module_pass::signature_checker`)"
+            ),
+            Self::ConstraintNotSatisfied { type_param_idx } => write!(
+                f,
+                "type argument at type-parameter index {type_param_idx} does not satisfy \
+                 the addressed handle's declared ability constraint \
+                 (whitepaper §6.2.1.8 step 3, `module_pass::signature_checker`)"
+            ),
+            Self::InvalidPhantomTypeParamPosition => write!(
+                f,
+                "phantom type parameter used in non-phantom position \
+                 (whitepaper §6.2.1.8 step 3, `module_pass::signature_checker`)"
+            ),
+            Self::VecOpExpectedSingleTypeArgument { actual } => write!(
+                f,
+                "vec op expects 1 type argument, got {actual} \
+                 (whitepaper §6.2.1.8 step 3, `module_pass::signature_checker`)"
             ),
         }
     }

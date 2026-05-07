@@ -53,6 +53,7 @@ pub(super) mod instruction_consistency;
 pub(super) mod limits;
 pub(super) mod privacy_metadata_structure;
 pub(super) mod recursive_data_def;
+mod signature_checker;
 
 #[cfg(test)]
 pub(in crate::validator::module_pass) mod test_helpers {

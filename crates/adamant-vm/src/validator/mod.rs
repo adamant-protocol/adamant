@@ -110,7 +110,8 @@ mod test_fixtures;
 
 pub use config::AdamantVerifierConfig;
 pub use error::{
-    AdamantValidationError, DefKind, FieldOwnerKind, HandleKind, MalformedConstantReason,
+    AdamantValidationError, DefKind, FieldOwnerKind, HandleKind, InvalidSignatureReason,
+    MalformedConstantReason,
 };
 
 use move_binary_format::{errors::Location, file_format::CompiledModule};
