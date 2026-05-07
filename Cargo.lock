@@ -91,6 +91,7 @@ dependencies = [
  "move-bytecode-verifier-meter",
  "move-core-types",
  "move-vm-config",
+ "petgraph",
  "proptest",
  "serde",
  "serde-big-array",

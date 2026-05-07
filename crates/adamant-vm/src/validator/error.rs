@@ -389,6 +389,21 @@ pub enum AdamantValidationError {
         /// Index into `enum_defs` of the offending entry.
         def_idx: EnumDefinitionIndex,
     },
+
+    /// A struct or enum definition is recursive (its own type
+    /// transitively references itself through field-signature
+    /// edges). The module-dependency graph is acyclic by
+    /// construction at the inter-module level; this pass
+    /// rejects intra-module recursion.
+    ///
+    /// Phase 5/5b.2 B-3.2 (`module_pass::recursive_data_def`).
+    RecursiveDataDefinition {
+        /// Whether the offending datatype is in `struct_defs`
+        /// or `enum_defs`.
+        kind: FieldOwnerKind,
+        /// Index into the corresponding def table.
+        idx: TableIndex,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 2, 3, 6, 7 land in subsequent
@@ -665,6 +680,13 @@ impl core::fmt::Display for AdamantValidationError {
                  max_variants_in_enum (whitepaper §6.2.1.8 step 3, \
                  `module_pass::limits`)",
                 def_idx.0
+            ),
+            Self::RecursiveDataDefinition { kind, idx } => write!(
+                f,
+                "{kind} definition {idx} is recursive (transitively \
+                 references itself through field-signature edges) \
+                 (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::recursive_data_def`)"
             ),
         }
     }

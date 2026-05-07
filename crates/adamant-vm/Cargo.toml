@@ -50,6 +50,18 @@ move-bytecode-verifier = { workspace = true }
 # enforcement point is in `adamant_deserialize`'s strict mode
 # post-Phase 5/5a).
 move-vm-config = { workspace = true }
+# Graph algorithms for the recursive-data-definition cycle
+# detector (Phase 5/5b.2 B-3.2 `module_pass::recursive_data_def`)
+# and the generic-instantiation-loop detector (B-3.3
+# `module_pass::instantiation_loops`). Petgraph is the first
+# non-Sui-vendor-derived production dep on `adamant-vm`.
+# MSRV verified at B-3.2 start: petgraph 0.8.3 documents
+# `rust-version = "1.64"`; Adamant's `rust-toolchain.toml`
+# pins channel `1.95.0`. License Apache-2.0 / MIT dual,
+# compatible with Adamant's Apache 2.0. Production-dep audit
+# template established here for future graph/algorithm
+# crates — registered for B-3.4 PROVENANCE.md batch.
+petgraph = { workspace = true }
 serde = { workspace = true }
 serde-big-array = { workspace = true }
 bcs = { workspace = true }

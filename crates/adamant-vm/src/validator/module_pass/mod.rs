@@ -48,6 +48,7 @@ mod constants;
 mod friends;
 mod instruction_consistency;
 mod limits;
+mod recursive_data_def;
 
 #[cfg(test)]
 pub(in crate::validator::module_pass) mod test_helpers {
