@@ -10,7 +10,10 @@
 //! Eager semantics: callers receive the first violation
 //! encountered.
 
-use adamant_bytecode_format::{CodeOffset, ConstantPoolIndex, FunctionDefinitionIndex, TableIndex};
+use adamant_bytecode_format::{
+    CodeOffset, ConstantPoolIndex, EnumDefinitionIndex, FunctionDefinitionIndex,
+    FunctionHandleIndex, IdentifierIndex, TableIndex,
+};
 use adamant_types::Address;
 use move_binary_format::errors::VMError;
 
@@ -283,10 +286,136 @@ pub enum AdamantValidationError {
         /// The offending element-count operand.
         num: u64,
     },
+
+    /// A `Vector<T>` constant's element count exceeds
+    /// `AdamantStructuralLimits::max_constant_vector_len`.
+    /// The element count is decoded from the outer ULEB128
+    /// length prefix of the constant's BCS-encoded data.
+    ///
+    /// Phase 5/5b.2 B-3.1 (`module_pass::limits`).
+    TooManyVectorElements {
+        /// Index into `constant_pool` of the offending entry.
+        idx: ConstantPoolIndex,
+    },
+
+    /// A handle's declared type-parameter count exceeds
+    /// `AdamantStructuralLimits::max_generic_instantiation_length`.
+    /// Applies to both [`HandleKind::DatatypeHandle`] and
+    /// [`HandleKind::FunctionHandle`].
+    ///
+    /// Phase 5/5b.2 B-3.1 (`module_pass::limits`).
+    TooManyTypeParameters {
+        /// Whether the offending handle is a datatype handle
+        /// or a function handle.
+        kind: HandleKind,
+        /// Index into the corresponding handle table.
+        idx: TableIndex,
+    },
+
+    /// A function handle's parameter signature exceeds
+    /// `AdamantStructuralLimits::max_function_parameters`.
+    ///
+    /// Phase 5/5b.2 B-3.1 (`module_pass::limits`).
+    TooManyParameters {
+        /// Index into `function_handles` of the offending
+        /// handle.
+        idx: FunctionHandleIndex,
+    },
+
+    /// A signature-token tree's weighted node count exceeds
+    /// `AdamantStructuralLimits::max_type_nodes`. Sui's per-
+    /// node weighting (preserved byte-faithfully): `Datatype`
+    /// and `DatatypeInstantiation` nodes count as 4,
+    /// `TypeParameter` as 4, primitives as 1.
+    ///
+    /// Phase 5/5b.2 B-3.1 (`module_pass::limits`).
+    TooManyTypeNodes,
+
+    /// An identifier in the module's identifier pool exceeds
+    /// `AdamantStructuralLimits::max_identifier_len` bytes.
+    ///
+    /// Phase 5/5b.2 B-3.1 (`module_pass::limits`).
+    IdentifierTooLong {
+        /// Index into `identifiers` of the offending entry.
+        idx: IdentifierIndex,
+    },
+
+    /// An identifier in the module's identifier pool is the
+    /// literal `<SELF>` while
+    /// `AdamantStructuralLimits::disallow_self_identifier`
+    /// is `true`. `<SELF>` is a Move-internal sentinel that
+    /// should never appear in deployed bytecode; Adamant's
+    /// genesis config flips this from Sui's `false` to `true`
+    /// per the B-1 redirect.
+    ///
+    /// Phase 5/5b.2 B-3.1 (`module_pass::limits`).
+    InvalidIdentifier {
+        /// Index into `identifiers` of the offending entry.
+        idx: IdentifierIndex,
+    },
+
+    /// The module's `function_defs` count exceeds
+    /// `AdamantStructuralLimits::max_function_definitions`.
+    ///
+    /// Phase 5/5b.2 B-3.1 (`module_pass::limits`).
+    MaxFunctionDefinitionsReached,
+
+    /// The combined count of `struct_defs` and `enum_defs`
+    /// exceeds `AdamantStructuralLimits::max_data_definitions`.
+    ///
+    /// Phase 5/5b.2 B-3.1 (`module_pass::limits`).
+    MaxDataDefinitionsReached,
+
+    /// A struct's declared-fields count exceeds
+    /// `AdamantStructuralLimits::max_fields_in_struct`, OR an
+    /// enum's cumulative fields-across-variants count exceeds
+    /// the same limit. The `kind` field discriminates.
+    ///
+    /// Phase 5/5b.2 B-3.1 (`module_pass::limits`).
+    MaxFieldDefinitionsReached {
+        /// Whether the offending datatype is a struct or an
+        /// enum.
+        kind: FieldOwnerKind,
+        /// Index into `struct_defs` (when `kind = Struct`) or
+        /// `enum_defs` (when `kind = Enum`).
+        def_idx: TableIndex,
+    },
+
+    /// An enum's variant count exceeds
+    /// `AdamantStructuralLimits::max_variants_in_enum`.
+    ///
+    /// Phase 5/5b.2 B-3.1 (`module_pass::limits`).
+    MaxVariantsInEnumReached {
+        /// Index into `enum_defs` of the offending entry.
+        def_idx: EnumDefinitionIndex,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 2, 3, 6, 7 land in subsequent
     // waves.
+}
+
+/// Whether a handle is a datatype handle or a function
+/// handle. Used by
+/// [`AdamantValidationError::TooManyTypeParameters`] to
+/// discriminate which handle table the index applies to.
+///
+/// Phase 5/5b.2 B-3.1 (`module_pass::limits`).
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum HandleKind {
+    /// Index references `module.datatype_handles`.
+    DatatypeHandle,
+    /// Index references `module.function_handles`.
+    FunctionHandle,
+}
+
+impl core::fmt::Display for HandleKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::DatatypeHandle => write!(f, "datatype handle"),
+            Self::FunctionHandle => write!(f, "function handle"),
+        }
+    }
 }
 
 /// Whether the owning datatype on an
@@ -475,6 +604,67 @@ impl core::fmt::Display for AdamantValidationError {
                  {num} exceeds u16::MAX (whitepaper §6.2.1.8 step 3, \
                  `module_pass::instruction_consistency`)",
                 fn_def_idx.0
+            ),
+            Self::TooManyVectorElements { idx } => write!(
+                f,
+                "constant pool entry {} vector length exceeds \
+                 max_constant_vector_len (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::limits`)",
+                idx.0
+            ),
+            Self::TooManyTypeParameters { kind, idx } => write!(
+                f,
+                "{kind} {idx}: type-parameter count exceeds \
+                 max_generic_instantiation_length (whitepaper §6.2.1.8 \
+                 step 3, `module_pass::limits`)"
+            ),
+            Self::TooManyParameters { idx } => write!(
+                f,
+                "function handle {}: parameter count exceeds \
+                 max_function_parameters (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::limits`)",
+                idx.0
+            ),
+            Self::TooManyTypeNodes => write!(
+                f,
+                "signature-token tree exceeds max_type_nodes (whitepaper \
+                 §6.2.1.8 step 3, `module_pass::limits`)"
+            ),
+            Self::IdentifierTooLong { idx } => write!(
+                f,
+                "identifier {} exceeds max_identifier_len (whitepaper \
+                 §6.2.1.8 step 3, `module_pass::limits`)",
+                idx.0
+            ),
+            Self::InvalidIdentifier { idx } => write!(
+                f,
+                "identifier {} is the disallowed `<SELF>` literal \
+                 (whitepaper §6.2.1.8 step 3, `module_pass::limits`)",
+                idx.0
+            ),
+            Self::MaxFunctionDefinitionsReached => write!(
+                f,
+                "function-definition count exceeds max_function_definitions \
+                 (whitepaper §6.2.1.8 step 3, `module_pass::limits`)"
+            ),
+            Self::MaxDataDefinitionsReached => write!(
+                f,
+                "combined struct-and-enum-definition count exceeds \
+                 max_data_definitions (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::limits`)"
+            ),
+            Self::MaxFieldDefinitionsReached { kind, def_idx } => write!(
+                f,
+                "{kind} definition {def_idx}: field count exceeds \
+                 max_fields_in_struct (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::limits`)"
+            ),
+            Self::MaxVariantsInEnumReached { def_idx } => write!(
+                f,
+                "enum definition {}: variant count exceeds \
+                 max_variants_in_enum (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::limits`)",
+                def_idx.0
             ),
         }
     }

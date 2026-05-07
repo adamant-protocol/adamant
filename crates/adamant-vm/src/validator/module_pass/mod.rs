@@ -47,6 +47,7 @@ mod ability_field_requirements;
 mod constants;
 mod friends;
 mod instruction_consistency;
+mod limits;
 
 #[cfg(test)]
 pub(in crate::validator::module_pass) mod test_helpers {
