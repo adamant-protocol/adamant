@@ -11,8 +11,8 @@
 //! encountered.
 
 use adamant_bytecode_format::{
-    CodeOffset, ConstantPoolIndex, EnumDefinitionIndex, FunctionDefinitionIndex,
-    FunctionHandleIndex, IdentifierIndex, TableIndex,
+    CodeOffset, ConstantPoolIndex, DatatypeHandleIndex, EnumDefinitionIndex,
+    FunctionDefinitionIndex, FunctionHandleIndex, IdentifierIndex, IndexKind, TableIndex,
 };
 use adamant_types::Address;
 use move_binary_format::errors::VMError;
@@ -531,6 +531,78 @@ pub enum AdamantValidationError {
         /// accepted; the duplicate triggers the rejection.
         function_index: FunctionDefinitionIndex,
     },
+
+    /// The module's `module_handles` table is empty. A module
+    /// must carry at least its own self-handle; an empty table
+    /// has no anchor for any other handle reference.
+    ///
+    /// Mirrors upstream's `BoundsChecker::verify_module`
+    /// short-circuit (`StatusCode::NO_MODULE_HANDLES`).
+    ///
+    /// Phase 5/5b.3 C-1.1
+    /// (`module_pass::bounds_checker`).
+    NoModuleHandles,
+
+    /// An index into one of the module's pools is out of range.
+    /// `kind` discriminates which pool overflowed (see
+    /// [`adamant_bytecode_format::IndexKind`]); `idx` is the
+    /// reported index value; `pool_len` is the addressed
+    /// pool's length at the time of the check.
+    ///
+    /// Mirrors upstream's `bounds_error(StatusCode::INDEX_OUT_OF_BOUNDS,
+    /// kind, idx, len)`. Used by the bounds-checker pass
+    /// across every sub-check that resolves a `*Index`
+    /// reference into a pool slot. The variant is generic
+    /// across all `IndexKind` values; downstream passes that
+    /// also surface index-out-of-range errors (e.g.,
+    /// duplication-checker on field handles, signature-checker
+    /// on signature tokens) reuse this variant in subsequent
+    /// sub-arcs (C-2 and C-3).
+    ///
+    /// Phase 5/5b.3 C-1.1
+    /// (`module_pass::bounds_checker`).
+    IndexOutOfBounds {
+        /// Which pool the offending index addressed. Reported
+        /// as the index newtype's `ModuleIndex::KIND` constant
+        /// at the call site; downstream consumers can pattern-
+        /// match against [`adamant_bytecode_format::IndexKind`]
+        /// variants.
+        kind: IndexKind,
+        /// The offending index value, narrowed to `TableIndex`
+        /// (`u16`). All `*Index` newtypes wrap a `TableIndex`
+        /// underneath the binary format, so the narrowing is
+        /// always lossless.
+        idx: TableIndex,
+        /// The addressed pool's length at the time of the
+        /// check. `idx >= pool_len` was the rejection condition.
+        pool_len: usize,
+    },
+
+    /// A `Datatype` or `DatatypeInstantiation` signature token
+    /// supplies a different number of type arguments than its
+    /// addressed `DatatypeHandle` declares. For the bare
+    /// `Datatype(idx)` form, `actual` is always `0`; for the
+    /// `DatatypeInstantiation(idx, type_args)` form, `actual`
+    /// is `type_args.len()`. Both code paths fire the same
+    /// variant.
+    ///
+    /// Mirrors upstream's
+    /// `StatusCode::NUMBER_OF_TYPE_ARGUMENTS_MISMATCH` error in
+    /// `BoundsChecker::check_type`.
+    ///
+    /// Phase 5/5b.3 C-1.1
+    /// (`module_pass::bounds_checker`).
+    NumberOfTypeArgumentsMismatch {
+        /// Index of the addressed `DatatypeHandle` whose
+        /// type-parameter count was checked.
+        datatype_handle_idx: DatatypeHandleIndex,
+        /// Type-parameter count declared by the handle.
+        expected: usize,
+        /// Type-argument count supplied by the signature
+        /// token. `0` for the bare `Datatype(_)` form; the
+        /// `Vec::len()` for the `DatatypeInstantiation` form.
+        actual: usize,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 3, 6, 7 land in subsequent
@@ -870,6 +942,31 @@ impl core::fmt::Display for AdamantValidationError {
                  (whitepaper §6.2.1.3, \
                  `module_pass::privacy_metadata_structure`)",
                 function_index.0
+            ),
+            Self::NoModuleHandles => write!(
+                f,
+                "module has no module_handles entries; a module must carry at least \
+                 its own self-handle (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::bounds_checker`)"
+            ),
+            Self::IndexOutOfBounds {
+                kind,
+                idx,
+                pool_len,
+            } => write!(
+                f,
+                "{kind} index {idx} out of range for pool of length {pool_len} \
+                 (whitepaper §6.2.1.8 step 3, `module_pass::bounds_checker`)"
+            ),
+            Self::NumberOfTypeArgumentsMismatch {
+                datatype_handle_idx,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "datatype handle {} expects {expected} type argument(s), got {actual} \
+                 (whitepaper §6.2.1.8 step 3, `module_pass::bounds_checker`)",
+                datatype_handle_idx.0
             ),
         }
     }

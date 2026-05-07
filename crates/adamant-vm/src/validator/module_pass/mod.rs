@@ -44,6 +44,7 @@
 
 mod ability_cache;
 pub(super) mod ability_field_requirements;
+mod bounds_checker;
 pub(super) mod constants;
 pub(super) mod friends;
 pub(super) mod instantiation_loops;
