@@ -63,17 +63,19 @@
 //!   adapts from 4 → 5 sub-checkpoints. The empirical-
 //!   complexity-drives-sub-checkpoint-shape pattern is registered
 //!   for C-5 PROVENANCE.md.
-//!   - **C-1.4a (this sub-checkpoint):** sub-steps 1–4 of
+//!   - **C-1.4a (landed):** sub-steps 1–4 of
 //!     `check_function_def` (function-def header validation +
 //!     native-function early-return + function-handle intra-pass
 //!     structural-impossibility re-checks + locals signature/count/
 //!     type-parameter validation including `LocalIndex::MAX`
 //!     saturating math). Adds `TooManyLocals` typed-error variant.
-//!   - **C-1.4b:** sub-steps 5–7 (wide bytecode match covering
-//!     50+ variants + jump-table validation + Adamant-extension
-//!     per-instruction semantics). Adds `CodeIndexOutOfBounds` and
-//!     `InvalidEnumSwitch` typed-error variants. Reaches 17 of 17
-//!     upstream sub-checks.
+//!   - **C-1.4b (this sub-checkpoint):** sub-steps 5–7 (wide
+//!     bytecode match covering 50+ Sui-base variants + jump-table
+//!     validation + Adamant-extension per-instruction semantics
+//!     per the Q3 partial-inspection methodology). Adds
+//!     `CodeIndexOutOfBounds` and `InvalidEnumSwitch` typed-error
+//!     variants. **Reaches 17 of 17 upstream sub-checks; bounds
+//!     checker is feature-complete.**
 //!
 //! Error variants produced at C-1.1:
 //!
@@ -258,9 +260,11 @@
 )]
 
 use adamant_bytecode_format::{
-    FunctionDefinitionIndex, LocalIndex, ModuleIndex, SignatureToken, TableIndex,
+    Bytecode, CodeOffset, FunctionDefinitionIndex, IndexKind, JumpTableInner, LocalIndex,
+    ModuleIndex, SignatureIndex, SignatureToken, TableIndex,
 };
 
+use crate::bytecode::{AdamantBytecode, BytecodeInstruction};
 use crate::module::AdamantCompiledModule;
 
 use super::super::error::AdamantValidationError;
@@ -861,8 +865,507 @@ fn check_function_def(
         check_type_parameter(local, type_param_count)?;
     }
 
-    // C-1.4b will append: bytecode iteration + jump-table
-    // validation + Adamant-extension semantics here.
+    // Sub-step 5: per-bytecode wide match.
+    let code_len = code_unit.code.len();
+    let locals_count = locals_sig.0.len().saturating_add(parameters_sig.0.len());
+    for (bytecode_offset, instr) in code_unit.code.iter().enumerate() {
+        let code_offset = CodeOffset::try_from(bytecode_offset).expect(
+            "bytecode-offset count fits u16; binary format precludes overflow \
+             (BYTECODE_INDEX_MAX = u16::MAX)",
+        );
+        check_bytecode_instruction(
+            module,
+            instr,
+            fn_def_idx,
+            code_offset,
+            code_len,
+            locals_count,
+            type_param_count,
+            code_unit.jump_tables.len(),
+        )?;
+    }
+
+    // Sub-step 6: jump-table validation.
+    for (jt_idx, vjt) in code_unit.jump_tables.iter().enumerate() {
+        let jt_table_idx = TableIndex::try_from(jt_idx).expect(
+            "jump-table count fits u16; binary format precludes overflow \
+             (TABLE_INDEX_MAX = u16::MAX)",
+        );
+        check_index(module.enum_defs.len(), vjt.head_enum)?;
+        let enum_def = &module.enum_defs[vjt.head_enum.into_index()];
+        let JumpTableInner::Full(offsets) = &vjt.jump_table;
+        let jt_len = offsets.len();
+        let expected_variants_count = enum_def.variants.len();
+        if jt_len != expected_variants_count {
+            return Err(AdamantValidationError::InvalidEnumSwitch {
+                fn_def_idx,
+                jump_table_idx: jt_table_idx,
+                jump_table_len: jt_len,
+                expected_variants_count,
+            });
+        }
+        for offset in offsets {
+            if (*offset as usize) >= code_len {
+                return Err(AdamantValidationError::CodeIndexOutOfBounds {
+                    fn_def_idx,
+                    code_offset: *offset,
+                    kind: IndexKind::CodeDefinition,
+                    idx: *offset,
+                    pool_len: code_len,
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Per-bytecode dispatch helper for sub-step 5 of
+/// [`check_function_def`]. Iterates exactly one instruction at
+/// the given `code_offset` within the function body and routes
+/// the operand to its bounds-check shape.
+///
+/// Per Q3 of the C-1.4b plan-gate, dispatch is **nested**:
+/// outer match on [`BytecodeInstruction::Inherited`] vs
+/// [`BytecodeInstruction::Adamant`]; inner match on the
+/// concrete enum variant within. Exhaustive on both surfaces;
+/// future Sui upstream additions or Adamant extension additions
+/// surface as compile errors here.
+///
+/// Each variant's body falls into one of the categories listed
+/// in the per-pass doc-comment's `# Eager-error first-failure-
+/// wins` section; category headers below mark the boundaries
+/// for readability per the Q3 implementation-gate item #3.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Per-bytecode dispatch needs the function-def index, \
+              code offset, code-length / locals-count / type-param-count / \
+              jump-tables-count for the inline bounds checks; refactoring to a \
+              context struct would not improve call-site readability — there's \
+              one call site (the bytecode iteration loop in check_function_def)."
+)]
+fn check_bytecode_instruction(
+    module: &AdamantCompiledModule,
+    instr: &BytecodeInstruction,
+    fn_def_idx: FunctionDefinitionIndex,
+    code_offset: CodeOffset,
+    code_len: usize,
+    locals_count: usize,
+    type_param_count: usize,
+    jump_tables_count: usize,
+) -> Result<(), AdamantValidationError> {
+    match instr {
+        BytecodeInstruction::Inherited(b) => check_inherited_bytecode(
+            module,
+            b,
+            fn_def_idx,
+            code_offset,
+            code_len,
+            locals_count,
+            type_param_count,
+            jump_tables_count,
+        ),
+        BytecodeInstruction::Adamant(a) => {
+            check_adamant_bytecode(module, a, fn_def_idx, code_offset)
+        }
+    }
+}
+
+/// Dispatch the Sui-base [`Bytecode`] operand bounds check.
+///
+/// Variants are grouped by category for readability per the
+/// C-1.4b plan-gate Q3 disposition:
+///
+/// - **Module-level operand checks:** operand index addresses a
+///   module-level pool (`constant_pool`, `field_handles`,
+///   `function_handles`, `struct_defs`, `variant_handles`).
+/// - **Generic operand checks:** operand index addresses an
+///   instantiation table; nested type-parameter recursion runs
+///   over the resolved instantiation's `type_parameters`
+///   signature via the [`check_signature_type_parameters`]
+///   helper extracted at C-1.4b (third instance of the
+///   per-handle-extraction refactor pattern).
+/// - **Vec operand checks:** operand index addresses
+///   `signatures`; nested type-parameter recursion runs over
+///   the resolved signature.
+/// - **Branch operand checks:** operand is a code offset; check
+///   `offset < code.len()`.
+/// - **Local operand checks:** operand is a `LocalIndex` (u8);
+///   check `idx < locals_count`.
+/// - **`VariantSwitch` operand check:** operand addresses
+///   `code_unit.jump_tables`.
+/// - **Deprecated arms (10 opcodes):** structurally unreachable
+///   in Adamant's pipeline per Phase 5/5a deserializer's
+///   strict-mode rejection at parse time. Match arms exist for
+///   exhaustiveness preservation; bodies panic via
+///   `unreachable!` with cross-references to the deserializer
+///   tests + B-2.4's parallel pattern. **5th overall instance**
+///   of the structural-impossibility-checks pattern (cross-pass
+///   sub-pattern).
+/// - **No-op arms:** operand-less or immediate-operand
+///   instructions with no pool reference (Pop, Ret, primitive
+///   loads, casts, arithmetic, comparisons, ReadRef/WriteRef/
+///   `FreezeRef`, `Abort`, `Nop`). No bounds-check needed.
+#[allow(
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    reason = "Wide bytecode-dispatch match over 50+ variants; the function takes the per-bytecode \
+              context (fn_def_idx, code_offset, code_len, locals_count, type_param_count, \
+              jump_tables_count) needed for inline bounds checks. Refactoring to a context struct \
+              would not improve call-site readability — there's one call site (the bytecode \
+              iteration loop in check_function_def)."
+)]
+fn check_inherited_bytecode(
+    module: &AdamantCompiledModule,
+    b: &Bytecode,
+    fn_def_idx: FunctionDefinitionIndex,
+    code_offset: CodeOffset,
+    code_len: usize,
+    locals_count: usize,
+    type_param_count: usize,
+    jump_tables_count: usize,
+) -> Result<(), AdamantValidationError> {
+    use Bytecode::{
+        Abort, Add, And, BitAnd, BitOr, BrFalse, BrTrue, Branch, Call, CallGeneric, CastU128,
+        CastU16, CastU256, CastU32, CastU64, CastU8, CopyLoc, Div, Eq, ExistsDeprecated,
+        ExistsGenericDeprecated, FreezeRef, Ge, Gt, ImmBorrowField, ImmBorrowFieldGeneric,
+        ImmBorrowGlobalDeprecated, ImmBorrowGlobalGenericDeprecated, ImmBorrowLoc, LdConst,
+        LdFalse, LdTrue, LdU128, LdU16, LdU256, LdU32, LdU64, LdU8, Le, Lt, Mod,
+        MoveFromDeprecated, MoveFromGenericDeprecated, MoveLoc, MoveToDeprecated,
+        MoveToGenericDeprecated, Mul, MutBorrowField, MutBorrowFieldGeneric,
+        MutBorrowGlobalDeprecated, MutBorrowGlobalGenericDeprecated, MutBorrowLoc, Neq, Nop, Not,
+        Or, Pack, PackGeneric, PackVariant, PackVariantGeneric, Pop, ReadRef, Ret, Shl, Shr, StLoc,
+        Sub, Unpack, UnpackGeneric, UnpackVariant, UnpackVariantGeneric,
+        UnpackVariantGenericImmRef, UnpackVariantGenericMutRef, UnpackVariantImmRef,
+        UnpackVariantMutRef, VariantSwitch, VecImmBorrow, VecLen, VecMutBorrow, VecPack,
+        VecPopBack, VecPushBack, VecSwap, VecUnpack, WriteRef, Xor,
+    };
+
+    match b {
+        // --- Module-level operand checks ---
+        LdConst(idx) => check_code_index(module.constant_pool.len(), *idx, fn_def_idx, code_offset),
+        MutBorrowField(idx) | ImmBorrowField(idx) => {
+            check_code_index(module.field_handles.len(), *idx, fn_def_idx, code_offset)
+        }
+        Call(idx) => check_code_index(module.function_handles.len(), *idx, fn_def_idx, code_offset),
+        Pack(idx) | Unpack(idx) => {
+            check_code_index(module.struct_defs.len(), *idx, fn_def_idx, code_offset)
+        }
+        PackVariant(idx)
+        | UnpackVariant(idx)
+        | UnpackVariantImmRef(idx)
+        | UnpackVariantMutRef(idx) => {
+            check_code_index(module.variant_handles.len(), *idx, fn_def_idx, code_offset)
+        }
+
+        // --- Generic operand checks (with nested type-parameter recursion) ---
+        CallGeneric(idx) => {
+            check_code_index(
+                module.function_instantiations.len(),
+                *idx,
+                fn_def_idx,
+                code_offset,
+            )?;
+            let inst = &module.function_instantiations[idx.into_index()];
+            check_signature_type_parameters(module, inst.type_parameters, type_param_count)
+        }
+        MutBorrowFieldGeneric(idx) | ImmBorrowFieldGeneric(idx) => {
+            check_code_index(
+                module.field_instantiations.len(),
+                *idx,
+                fn_def_idx,
+                code_offset,
+            )?;
+            let inst = &module.field_instantiations[idx.into_index()];
+            check_signature_type_parameters(module, inst.type_parameters, type_param_count)
+        }
+        PackGeneric(idx) | UnpackGeneric(idx) => {
+            check_code_index(
+                module.struct_def_instantiations.len(),
+                *idx,
+                fn_def_idx,
+                code_offset,
+            )?;
+            let inst = &module.struct_def_instantiations[idx.into_index()];
+            check_signature_type_parameters(module, inst.type_parameters, type_param_count)
+        }
+        PackVariantGeneric(vi)
+        | UnpackVariantGeneric(vi)
+        | UnpackVariantGenericImmRef(vi)
+        | UnpackVariantGenericMutRef(vi) => {
+            check_code_index(
+                module.variant_instantiation_handles.len(),
+                *vi,
+                fn_def_idx,
+                code_offset,
+            )?;
+            let vh = &module.variant_instantiation_handles[vi.into_index()];
+            debug_assert!(
+                vh.enum_def.into_index() < module.enum_def_instantiations.len(),
+                "intra-sub-checkpoint structural impossibility: \
+                 check_variant_instantiation_handles (verify_impl position 16) \
+                 validated enum_def ∈ enum_def_instantiations for every \
+                 entry; check_function_defs (position 17) reaches this \
+                 dereference after position 16 has run."
+            );
+            let enum_inst = &module.enum_def_instantiations[vh.enum_def.into_index()];
+            check_signature_type_parameters(module, enum_inst.type_parameters, type_param_count)
+        }
+
+        // --- Vec operand checks (with nested type-parameter recursion) ---
+        VecPack(idx, _)
+        | VecLen(idx)
+        | VecImmBorrow(idx)
+        | VecMutBorrow(idx)
+        | VecPushBack(idx)
+        | VecPopBack(idx)
+        | VecUnpack(idx, _)
+        | VecSwap(idx) => {
+            check_code_index(module.signatures.len(), *idx, fn_def_idx, code_offset)?;
+            check_signature_type_parameters(module, *idx, type_param_count)
+        }
+
+        // --- Branch operand checks ---
+        BrTrue(offset) | BrFalse(offset) | Branch(offset) => {
+            if (*offset as usize) >= code_len {
+                return Err(AdamantValidationError::CodeIndexOutOfBounds {
+                    fn_def_idx,
+                    code_offset,
+                    kind: IndexKind::CodeDefinition,
+                    idx: *offset,
+                    pool_len: code_len,
+                });
+            }
+            Ok(())
+        }
+
+        // --- Local operand checks ---
+        CopyLoc(idx) | MoveLoc(idx) | StLoc(idx) | MutBorrowLoc(idx) | ImmBorrowLoc(idx) => {
+            if (*idx as usize) >= locals_count {
+                return Err(AdamantValidationError::CodeIndexOutOfBounds {
+                    fn_def_idx,
+                    code_offset,
+                    kind: IndexKind::LocalPool,
+                    idx: TableIndex::from(*idx),
+                    pool_len: locals_count,
+                });
+            }
+            Ok(())
+        }
+
+        // --- VariantSwitch operand check ---
+        VariantSwitch(jti) => check_code_index(jump_tables_count, *jti, fn_def_idx, code_offset),
+
+        // --- Deprecated global-storage opcodes (5th instance of structural-impossibility-checks pattern) ---
+        // Structurally unreachable in Adamant's pipeline. The
+        // arms exist for exhaustiveness preservation: Rust's
+        // compiler flags any new `Bytecode` variant added in
+        // a future Sui upstream tag as a non-exhaustive-match
+        // error, which is the audit-trail signal the resistant-
+        // proof posture wants. Same shape as B-2.4's
+        // `instruction_consistency` deprecated-arms `unreachable!`.
+        // Cross-pass consistency check at C-1.4b plan-gate Q1:
+        // the 10-arm list matches B-2.4's exactly.
+        ExistsDeprecated(_)
+        | ExistsGenericDeprecated(_)
+        | MoveFromDeprecated(_)
+        | MoveFromGenericDeprecated(_)
+        | MoveToDeprecated(_)
+        | MoveToGenericDeprecated(_)
+        | MutBorrowGlobalDeprecated(_)
+        | MutBorrowGlobalGenericDeprecated(_)
+        | ImmBorrowGlobalDeprecated(_)
+        | ImmBorrowGlobalGenericDeprecated(_) => unreachable!(
+            "deprecated global-storage opcode reached bounds_checker's wide \
+             match: Adamant's deserializer rejects all 10 deprecated opcodes \
+             at parse time per §6.2.1.6 Rule 5 (Phase 5/5a adamant_deserialize \
+             strict mode; tests bytecode_wire.rs:1242 \
+             strict_mode_rejects_each_deprecated_opcode + \
+             validator/mod.rs::tests::rejects_module_with_deprecated_global_\
+             storage_opcode + B-2.4's instruction_consistency parallel \
+             pattern). If this fires, either the deserializer is broken or \
+             the strict-mode check was bypassed. This is an Adamant \
+             implementation bug, not a module-level rejection."
+        ),
+
+        // --- "Other" no-op arms ---
+        // Operand-less or immediate-operand instructions with
+        // no pool reference. No bounds-check needed.
+        Pop | Ret | LdU8(_) | LdU16(_) | LdU32(_) | LdU64(_) | LdU128(_) | LdU256(_) | CastU8
+        | CastU16 | CastU32 | CastU64 | CastU128 | CastU256 | LdTrue | LdFalse | ReadRef
+        | WriteRef | FreezeRef | Add | Sub | Mul | Mod | Div | BitOr | BitAnd | Xor | Or | And
+        | Not | Eq | Neq | Lt | Gt | Le | Ge | Shl | Shr | Abort | Nop => Ok(()),
+    }
+}
+
+/// Dispatch the Adamant-extension [`AdamantBytecode`] operand
+/// bounds check per the §6.2.1.4 verbatim survey at the C-1.4b
+/// plan-gate Q3 disposition.
+///
+/// Variants are grouped by their bounds-check disposition:
+///
+/// - **Pool-index bounds-check arms (2 of 17):**
+///   `InvokeShielded`, `InvokeTransparent` — both bounds-check
+///   the operand `FunctionHandleIndex` against
+///   `module.function_handles`.
+/// - **Deferred-to-§7 (2 of 17):** `GenerateProof`,
+///   `VerifyProof` — operand is a `CircuitId`. Per §6.2.1.4
+///   line 429's "`CircuitId` resolution" paragraph, the circuit-
+///   reference pool does not exist in `AdamantCompiledModule`
+///   at the bytecode layer; resolution is deferred to §7
+///   (privacy layer). C-1.4b passes through; bounds-check
+///   infrastructure becomes a §7 / Phase 5/6 concern.
+/// - **Variant-tag deserializer-enforced (2 of 17):**
+///   `ChargeGas`, `RemainingGas` — operand is a `GasDimension`
+///   variant tag (single byte, range 0x00–0x05 per §6.2.1.5
+///   line 445). Deserializer rejects out-of-range values at
+///   parse time. C-1.4b passes through.
+/// - **Zero-operand (11 of 17):** `ReleaseSubViewKey`,
+///   `KzgCommit`, `KzgVerify`, `RecursiveVerify`, `Sha3_256`,
+///   `Blake3`, `Ed25519Verify`, `MlDsaVerify65`,
+///   `MlDsaVerify87`, `BlsVerify`, `OutOfGas` — no operand.
+///   No bounds-check needed.
+///
+/// **Adamant-extension treatment in module-level passes (NEW
+/// methodology pattern; first instance):** extensions are
+/// early-arm-Ok where the pass has no per-instruction operand
+/// concern (B-2.4's `instruction_consistency`, B-3.3's
+/// `instantiation_loops`). Extensions DO require per-extension
+/// handling at passes that operate at per-instruction level
+/// (this pass — `bounds_checker` at C-1.4b). Pattern affects
+/// future per-function passes (Phase 5/5b.4, 5/5b.5).
+#[allow(
+    clippy::match_same_arms,
+    reason = "Three pass-through categories (deferred-to-§7, variant-tag-deserializer-enforced, \
+              zero-operand) share `=> Ok(())` bodies but are kept distinct for methodological \
+              clarity. Merging would erase the §6.2.1.4 verbatim-survey categorization that \
+              the C-1.4b plan-gate Q3 disposition pinned."
+)]
+fn check_adamant_bytecode(
+    module: &AdamantCompiledModule,
+    a: &AdamantBytecode,
+    fn_def_idx: FunctionDefinitionIndex,
+    code_offset: CodeOffset,
+) -> Result<(), AdamantValidationError> {
+    match a {
+        // --- Pool-index bounds-check arms ---
+        AdamantBytecode::InvokeShielded(idx) | AdamantBytecode::InvokeTransparent(idx) => {
+            check_code_index(module.function_handles.len(), *idx, fn_def_idx, code_offset)
+        }
+
+        // --- Deferred-to-§7 (CircuitId; pool not yet defined at this layer) ---
+        // Per §6.2.1.4 line 429 + open property #2 in CLAUDE.md,
+        // the circuit-reference pool's location is deferred to
+        // §7. C-1.4b passes through; bounds-check infrastructure
+        // becomes a §7 / Phase 5/6 concern.
+        AdamantBytecode::GenerateProof(_) | AdamantBytecode::VerifyProof(_) => Ok(()),
+
+        // --- Variant-tag deserializer-enforced ---
+        // Per §6.2.1.5 line 445, GasDimension is a single-byte
+        // variant tag (0x00-0x05); the deserializer rejects
+        // out-of-range bytes at parse time.
+        AdamantBytecode::ChargeGas(_) | AdamantBytecode::RemainingGas(_) => Ok(()),
+
+        // --- Zero-operand extensions (11 of 17) ---
+        AdamantBytecode::ReleaseSubViewKey
+        | AdamantBytecode::KzgCommit
+        | AdamantBytecode::KzgVerify
+        | AdamantBytecode::RecursiveVerify
+        | AdamantBytecode::Sha3_256
+        | AdamantBytecode::Blake3
+        | AdamantBytecode::Ed25519Verify
+        | AdamantBytecode::MlDsaVerify65
+        | AdamantBytecode::MlDsaVerify87
+        | AdamantBytecode::BlsVerify
+        | AdamantBytecode::OutOfGas => Ok(()),
+    }
+}
+
+/// Generic per-bytecode `idx < pool_len` check returning a
+/// typed [`AdamantValidationError::CodeIndexOutOfBounds`]
+/// tagged with `fn_def_idx` and `code_offset` for diagnostic
+/// richness.
+///
+/// Parallel to [`check_index`] but produces the code-unit-
+/// context error variant. Used by every bounds-checked operand
+/// in [`check_inherited_bytecode`] + [`check_adamant_bytecode`]
+/// at C-1.4b.
+fn check_code_index<I: ModuleIndex>(
+    pool_len: usize,
+    idx: I,
+    fn_def_idx: FunctionDefinitionIndex,
+    code_offset: CodeOffset,
+) -> Result<(), AdamantValidationError> {
+    let i = idx.into_index();
+    if i >= pool_len {
+        Err(AdamantValidationError::CodeIndexOutOfBounds {
+            fn_def_idx,
+            code_offset,
+            kind: I::KIND,
+            idx: TableIndex::try_from(i).expect(
+                "any index produced by ModuleIndex::into_index() fits TableIndex (u16); \
+                 *Index newtypes wrap u16 underneath the binary format",
+            ),
+            pool_len,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+/// Resolve a signature index (already bounds-checked by an
+/// upstream-of-this-call sub-step) and recurse [`check_type_parameter`]
+/// over each of its tokens.
+///
+/// Extracted at C-1.4b as the **third instance** of the
+/// per-handle-extraction refactor pattern (after C-1.2's
+/// `check_module_handle` and C-1.3's `check_field_def`). Used
+/// by 5 distinct match-arm bodies in the wide-match (3
+/// standard-generic, 1 variant-generic, 1 Vec-operand) — well
+/// past the rule-of-three N=2 trigger.
+///
+/// **Q2 disposition:** 3-parameter signature (`module`,
+/// `sig_idx`, `type_param_count`) — well below clippy's `too_many_arguments`
+/// threshold. Option B (context struct) was considered at the
+/// plan-gate; Option A's positional arguments are simpler at
+/// this parameter count.
+///
+/// **Intra-sub-checkpoint structural-impossibility pin:** the
+/// upstream-of-this-call bounds check is the caller's
+/// responsibility (each caller bounds-checks the operand index
+/// against the addressed instantiation table BEFORE invoking
+/// this helper). The resolved `type_parameters` `SignatureIndex`
+/// is itself in-bounds by virtue of:
+/// - C-1.2's `check_function_handles`
+///   (`function_handle.parameters` ∈ `signatures`), or
+/// - C-1.2's `check_function_instantiations` /
+///   `check_field_instantiations` /
+///   `check_struct_instantiations` (function/field/struct
+///   instantiation `type_parameters` ∈ signatures), or
+/// - C-1.3's `check_enum_instantiations` (enum instantiation
+///   `type_parameters` ∈ signatures).
+///
+/// For the Vec-operand caller, the bounds check happens in the
+/// caller's own match arm immediately before this helper runs.
+///
+/// `debug_assert!` pins the structural argument empirically.
+fn check_signature_type_parameters(
+    module: &AdamantCompiledModule,
+    sig_idx: SignatureIndex,
+    type_param_count: usize,
+) -> Result<(), AdamantValidationError> {
+    debug_assert!(
+        sig_idx.into_index() < module.signatures.len(),
+        "intra-sub-checkpoint structural impossibility: prior instantiation- \
+         table or function-handle bounds-check enforced \
+         signature_index ∈ signatures for every entry in the addressed \
+         table. A fired debug_assert here indicates a cross-sub-check \
+         ordering bug in verify()."
+    );
+    let sig = &module.signatures[sig_idx.into_index()];
+    for ty in &sig.0 {
+        check_type_parameter(ty, type_param_count)?;
+    }
     Ok(())
 }
 
@@ -894,16 +1397,19 @@ fn check_index<I: ModuleIndex>(pool_len: usize, idx: I) -> Result<(), AdamantVal
 #[cfg(test)]
 mod tests {
     use adamant_bytecode_format::{
-        AbilitySet, AddressIdentifierIndex, Constant, DatatypeHandle, DatatypeHandleIndex,
-        DatatypeTyParameter, EnumDefInstantiation, EnumDefInstantiationIndex, EnumDefinition,
-        EnumDefinitionIndex, FieldDefinition, FieldHandle, FieldHandleIndex, FieldInstantiation,
-        FunctionDefinitionIndex, FunctionHandle, FunctionHandleIndex, FunctionInstantiation,
-        Identifier, IdentifierIndex, IndexKind, ModuleHandle, ModuleHandleIndex, Signature,
-        SignatureIndex, SignatureToken, StructDefInstantiation, StructDefinition,
+        AbilitySet, AddressIdentifierIndex, Bytecode, Constant, ConstantPoolIndex, DatatypeHandle,
+        DatatypeHandleIndex, DatatypeTyParameter, EnumDefInstantiation, EnumDefInstantiationIndex,
+        EnumDefinition, EnumDefinitionIndex, FieldDefinition, FieldHandle, FieldHandleIndex,
+        FieldInstantiation, FunctionDefinitionIndex, FunctionHandle, FunctionHandleIndex,
+        FunctionInstantiation, FunctionInstantiationIndex, Identifier, IdentifierIndex, IndexKind,
+        JumpTableInner, ModuleHandle, ModuleHandleIndex, Signature, SignatureIndex, SignatureToken,
+        StructDefInstantiation, StructDefInstantiationIndex, StructDefinition,
         StructDefinitionIndex, StructFieldInformation, TypeSignature, VariantDefinition,
-        VariantHandle, VariantInstantiationHandle, Visibility,
+        VariantHandle, VariantHandleIndex, VariantInstantiationHandle,
+        VariantInstantiationHandleIndex, VariantJumpTable, VariantJumpTableIndex, Visibility,
     };
 
+    use crate::bytecode::{AdamantBytecode, BytecodeInstruction};
     use crate::module::{AdamantCodeUnit, AdamantFunctionDefinition};
     use adamant_types::Address as AccountAddress;
 
@@ -3159,6 +3665,732 @@ mod tests {
     fn cross_validation_rejects_function_def_oob_locals_signature() {
         let (mut m, _locals_idx) = module_with_one_function_def_with_body(vec![]);
         m.function_defs[0].code.as_mut().unwrap().locals = SignatureIndex(99);
+        cross_validate_bounds_pass(&m);
+    }
+
+    // --- Layer A: C-1.4b sub-checks (sub-steps 5–7 of position 17) ---
+
+    /// Replace the first function-def's body with a single-
+    /// instruction sequence (the given instruction followed by
+    /// `Ret`). The function-def must already exist and carry a
+    /// `Some(code)`; helper panics otherwise.
+    fn set_function_body(m: &mut AdamantCompiledModule, instr: BytecodeInstruction) {
+        m.function_defs[0].code.as_mut().unwrap().code =
+            vec![instr, BytecodeInstruction::Inherited(Bytecode::Ret)];
+    }
+
+    // Sub-step 5: per-bytecode wide match — module-level operand checks ----------
+
+    #[test]
+    fn ldconst_with_valid_constant_index_passes() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        m.constant_pool.push(Constant {
+            type_: SignatureToken::U64,
+            data: vec![0u8; 8],
+        });
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::LdConst(ConstantPoolIndex(0))),
+        );
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_ldconst_oob_constant_index() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::LdConst(ConstantPoolIndex(7))),
+        );
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                fn_def_idx: FunctionDefinitionIndex(0),
+                code_offset: 0,
+                kind: IndexKind::ConstantPool,
+                idx: 7,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected CodeIndexOutOfBounds(ConstantPool, 7, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_call_oob_function_handle_index() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::Call(FunctionHandleIndex(9))),
+        );
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                fn_def_idx: FunctionDefinitionIndex(0),
+                code_offset: 0,
+                kind: IndexKind::FunctionHandle,
+                idx: 9,
+                pool_len: 1,
+            }) => {}
+            other => panic!("expected CodeIndexOutOfBounds(FunctionHandle, 9, 1), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_pack_oob_struct_def_index() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::Pack(StructDefinitionIndex(3))),
+        );
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                kind: IndexKind::StructDefinition,
+                idx: 3,
+                pool_len: 0,
+                ..
+            }) => {}
+            other => panic!("expected CodeIndexOutOfBounds(StructDefinition, 3, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_mut_borrow_field_oob_field_handle_index() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::MutBorrowField(FieldHandleIndex(5))),
+        );
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                kind: IndexKind::FieldHandle,
+                idx: 5,
+                pool_len: 0,
+                ..
+            }) => {}
+            other => panic!("expected CodeIndexOutOfBounds(FieldHandle, 5, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_pack_variant_oob_variant_handle_index() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::PackVariant(VariantHandleIndex(2))),
+        );
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                kind: IndexKind::VariantHandle,
+                idx: 2,
+                pool_len: 0,
+                ..
+            }) => {}
+            other => panic!("expected CodeIndexOutOfBounds(VariantHandle, 2, 0), got {other:?}"),
+        }
+    }
+
+    // Sub-step 5: per-bytecode wide match — generic operand checks --------------
+
+    #[test]
+    fn rejects_call_generic_oob_function_instantiation_index() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::CallGeneric(FunctionInstantiationIndex(4))),
+        );
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                kind: IndexKind::FunctionInstantiation,
+                idx: 4,
+                pool_len: 0,
+                ..
+            }) => {}
+            other => {
+                panic!("expected CodeIndexOutOfBounds(FunctionInstantiation, 4, 0), got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_pack_generic_oob_struct_instantiation_index() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::PackGeneric(StructDefInstantiationIndex(8))),
+        );
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                kind: IndexKind::StructDefInstantiation,
+                idx: 8,
+                pool_len: 0,
+                ..
+            }) => {}
+            other => {
+                panic!("expected CodeIndexOutOfBounds(StructDefInstantiation, 8, 0), got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_pack_variant_generic_oob_variant_instantiation_handle_index() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::PackVariantGeneric(
+                VariantInstantiationHandleIndex(6),
+            )),
+        );
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                kind: IndexKind::VariantInstantiationHandle,
+                idx: 6,
+                pool_len: 0,
+                ..
+            }) => {}
+            other => panic!(
+                "expected CodeIndexOutOfBounds(VariantInstantiationHandle, 6, 0), got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn call_generic_with_valid_indices_passes() {
+        // Function handle 0 carries 1 type-parameter; a function
+        // instantiation references it with a single-token signature
+        // referencing TypeParameter(0). The CallGeneric arm
+        // bounds-checks the instantiation, then recurses
+        // check_type_parameter over the resolved signature; both
+        // pass.
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        m.function_handles[0].type_parameters = vec![AbilitySet::EMPTY];
+        m.signatures
+            .push(Signature(vec![SignatureToken::TypeParameter(0)]));
+        m.function_instantiations.push(FunctionInstantiation {
+            handle: FunctionHandleIndex(0),
+            type_parameters: SignatureIndex(2),
+        });
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::CallGeneric(FunctionInstantiationIndex(0))),
+        );
+        assert!(verify(&m).is_ok());
+    }
+
+    // Sub-step 5: per-bytecode wide match — vec operand check -------------------
+
+    #[test]
+    fn rejects_vec_pack_oob_signature_index() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::VecPack(SignatureIndex(13), 0)),
+        );
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                kind: IndexKind::Signature,
+                idx: 13,
+                ..
+            }) => {}
+            other => panic!("expected CodeIndexOutOfBounds(Signature, 13, _), got {other:?}"),
+        }
+    }
+
+    // Sub-step 5: per-bytecode wide match — branch + local + variant-switch -----
+
+    #[test]
+    fn rejects_brtrue_oob_code_offset() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        // Body has 2 instructions: BrTrue(99) + Ret. Code length
+        // is 2; offset 99 is out of range.
+        set_function_body(&mut m, BytecodeInstruction::Inherited(Bytecode::BrTrue(99)));
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                kind: IndexKind::CodeDefinition,
+                idx: 99,
+                pool_len: 2,
+                ..
+            }) => {}
+            other => panic!("expected CodeIndexOutOfBounds(CodeDefinition, 99, 2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_copy_loc_oob_local_index() {
+        // No locals + no parameters → locals_count = 0; CopyLoc(5) is OOB.
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(&mut m, BytecodeInstruction::Inherited(Bytecode::CopyLoc(5)));
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                kind: IndexKind::LocalPool,
+                idx: 5,
+                pool_len: 0,
+                ..
+            }) => {}
+            other => panic!("expected CodeIndexOutOfBounds(LocalPool, 5, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_variant_switch_oob_jump_table_index() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::VariantSwitch(VariantJumpTableIndex(3))),
+        );
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                kind: IndexKind::VariantJumpTable,
+                idx: 3,
+                pool_len: 0,
+                ..
+            }) => {}
+            other => panic!("expected CodeIndexOutOfBounds(VariantJumpTable, 3, 0), got {other:?}"),
+        }
+    }
+
+    // Sub-step 6: jump-table validation -----------------------------------------
+
+    #[test]
+    fn jump_table_with_matching_variants_and_valid_offsets_passes() {
+        // Build a module with one enum (2 variants) + a function-
+        // def whose body is [VariantSwitch(0), Ret] + a jump
+        // table with 2 valid offsets.
+        let mut m = module_with_one_enum_def(2, 0);
+        m.signatures.push(Signature(vec![])); // parameters
+        m.signatures.push(Signature(vec![])); // return
+                                              // identifiers[0]="M", [1]="E", [2]="v0", [3]="v1" already from module_with_one_enum_def
+        m.identifiers.push(Identifier::new("foo").unwrap());
+        let foo_idx_usize = m.identifiers.len() - 1;
+        m.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(
+                u16::try_from(foo_idx_usize).expect("test fixture has < u16::MAX identifiers"),
+            ),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(1),
+            type_parameters: vec![],
+        });
+        let locals_idx = SignatureIndex(
+            u16::try_from(m.signatures.len()).expect("test fixture has < u16::MAX signatures"),
+        );
+        m.signatures.push(Signature(vec![]));
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: locals_idx,
+                code: vec![
+                    BytecodeInstruction::Inherited(Bytecode::VariantSwitch(VariantJumpTableIndex(
+                        0,
+                    ))),
+                    BytecodeInstruction::Inherited(Bytecode::Ret),
+                ],
+                jump_tables: vec![VariantJumpTable {
+                    head_enum: EnumDefinitionIndex(0),
+                    jump_table: JumpTableInner::Full(vec![1, 1]),
+                }],
+            }),
+        });
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_jump_table_oob_head_enum() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::VariantSwitch(VariantJumpTableIndex(0))),
+        );
+        m.function_defs[0].code.as_mut().unwrap().jump_tables = vec![VariantJumpTable {
+            head_enum: EnumDefinitionIndex(7),
+            jump_table: JumpTableInner::Full(vec![]),
+        }];
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::EnumDefinition,
+                idx: 7,
+                pool_len: 0,
+            }) => {}
+            other => panic!("expected IndexOutOfBounds(EnumDefinition, 7, 0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_jump_table_length_mismatch_with_variant_count() {
+        // Enum has 2 variants; jump table has 3 offsets — INVALID_ENUM_SWITCH.
+        let mut m = module_with_one_enum_def(2, 0);
+        m.signatures.push(Signature(vec![]));
+        m.signatures.push(Signature(vec![]));
+        m.identifiers.push(Identifier::new("foo").unwrap());
+        let foo_idx_usize = m.identifiers.len() - 1;
+        m.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(
+                u16::try_from(foo_idx_usize).expect("test fixture has < u16::MAX identifiers"),
+            ),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(1),
+            type_parameters: vec![],
+        });
+        let locals_idx = SignatureIndex(
+            u16::try_from(m.signatures.len()).expect("test fixture has < u16::MAX signatures"),
+        );
+        m.signatures.push(Signature(vec![]));
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: locals_idx,
+                code: vec![
+                    BytecodeInstruction::Inherited(Bytecode::VariantSwitch(VariantJumpTableIndex(
+                        0,
+                    ))),
+                    BytecodeInstruction::Inherited(Bytecode::Ret),
+                ],
+                jump_tables: vec![VariantJumpTable {
+                    head_enum: EnumDefinitionIndex(0),
+                    jump_table: JumpTableInner::Full(vec![0, 1, 1]),
+                }],
+            }),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::InvalidEnumSwitch {
+                fn_def_idx: FunctionDefinitionIndex(0),
+                jump_table_idx: 0,
+                jump_table_len: 3,
+                expected_variants_count: 2,
+            }) => {}
+            other => panic!("expected InvalidEnumSwitch(0, 0, 3, 2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_jump_table_offset_out_of_code_range() {
+        // Enum has 1 variant; jump table has 1 offset that's
+        // beyond code.len() — CodeIndexOutOfBounds(CodeDefinition).
+        let mut m = module_with_one_enum_def(1, 0);
+        m.signatures.push(Signature(vec![]));
+        m.signatures.push(Signature(vec![]));
+        m.identifiers.push(Identifier::new("foo").unwrap());
+        let foo_idx_usize = m.identifiers.len() - 1;
+        m.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(
+                u16::try_from(foo_idx_usize).expect("test fixture has < u16::MAX identifiers"),
+            ),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(1),
+            type_parameters: vec![],
+        });
+        let locals_idx = SignatureIndex(
+            u16::try_from(m.signatures.len()).expect("test fixture has < u16::MAX signatures"),
+        );
+        m.signatures.push(Signature(vec![]));
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: locals_idx,
+                code: vec![
+                    BytecodeInstruction::Inherited(Bytecode::VariantSwitch(VariantJumpTableIndex(
+                        0,
+                    ))),
+                    BytecodeInstruction::Inherited(Bytecode::Ret),
+                ],
+                jump_tables: vec![VariantJumpTable {
+                    head_enum: EnumDefinitionIndex(0),
+                    jump_table: JumpTableInner::Full(vec![99]),
+                }],
+            }),
+        });
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                kind: IndexKind::CodeDefinition,
+                idx: 99,
+                pool_len: 2,
+                ..
+            }) => {}
+            other => panic!("expected CodeIndexOutOfBounds(CodeDefinition, 99, 2), got {other:?}"),
+        }
+    }
+
+    // Sub-step 7 (Adamant-extension dispatch within sub-step 5) -----------------
+
+    #[test]
+    fn invoke_shielded_with_valid_function_handle_index_passes() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Adamant(AdamantBytecode::InvokeShielded(FunctionHandleIndex(0))),
+        );
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_invoke_shielded_oob_function_handle_index() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Adamant(AdamantBytecode::InvokeShielded(FunctionHandleIndex(9))),
+        );
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                kind: IndexKind::FunctionHandle,
+                idx: 9,
+                pool_len: 1,
+                ..
+            }) => {}
+            other => panic!("expected CodeIndexOutOfBounds(FunctionHandle, 9, 1), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_invoke_transparent_oob_function_handle_index() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Adamant(AdamantBytecode::InvokeTransparent(FunctionHandleIndex(
+                3,
+            ))),
+        );
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                kind: IndexKind::FunctionHandle,
+                idx: 3,
+                pool_len: 1,
+                ..
+            }) => {}
+            other => panic!("expected CodeIndexOutOfBounds(FunctionHandle, 3, 1), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn generate_proof_passes_through_per_section_7_deferral() {
+        // Deferred-to-§7 disposition: GenerateProof / VerifyProof
+        // operands are CircuitId values whose bounds-check pool
+        // doesn't exist in AdamantCompiledModule per §6.2.1.4
+        // line 429. C-1.4b passes through.
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Adamant(AdamantBytecode::GenerateProof(
+                crate::bytecode::CircuitId(99),
+            )),
+        );
+        // CircuitId(99) is allowed at the bounds-check layer
+        // because no module-level pool is consulted; the §7 / Phase
+        // 5/6 work eventually adds the pool-existence check.
+        assert!(verify(&m).is_ok());
+    }
+
+    #[test]
+    fn zero_operand_extensions_pass_through() {
+        // A representative zero-operand extension passes through
+        // C-1.4b's bounds check unconditionally.
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Adamant(AdamantBytecode::Sha3_256),
+        );
+        assert!(verify(&m).is_ok());
+    }
+
+    // Byte-faithful preservation pins (4) ---------------------------------------
+
+    #[test]
+    fn bytecode_iteration_lowest_offset_offender_wins() {
+        // Body: [Ret, LdConst(99), Call(7)] — both LdConst and
+        // Call are OOB, but LdConst is at offset 1 and Call is
+        // at offset 2. LdConst's error wins.
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        m.function_defs[0].code.as_mut().unwrap().code = vec![
+            BytecodeInstruction::Inherited(Bytecode::Ret),
+            BytecodeInstruction::Inherited(Bytecode::LdConst(ConstantPoolIndex(99))),
+            BytecodeInstruction::Inherited(Bytecode::Call(FunctionHandleIndex(7))),
+        ];
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                code_offset: 1,
+                kind: IndexKind::ConstantPool,
+                idx: 99,
+                ..
+            }) => {}
+            other => panic!("expected lowest-offset offender (offset 1) wins, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn call_generic_bounds_check_fires_before_type_parameter_recursion() {
+        // CallGeneric(99) — instantiation index OOB. The bounds
+        // check fires; the nested type_parameter recursion
+        // doesn't run.
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        m.function_handles[0].type_parameters = vec![AbilitySet::EMPTY];
+        // Add a signature with a TypeParameter that would
+        // trigger recursion failure if reached. With the
+        // instantiation index OOB, the recursion is gated.
+        m.signatures
+            .push(Signature(vec![SignatureToken::TypeParameter(99)]));
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::CallGeneric(FunctionInstantiationIndex(99))),
+        );
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                kind: IndexKind::FunctionInstantiation,
+                idx: 99,
+                pool_len: 0,
+                ..
+            }) => {}
+            other => panic!(
+                "expected instantiation bounds to win over type-param recursion, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn jump_table_head_enum_bounds_fires_before_length_mismatch() {
+        // Jump table with OOB head_enum + length 3 (which would
+        // be a mismatch for any 2-variant enum). head_enum
+        // bounds wins.
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::VariantSwitch(VariantJumpTableIndex(0))),
+        );
+        m.function_defs[0].code.as_mut().unwrap().jump_tables = vec![VariantJumpTable {
+            head_enum: EnumDefinitionIndex(7),
+            jump_table: JumpTableInner::Full(vec![0, 1, 1]),
+        }];
+        match verify(&m) {
+            Err(AdamantValidationError::IndexOutOfBounds {
+                kind: IndexKind::EnumDefinition,
+                idx: 7,
+                ..
+            }) => {}
+            other => panic!("expected head_enum bounds to win, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bytecode_iteration_fires_before_jump_table_iteration() {
+        // OOB bytecode operand at offset 0 + OOB jump-table head_enum.
+        // Bytecode iteration (sub-step 5) fires first.
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::Call(FunctionHandleIndex(99))),
+        );
+        m.function_defs[0].code.as_mut().unwrap().jump_tables = vec![VariantJumpTable {
+            head_enum: EnumDefinitionIndex(99),
+            jump_table: JumpTableInner::Full(vec![]),
+        }];
+        match verify(&m) {
+            Err(AdamantValidationError::CodeIndexOutOfBounds {
+                kind: IndexKind::FunctionHandle,
+                idx: 99,
+                ..
+            }) => {}
+            other => panic!(
+                "expected bytecode iteration (sub-step 5) to win over jump-table iteration \
+                 (sub-step 6), got {other:?}"
+            ),
+        }
+    }
+
+    // --- Layer B: C-1.4b cross-validation ---
+
+    #[test]
+    fn cross_validation_accepts_function_with_ldconst() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        m.constant_pool.push(Constant {
+            type_: SignatureToken::U64,
+            data: vec![0u8; 8],
+        });
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::LdConst(ConstantPoolIndex(0))),
+        );
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_ldconst_oob() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::LdConst(ConstantPoolIndex(7))),
+        );
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_call_oob() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(
+            &mut m,
+            BytecodeInstruction::Inherited(Bytecode::Call(FunctionHandleIndex(9))),
+        );
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_brtrue_oob() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(&mut m, BytecodeInstruction::Inherited(Bytecode::BrTrue(99)));
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_copy_loc_oob() {
+        let (mut m, _) = module_with_one_function_def_with_body(vec![]);
+        set_function_body(&mut m, BytecodeInstruction::Inherited(Bytecode::CopyLoc(5)));
+        cross_validate_bounds_pass(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_jump_table_length_mismatch() {
+        let mut m = module_with_one_enum_def(2, 0);
+        m.signatures.push(Signature(vec![]));
+        m.signatures.push(Signature(vec![]));
+        m.identifiers.push(Identifier::new("foo").unwrap());
+        let foo_idx_usize = m.identifiers.len() - 1;
+        m.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(
+                u16::try_from(foo_idx_usize).expect("test fixture has < u16::MAX identifiers"),
+            ),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(1),
+            type_parameters: vec![],
+        });
+        let locals_idx = SignatureIndex(
+            u16::try_from(m.signatures.len()).expect("test fixture has < u16::MAX signatures"),
+        );
+        m.signatures.push(Signature(vec![]));
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: locals_idx,
+                code: vec![
+                    BytecodeInstruction::Inherited(Bytecode::VariantSwitch(VariantJumpTableIndex(
+                        0,
+                    ))),
+                    BytecodeInstruction::Inherited(Bytecode::Ret),
+                ],
+                jump_tables: vec![VariantJumpTable {
+                    head_enum: EnumDefinitionIndex(0),
+                    jump_table: JumpTableInner::Full(vec![0, 1, 1]),
+                }],
+            }),
+        });
         cross_validate_bounds_pass(&m);
     }
 }

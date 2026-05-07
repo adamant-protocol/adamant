@@ -631,6 +631,73 @@ pub enum AdamantValidationError {
         /// version pinned by §6.2.1.2).
         max: usize,
     },
+
+    /// A bytecode operand index is out of range for its
+    /// addressed pool. Carries the offending function-def
+    /// index, the bytecode offset within that function's body,
+    /// the addressed pool's `IndexKind`, the offending index
+    /// value, and the pool's length.
+    ///
+    /// Distinct from [`Self::IndexOutOfBounds`] (which lacks
+    /// code-unit context). Mirrors upstream's
+    /// `offset_out_of_bounds_error` shape and parallels B-2.4's
+    /// [`Self::GenericMemberOpcodeMismatch`] in carrying
+    /// `fn_def_idx` + `code_offset` for code-unit-context
+    /// errors.
+    ///
+    /// Used by the bounds-checker pass at sub-steps 5 (per-
+    /// bytecode wide match), 6 (jump-table validation), and 7
+    /// (Adamant-extension per-instruction semantics) of
+    /// `check_function_def`.
+    ///
+    /// Phase 5/5b.3 C-1.4b
+    /// (`module_pass::bounds_checker`).
+    CodeIndexOutOfBounds {
+        /// Index of the offending function definition.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Bytecode offset within the function's body where
+        /// the OOB operand lives. For jump-table errors,
+        /// `code_offset` is the bytecode offset of the
+        /// `VariantSwitch` instruction whose jump table is
+        /// being validated.
+        code_offset: CodeOffset,
+        /// Which pool the offending index addressed. See
+        /// [`adamant_bytecode_format::IndexKind`].
+        kind: IndexKind,
+        /// The offending index value, narrowed to `TableIndex`
+        /// (`u16`).
+        idx: TableIndex,
+        /// The addressed pool's length at the time of the
+        /// check. `idx >= pool_len` was the rejection condition.
+        pool_len: usize,
+    },
+
+    /// A jump table for a `VariantSwitch` instruction has a
+    /// length that doesn't match the addressed enum's variant
+    /// count.
+    ///
+    /// Mirrors upstream's `StatusCode::INVALID_ENUM_SWITCH`
+    /// error in `BoundsChecker::check_code`'s jump-table
+    /// validation. The check enforces that every enum variant
+    /// has exactly one branch destination — distinguishing
+    /// "valid `VariantSwitch` over a complete enum" from
+    /// "structurally-malformed jump table that doesn't cover
+    /// every variant."
+    ///
+    /// Phase 5/5b.3 C-1.4b
+    /// (`module_pass::bounds_checker`, jump-table validation).
+    InvalidEnumSwitch {
+        /// Index of the offending function definition.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Index into `code_unit.jump_tables` of the offending
+        /// jump table.
+        jump_table_idx: TableIndex,
+        /// Length of the offending jump table.
+        jump_table_len: usize,
+        /// Variant count of the addressed enum (the value the
+        /// jump table's length should equal).
+        expected_variants_count: usize,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 3, 6, 7 land in subsequent
@@ -1004,6 +1071,32 @@ impl core::fmt::Display for AdamantValidationError {
                 f,
                 "function definition {}: locals count {count} exceeds maximum {max} \
                  (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::bounds_checker::check_function_def`)",
+                fn_def_idx.0
+            ),
+            Self::CodeIndexOutOfBounds {
+                fn_def_idx,
+                code_offset,
+                kind,
+                idx,
+                pool_len,
+            } => write!(
+                f,
+                "function definition {} offset {code_offset}: {kind} index {idx} \
+                 out of range for pool of length {pool_len} (whitepaper §6.2.1.8 \
+                 step 3, `module_pass::bounds_checker::check_function_def`)",
+                fn_def_idx.0
+            ),
+            Self::InvalidEnumSwitch {
+                fn_def_idx,
+                jump_table_idx,
+                jump_table_len,
+                expected_variants_count,
+            } => write!(
+                f,
+                "function definition {} jump table {jump_table_idx}: length \
+                 {jump_table_len} does not match addressed enum's variant count \
+                 {expected_variants_count} (whitepaper §6.2.1.8 step 3, \
                  `module_pass::bounds_checker::check_function_def`)",
                 fn_def_idx.0
             ),
