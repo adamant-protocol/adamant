@@ -88,6 +88,7 @@ dependencies = [
  "hex-literal",
  "move-binary-format",
  "move-bytecode-verifier",
+ "move-bytecode-verifier-meter",
  "move-core-types",
  "move-vm-config",
  "proptest",

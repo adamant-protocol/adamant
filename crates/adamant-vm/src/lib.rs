@@ -106,5 +106,7 @@ pub use tx_hash::derive_tx_hash;
 // (per the architectural-pattern decision at the validator-rules
 // deliverable proposal). The error and config types are
 // re-exported because they are unambiguously named.
-pub use validator::{AdamantValidationError, AdamantVerifierConfig, MalformedConstantReason};
+pub use validator::{
+    AdamantValidationError, AdamantVerifierConfig, FieldOwnerKind, MalformedConstantReason,
+};
 pub use value::{StructValue, Value, U256_BYTES};

@@ -43,6 +43,7 @@
 //! out with workspace test-pass + CLAUDE.md state-bump.
 
 mod ability_cache;
+mod ability_field_requirements;
 mod constants;
 mod friends;
 

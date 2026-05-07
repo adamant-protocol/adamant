@@ -33,19 +33,6 @@
 //!   means callers receive a typed error rather than a panic
 //!   if it ever surfaces.
 //!
-//! # Dead-code allow (transient)
-//!
-//! The cache is consumed by `module_pass/ability_field_requirements.rs`
-//! in Phase 5/5b.2 B-2. Until B-2 lands, the only callers in
-//! this crate are the inline unit tests below. The module-
-//! level `dead_code` allow is removed when B-2 wires the
-//! cache into the ability-field-requirements pass.
-
-#![allow(
-    dead_code,
-    reason = "consumed by `ability_field_requirements` in Phase 5/5b.2 B-2"
-)]
-
 use std::collections::{btree_map::Entry, BTreeMap};
 
 use adamant_bytecode_format::{

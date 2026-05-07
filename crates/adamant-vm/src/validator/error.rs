@@ -212,10 +212,66 @@ pub enum AdamantValidationError {
         /// address-pool reuse decision.
         foreign_address: Address,
     },
+
+    /// A struct or enum-variant field has a type whose
+    /// abilities do not satisfy the abilities required by the
+    /// owning datatype.
+    ///
+    /// For each owning datatype (struct or enum), the required
+    /// ability set is the union of `Ability::requires()` over
+    /// each ability in the type's declared abilities (e.g., a
+    /// struct with the `key` ability requires `store` on each
+    /// field, since `key.requires() == store`). Every field
+    /// (across every variant for enums) must carry at least the
+    /// required abilities.
+    ///
+    /// Phase 5/5b.2 B-2.3 (`module_pass::ability_field_requirements`).
+    FieldMissingTypeAbility {
+        /// Index into `struct_defs` (when `kind = Struct`) or
+        /// `enum_defs` (when `kind = Enum`) of the offending
+        /// owning datatype.
+        def_idx: TableIndex,
+        /// Whether the offending field belongs to a struct
+        /// definition or an enum-variant definition.
+        kind: FieldOwnerKind,
+        /// Variant index within the enum (`None` for structs;
+        /// `Some` for enum variants — the variant tag whose
+        /// fields the violation was found in).
+        variant_idx: Option<TableIndex>,
+        /// Index of the offending field within the owning
+        /// struct (or within the enum variant identified by
+        /// `variant_idx`).
+        field_idx: TableIndex,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 2, 3, 6, 7 land in subsequent
     // waves.
+}
+
+/// Whether the owning datatype on an
+/// [`AdamantValidationError::FieldMissingTypeAbility`] is a
+/// struct or an enum.
+///
+/// Phase 5/5b.2 B-2.3 (`module_pass::ability_field_requirements`).
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum FieldOwnerKind {
+    /// The offending field belongs to a struct definition;
+    /// `def_idx` indexes `struct_defs`.
+    Struct,
+    /// The offending field belongs to an enum-variant
+    /// definition; `def_idx` indexes `enum_defs` and
+    /// `variant_idx` is `Some(...)`.
+    Enum,
+}
+
+impl core::fmt::Display for FieldOwnerKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Struct => write!(f, "struct"),
+            Self::Enum => write!(f, "enum"),
+        }
+    }
 }
 
 /// Structured reason for an
@@ -332,6 +388,25 @@ impl core::fmt::Display for AdamantValidationError {
                 "friend declaration {idx} has foreign address {foreign_address:?} \
                  (whitepaper §6.2.1.8 step 3, `module_pass::friends`)"
             ),
+            Self::FieldMissingTypeAbility {
+                def_idx,
+                kind,
+                variant_idx,
+                field_idx,
+            } => match variant_idx {
+                Some(v) => write!(
+                    f,
+                    "field {field_idx} in {kind} definition {def_idx} variant {v} \
+                     is missing a required type ability \
+                     (whitepaper §6.2.1.8 step 3, `module_pass::ability_field_requirements`)"
+                ),
+                None => write!(
+                    f,
+                    "field {field_idx} in {kind} definition {def_idx} is missing a \
+                     required type ability \
+                     (whitepaper §6.2.1.8 step 3, `module_pass::ability_field_requirements`)"
+                ),
+            },
         }
     }
 }

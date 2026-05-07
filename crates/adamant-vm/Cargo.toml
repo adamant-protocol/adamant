@@ -57,6 +57,16 @@ bcs = { workspace = true }
 [dev-dependencies]
 hex = { workspace = true }
 hex-literal = { workspace = true }
+# Required by Layer B cross-validation tests for the
+# `module_pass::ability_field_requirements` pass (B-2.3).
+# Sui's `ability_field_requirements::verify_module` takes a
+# `Meter` parameter; tests pass `DummyMeter` from this crate.
+# Test-only; never reaches the production binary's dependency
+# graph (consistent with the resistant-proof posture per
+# §6.2.1.8: `move-*` crates are test-only or build-tooling
+# only). Removed alongside the validator wrapper bridge in
+# Phase 5/5b.5.
+move-bytecode-verifier-meter = { workspace = true }
 proptest = { workspace = true }
 
 [lints]
