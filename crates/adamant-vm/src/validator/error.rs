@@ -12,7 +12,8 @@
 
 use adamant_bytecode_format::{
     CodeOffset, ConstantPoolIndex, DatatypeHandleIndex, EnumDefinitionIndex,
-    FunctionDefinitionIndex, FunctionHandleIndex, IdentifierIndex, IndexKind, TableIndex,
+    FunctionDefinitionIndex, FunctionHandleIndex, IdentifierIndex, IndexKind,
+    StructDefinitionIndex, TableIndex,
 };
 use adamant_types::Address;
 use move_binary_format::errors::VMError;
@@ -698,6 +699,130 @@ pub enum AdamantValidationError {
         /// jump table's length should equal).
         expected_variants_count: usize,
     },
+
+    /// A pool entry duplicates another entry with the same
+    /// identity-defining key. The `kind` field discriminates
+    /// which pool is offending; the `idx` field is the index
+    /// of the **second occurrence** (the one rejected — the
+    /// first occurrence is accepted as the canonical entry).
+    ///
+    /// Mirrors upstream's `StatusCode::DUPLICATE_ELEMENT`
+    /// carrying `IndexKind` discriminator. Used by 14+ sub-
+    /// checks of [`module_pass::duplication_checker`]:
+    /// identifiers, address-identifiers, constants, signatures,
+    /// module-handles, friend-declarations, datatype-handles
+    /// (by `(module, name)`), function-handles (by `(module,
+    /// name)`), function-instantiations, variant-handles (by
+    /// `(enum_def, variant)`), field-handles, struct-
+    /// instantiations, enum-instantiations, field-
+    /// instantiations, struct-defs (by `struct_handle`),
+    /// joint struct-and-enum-defs (by `DatatypeHandleIndex`),
+    /// per-field-name within a struct/enum-variant, and
+    /// function-defs (by `function`).
+    ///
+    /// Phase 5/5b.3 C-2
+    /// (`module_pass::duplication_checker`).
+    ///
+    /// [`module_pass::duplication_checker`]: super::module_pass::duplication_checker
+    DuplicateElement {
+        /// Which pool the duplication was detected in.
+        kind: IndexKind,
+        /// Index of the second occurrence (the one rejected —
+        /// the first occurrence is the canonical entry).
+        idx: TableIndex,
+    },
+
+    /// A struct definition has a `Declared` field-information
+    /// variant with zero fields. Adamant follows upstream's
+    /// stance that a zero-field struct is structurally
+    /// meaningless: the bytecode format reserves zero fields
+    /// for native structs, and a declared struct must declare
+    /// at least one field.
+    ///
+    /// Mirrors upstream's `StatusCode::ZERO_SIZED_STRUCT`.
+    ///
+    /// Phase 5/5b.3 C-2
+    /// (`module_pass::duplication_checker::check_struct_definitions`).
+    ZeroSizedStruct {
+        /// Index of the offending struct definition.
+        def_idx: StructDefinitionIndex,
+    },
+
+    /// An enum definition has zero variants. Adamant follows
+    /// upstream's stance that a zero-variant enum is
+    /// structurally meaningless: the variant-tag domain would
+    /// be empty, and no `VariantSwitch` could ever produce a
+    /// valid match.
+    ///
+    /// Mirrors upstream's `StatusCode::ZERO_SIZED_ENUM`.
+    ///
+    /// Phase 5/5b.3 C-2
+    /// (`module_pass::duplication_checker::check_enum_definitions`).
+    ZeroSizedEnum {
+        /// Index of the offending enum definition.
+        def_idx: EnumDefinitionIndex,
+    },
+
+    /// A struct/enum/function definition references a
+    /// `DatatypeHandle` or `FunctionHandle` whose `module`
+    /// field doesn't point at the module's own
+    /// `self_module_handle_idx`. A definition must always be
+    /// owned by the module it's defined in; cross-module
+    /// definitions are not representable in the bytecode
+    /// format. This rejection catches malformed inputs that
+    /// passed bounds checking but place a definition's handle
+    /// in another module's slot.
+    ///
+    /// Mirrors upstream's `StatusCode::INVALID_MODULE_HANDLE`.
+    ///
+    /// Phase 5/5b.3 C-2
+    /// (`module_pass::duplication_checker`).
+    InvalidModuleHandle {
+        /// Whether the offending definition is a struct, enum,
+        /// or function. See [`DefKind`].
+        kind: DefKind,
+        /// Index of the offending definition.
+        def_idx: TableIndex,
+    },
+
+    /// A function definition's `acquires_global_resources`
+    /// list contains the same `StructDefinitionIndex` more
+    /// than once. The list is structurally always-empty in
+    /// valid Adamant modules per §6.2.1.6 Rule 5 (no global
+    /// storage instructions); the duplication check is
+    /// preserved structurally for byte-faithful upstream
+    /// parity.
+    ///
+    /// Mirrors upstream's
+    /// `StatusCode::DUPLICATE_ACQUIRES_ANNOTATION`.
+    ///
+    /// Phase 5/5b.3 C-2
+    /// (`module_pass::duplication_checker::check_function_definitions`).
+    DuplicateAcquiresAnnotation {
+        /// Index of the offending function definition.
+        fn_def_idx: FunctionDefinitionIndex,
+    },
+
+    /// A `DatatypeHandle` or `FunctionHandle` whose `module`
+    /// field references the module's `self_module_handle_idx`
+    /// has no corresponding definition in `struct_defs` /
+    /// `enum_defs` / `function_defs`. Self-module handles
+    /// must be implemented by a definition; foreign-module
+    /// handles are imports and need no implementation.
+    ///
+    /// Mirrors upstream's `StatusCode::UNIMPLEMENTED_HANDLE`.
+    ///
+    /// Phase 5/5b.3 C-2
+    /// (`module_pass::duplication_checker::check_datatype_handles_implemented`
+    /// and the analogous function-handle path inside
+    /// `check_function_definitions`).
+    UnimplementedHandle {
+        /// Whether the offending handle is a datatype handle
+        /// or a function handle.
+        kind: HandleKind,
+        /// Index of the offending handle.
+        idx: TableIndex,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 3, 6, 7 land in subsequent
@@ -723,6 +848,44 @@ impl core::fmt::Display for HandleKind {
         match self {
             Self::DatatypeHandle => write!(f, "datatype handle"),
             Self::FunctionHandle => write!(f, "function handle"),
+        }
+    }
+}
+
+/// Whether the offending definition on an
+/// [`AdamantValidationError::InvalidModuleHandle`] is a struct,
+/// enum, or function definition. Distinct from
+/// [`FieldOwnerKind`] (`Struct | Enum`) — function definitions
+/// don't have field-ownership semantics, so a third variant
+/// would force `FieldOwnerKind`'s name to drift.
+///
+/// Per the deliberate-Adamant-decision pattern (third instance
+/// after B-4.2's byte→range→duplicate ordering and C-1.3's
+/// `check_field_def` extraction): introduce `DefKind` deliberately
+/// rather than overloading `FieldOwnerKind`. Q2 disposition at
+/// the C-2 plan-gate.
+///
+/// Phase 5/5b.3 C-2
+/// (`module_pass::duplication_checker`).
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum DefKind {
+    /// The offending definition is a struct definition;
+    /// `def_idx` indexes `struct_defs`.
+    Struct,
+    /// The offending definition is an enum definition;
+    /// `def_idx` indexes `enum_defs`.
+    Enum,
+    /// The offending definition is a function definition;
+    /// `def_idx` indexes `function_defs`.
+    Function,
+}
+
+impl core::fmt::Display for DefKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Struct => write!(f, "struct"),
+            Self::Enum => write!(f, "enum"),
+            Self::Function => write!(f, "function"),
         }
     }
 }
@@ -1099,6 +1262,44 @@ impl core::fmt::Display for AdamantValidationError {
                  {expected_variants_count} (whitepaper §6.2.1.8 step 3, \
                  `module_pass::bounds_checker::check_function_def`)",
                 fn_def_idx.0
+            ),
+            Self::DuplicateElement { kind, idx } => write!(
+                f,
+                "duplicate {kind} entry at index {idx} \
+                 (whitepaper §6.2.1.8 step 3, `module_pass::duplication_checker`)"
+            ),
+            Self::ZeroSizedStruct { def_idx } => write!(
+                f,
+                "struct definition {} has zero declared fields \
+                 (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::duplication_checker::check_struct_definitions`)",
+                def_idx.0
+            ),
+            Self::ZeroSizedEnum { def_idx } => write!(
+                f,
+                "enum definition {} has zero variants \
+                 (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::duplication_checker::check_enum_definitions`)",
+                def_idx.0
+            ),
+            Self::InvalidModuleHandle { kind, def_idx } => write!(
+                f,
+                "{kind} definition {def_idx} references a module handle that is not the \
+                 module's own self-handle (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::duplication_checker`)"
+            ),
+            Self::DuplicateAcquiresAnnotation { fn_def_idx } => write!(
+                f,
+                "function definition {} has duplicate entries in its \
+                 acquires_global_resources list (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::duplication_checker::check_function_definitions`)",
+                fn_def_idx.0
+            ),
+            Self::UnimplementedHandle { kind, idx } => write!(
+                f,
+                "{kind} {idx} references the module's self-handle but has no \
+                 corresponding definition (whitepaper §6.2.1.8 step 3, \
+                 `module_pass::duplication_checker`)"
             ),
         }
     }

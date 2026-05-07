@@ -46,6 +46,7 @@ mod ability_cache;
 pub(super) mod ability_field_requirements;
 mod bounds_checker;
 pub(super) mod constants;
+mod duplication_checker;
 pub(super) mod friends;
 pub(super) mod instantiation_loops;
 pub(super) mod instruction_consistency;

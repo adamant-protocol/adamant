@@ -109,7 +109,9 @@ mod rule_04_no_natives;
 mod test_fixtures;
 
 pub use config::AdamantVerifierConfig;
-pub use error::{AdamantValidationError, FieldOwnerKind, HandleKind, MalformedConstantReason};
+pub use error::{
+    AdamantValidationError, DefKind, FieldOwnerKind, HandleKind, MalformedConstantReason,
+};
 
 use move_binary_format::{errors::Location, file_format::CompiledModule};
 
