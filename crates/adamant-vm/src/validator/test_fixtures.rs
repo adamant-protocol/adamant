@@ -190,6 +190,16 @@ pub(super) fn rich_valid_module() -> AdamantCompiledModule {
             jump_tables: vec![],
         }),
     });
+    // Privacy metadata covering the Public function `foo()` at
+    // function_defs[0]. Required by Phase 5/5b.2 B-4.1 Rule 2
+    // (privacy-metadata) once it's wired into verify_module at
+    // B-5. The byte 0x00 is `#[transparent]` per §6.2.1.3.
+    let privacy_payload: Vec<(adamant_bytecode_format::FunctionDefinitionIndex, u8)> =
+        vec![(adamant_bytecode_format::FunctionDefinitionIndex(0), 0x00)];
+    m.metadata.push(Metadata {
+        key: b"adamant.privacy".to_vec(),
+        value: bcs::to_bytes(&privacy_payload).unwrap(),
+    });
     m
 }
 

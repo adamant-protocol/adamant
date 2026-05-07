@@ -59,17 +59,6 @@
 //! ordering means the structural pass typically wins.
 //!
 //! [`MalformedPrivacyMetadata`]: super::error::AdamantValidationError::MalformedPrivacyMetadata
-//!
-//! # Dead-code allow (transient)
-//!
-//! Phase 5/5b.2 B-5 wires this rule into
-//! [`crate::validator::verify_module`] in the step-5 batch
-//! after Rule 1 and before Rule 4. Until B-5 lands, the
-//! rule is reachable only from inline tests; the lib build
-//! sees the entry point as dead. The module-level
-//! `dead_code` allow is removed when B-5 wires the rule.
-
-#![allow(dead_code, reason = "wired into verify_module() in Phase 5/5b.2 B-5")]
 
 use adamant_bytecode_format::{FunctionDefinitionIndex, TableIndex, Visibility};
 

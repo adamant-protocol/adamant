@@ -43,14 +43,14 @@
 //! out with workspace test-pass + CLAUDE.md state-bump.
 
 mod ability_cache;
-mod ability_field_requirements;
-mod constants;
-mod friends;
-mod instantiation_loops;
-mod instruction_consistency;
-mod limits;
-mod privacy_metadata_structure;
-mod recursive_data_def;
+pub(super) mod ability_field_requirements;
+pub(super) mod constants;
+pub(super) mod friends;
+pub(super) mod instantiation_loops;
+pub(super) mod instruction_consistency;
+pub(super) mod limits;
+pub(super) mod privacy_metadata_structure;
+pub(super) mod recursive_data_def;
 
 #[cfg(test)]
 pub(in crate::validator::module_pass) mod test_helpers {

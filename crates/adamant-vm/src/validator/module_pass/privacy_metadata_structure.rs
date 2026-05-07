@@ -87,18 +87,6 @@
 //! `MalformedConstantData`).
 //!
 //! [`MalformedPrivacyMetadata`]: super::super::error::AdamantValidationError::MalformedPrivacyMetadata
-//!
-//! # Dead-code allow (transient)
-//!
-//! Phase 5/5b.2 B-5 wires this pass into
-//! [`crate::validator::verify_module`] in the step-3
-//! batch after the seven ported B-2/B-3 passes. Until B-5
-//! lands, the pass is reachable only from inline tests;
-//! the lib build sees the entry point as dead. The
-//! module-level `dead_code` allow is removed when B-5
-//! wires the pass.
-
-#![allow(dead_code, reason = "wired into verify_module() in Phase 5/5b.2 B-5")]
 
 use std::collections::HashSet;
 

@@ -63,17 +63,6 @@
 //! B-3.1's `<SELF>` rejection pin — third instance of the
 //! structural-impossibility-checks pattern named in B-3.4
 //! PROVENANCE.md batch.
-//!
-//! # Dead-code allow (transient)
-//!
-//! Phase 5/5b.2 B-5 wires this pass into
-//! [`crate::validator::verify_module`]. Until B-5 lands, the
-//! pass is reachable only from inline tests and Layer B
-//! cross-validation; the lib build sees the entry point as
-//! dead. The module-level `dead_code` allow is removed when
-//! B-5 wires the pass.
-
-#![allow(dead_code, reason = "wired into verify_module() in Phase 5/5b.2 B-5")]
 
 use std::collections::{BTreeMap, BTreeSet};
 

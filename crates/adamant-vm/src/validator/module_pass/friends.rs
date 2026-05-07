@@ -34,17 +34,6 @@
 //! proof posture (whitepaper §6.2.1.8); future relaxation
 //! requires a deliberate Adamant-side decision rather than
 //! tracking a Sui upstream change.
-//!
-//! # Dead-code allow (transient)
-//!
-//! Phase 5/5b.2 B-5 wires this pass into
-//! [`crate::validator::verify_module`]. Until B-5 lands, the
-//! pass is reachable only from inline tests and Layer B
-//! cross-validation; the lib build sees the entry point as
-//! dead. The module-level `dead_code` allow is removed when
-//! B-5 wires the pass.
-
-#![allow(dead_code, reason = "wired into verify_module() in Phase 5/5b.2 B-5")]
 
 use adamant_bytecode_format::{ModuleHandle, TableIndex};
 
