@@ -397,6 +397,26 @@ The protocol does not provide liquid staking at the protocol layer. Liquid staki
 
 Validator rewards accrue automatically. Delegators may compound (restake their rewards) by submitting a restake transaction; rewards do not auto-compound by default. This is a deliberate choice: auto-compounding requires defining a compounding interval that may not match every delegator's preferred cadence; manual restaking puts the choice in delegators' hands.
 
+### 10.5.5 Validator-funded infrastructure
+
+Validators may, at their discretion, allocate a portion of their commission revenue to fund infrastructure providers — including but not limited to service nodes (subsection 9.10), onion-routing relays (subsection 9.4.2), and other ecosystem participants whose work supports the validator's delegator base. This is a market mechanism enabled by the protocol but not specified by it.
+
+The economic logic is that validators compete for delegations. Beyond commission rates, validators may compete on the quality of services available to their delegators. A validator who funds well-distributed service-node infrastructure can offer their delegators better wallet experiences (faster queries, lower-latency state lookups) than a validator who relies on centralised RPC providers or who provides no infrastructure at all. This competition is healthy: it creates an economic flow from validator rewards to infrastructure providers, broadening the population of participants who earn from the network's operation.
+
+The protocol does not:
+
+- Require validators to fund infrastructure
+- Specify what infrastructure validators must fund
+- Set rates or terms for validator-to-infrastructure-provider payments
+- Maintain a registry of validators that fund infrastructure
+- Privilege validators that fund infrastructure over those that do not
+
+Validators that fund infrastructure do so out of their own commission revenue (already received per subsection 10.3.2), via voluntary on-chain or off-chain payment. The protocol provides standard smart-contract patterns supporting these payments (subsection 9.10.5), but the existence of such patterns does not constitute a protocol-level allocation: every ADM paid to an infrastructure provider was first earned by a validator, and the validator chose to spend it on infrastructure rather than retain it as commission profit or distribute it to delegators.
+
+This mechanism preserves the constitutional property that issuance goes entirely to validators (subsection 10.3.2) while enabling a downstream market in which validators voluntarily share their earnings with parties whose work supports the validator's competitive position. It also preserves credible neutrality (Principle I): the protocol does not pick infrastructure winners or operate any allocation mechanism beyond enabling the market to function.
+
+The honest expectation: this market may or may not materialise at scale. Its success depends on validators finding it worthwhile to compete on infrastructure quality, on infrastructure providers finding the work economically viable, and on delegators valuing the resulting service quality enough to influence their delegation choices. The protocol enables; the ecosystem develops.
+
 ## 10.6 Genesis economic parameters
 
 The following parameters are set at genesis and cannot be modified:

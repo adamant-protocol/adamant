@@ -13,6 +13,7 @@ The protocol uses standard, peer-reviewed cryptographic primitives — Ed25519 a
 This document specifies the Adamant protocol in full. Section 1 motivates the design through gap analysis of the existing landscape. Section 2 establishes the design principles that constrain all subsequent decisions. Sections 3 through 9 specify the technical architecture from cryptographic primitives through networking. Section 10 specifies the economic and incentive model. Section 11 specifies the genesis state and constitutional commitments. Section 12 discusses open problems and the scope of future work.
 
 The reference implementation is being developed in Rust and is available under the Apache 2.0 license at [github.com/adamant-protocol](https://github.com/adamant-protocol). This whitepaper and the implementation evolve together; specification changes are tracked in this document's version history and reflected in the corresponding code releases.
+
 # 1. Introduction & Motivation
 
 ## 1.1 The state of the art (2026)
@@ -79,6 +80,8 @@ Each property described above is, in isolation, well understood and demonstrated
 | Post-quantum signatures | NIST standardisation | 2024 |
 | Credible neutrality | Bitcoin, Monero | 2009, 2014 |
 
+The protocol's integrated design also enables a permissionless service-node infrastructure market (subsection 9.10) and a validator-funded infrastructure mechanism (subsection 10.5.5). These are not constitutional core properties — the chain functions correctly without them — but they are downstream consequences of the architecture: a chain that is permissionless at the participation layer, with standardised lightweight verification, naturally supports a market for the infrastructure that serves its lightweight clients. Whether this market develops at scale is determined by ecosystem dynamics rather than protocol mechanism, but the standardisation that makes it possible is part of the protocol's design.
+
 No single chain in the present landscape combines more than three of these properties. The chains that combine *credible neutrality* with anything else (Bitcoin, Monero) lack programmability and high throughput. The chains that combine *programmable privacy* with anything else (Aztec, Aleo) lack the throughput tier and the credibly neutral governance. The high-throughput chains (Sui, Solana, Aptos, Monad) have neither default privacy nor credibly neutral governance.
 
 This is the gap Adamant is designed to fill. The protocol's contribution is not the invention of new cryptographic primitives — those are taken from peer-reviewed literature unchanged — but the systems-level synthesis of these properties into a single coherent architecture, with credible neutrality enforced at genesis and the technical architecture chosen to be compatible with that neutrality.
@@ -122,6 +125,7 @@ It does include:
 Subsequent sections assume familiarity with elementary blockchain concepts (transactions, validators, consensus, state). Specialist concepts (DAG consensus, zero-knowledge proofs, threshold encryption, post-quantum signatures) are introduced when first used.
 
 The protocol specified here is intended to be implemented exactly once: at genesis. After genesis, the specification is frozen. Section 11 makes this commitment formally.
+
 # 2. Design Principles
 
 This section establishes the principles that constrain every subsequent design decision in this document. These principles are not aspirational; they are normative. Where a technical choice in later sections must be made between alternatives, the alternative more consistent with the principles below `MUST` be chosen, even at the cost of performance, convenience, or developer experience.
@@ -317,6 +321,7 @@ For clarity, these principles exclude the following from the protocol:
 These exclusions are normative. A future revision of this whitepaper that proposes to add any of the above features would, by definition, be specifying a different protocol — not a revised Adamant.
 
 The remainder of this document specifies how a protocol meeting these principles is constructed.
+
 # 3. Cryptographic Foundation
 
 This section specifies every cryptographic primitive used by the Adamant protocol. It is the foundation on which all other sections depend: the consensus mechanism, the privacy layer, the encrypted mempool, the identity system, and the recursive verification all rest on the primitives specified here.
@@ -657,6 +662,7 @@ For clarity, the following are deliberately not specified in this section and ar
 - The genesis state, including the specific Powers of Tau parameters: deferred to section 11 (Genesis & Constitution).
 
 This section establishes the primitives. Subsequent sections specify how they are composed.
+
 # 4. Identity & Accounts
 
 This section specifies how identity is represented on Adamant: how accounts are constructed, how keys authorise transactions, how users delegate visibility through view keys, and how recovery from key loss is handled. The design follows directly from the principles in section 2: privacy by default (II), permissionless participation (VII), and the cryptographic primitives in section 3.
@@ -862,6 +868,7 @@ Reference wallets `SHOULD` make this configuration achievable in approximately t
 This section briefly anticipates section 10 (Economics & Incentives). Account-related operations — creation, key rotation, validation logic invocation — are subject to the protocol's fee mechanism. The fee for account creation is paid by the creator. Validation logic invocation (which occurs for every transaction the account submits) is paid by whichever party the validation logic specifies as fee-payer; this enables sponsored transactions, where an application or paymaster pays fees on behalf of the user.
 
 Section 10 specifies fee structure in detail. The note here is that the smart-account model permits fee abstraction natively: the question of "who pays" is part of the validation logic, not a separate concept.
+
 # 5. Object Model & State
 
 This section specifies how Adamant represents data on the chain. It is the longest technical section in the whitepaper because the object model touches every other component: it determines what transactions can do, what the virtual machine operates on, what the consensus mechanism orders, what the privacy layer shields, and what the recursive verification proves.
@@ -1249,6 +1256,7 @@ A transfer transaction reads the sender's balance object, the recipient's balanc
 This pattern — global supply object plus per-holder balance objects — is the canonical fungible-token implementation on Adamant. It supports parallel processing (transfers between disjoint pairs of accounts do not conflict), it supports privacy (balances are shielded; transfers use stealth addresses; observers see only that *some* account transferred to *some other* account), and it is verifiable by recursive proofs (the chain's recursive proof attests that all balance changes are well-formed across all token types).
 
 Section 6 (the virtual machine) specifies how this pattern is expressed in the protocol's smart-contract language. Section 7 specifies the privacy mechanisms that shield the contents.
+
 # 6. Execution & Virtual Machine
 
 This section specifies how transactions are executed on Adamant: the smart-contract language, the virtual machine, the parallel execution model, and the resource accounting (gas) framework. It builds directly on the object model of section 5 and is the layer at which user-defined logic interacts with chain state.
@@ -2026,6 +2034,7 @@ A few features worth observing:
 - The function body is short because the protocol provides the cryptographic machinery. The contract author writes business logic; the protocol handles cryptography.
 
 This worked example will be revisited in section 7 (Privacy Layer), which specifies the cryptographic mechanisms underlying `#[shielded]` functions.
+
 # 7. Privacy Layer
 
 This section specifies how Adamant achieves privacy by default. It is the longest and most cryptographically dense section in this whitepaper, because privacy that is genuinely usable — private by default, programmable, auditable when the user chooses, and resistant to deanonymisation through chain analysis — requires substantial cryptographic machinery.
@@ -2442,6 +2451,7 @@ The privacy layer is constructed from peer-reviewed primitives composed in well-
 - **Prover markets** for optional outsourcing of proof generation
 
 The contribution is the integration: a system where these primitives compose cleanly with the object model, the smart-contract language, and the consensus mechanism (specified in section 8 next), to deliver a chain that is genuinely private by default and genuinely usable.
+
 # 8. Consensus
 
 This section specifies how Adamant's validators agree on the order of transactions, the state of the chain, and the validity of each state transition. It is the longest technical section in this whitepaper because consensus is where the protocol's correctness, performance, and credible-neutrality properties are simultaneously realised.
@@ -2768,6 +2778,7 @@ For context, here is how Adamant's consensus compares to the alternatives that w
 - **Asynchronous BFT (HoneyBadgerBFT, Dumbo).** Provably safe under arbitrary network conditions but with higher communication overhead. Adamant prefers Mysticeti's partial-synchrony assumption (which requires the network to eventually deliver messages) because it is realistic for internet conditions and enables better performance.
 
 The choice of Mysticeti-derived consensus reflects Adamant's prioritisation of the throughput-finality-decentralisation triangle at production scale.
+
 # 9. Networking & Mempool
 
 This section specifies the network layer of Adamant: how nodes find each other, how transactions reach validators, how messages are propagated, and how network-level metadata is protected. It complements section 8 (Consensus) by specifying the infrastructure on which consensus operates.
@@ -2994,6 +3005,130 @@ What is not observable (without breaking transport encryption):
 - Validator-internal computations
 
 This observability supports the operation of a healthy decentralised network: anyone can monitor the network's health, identify misbehaving nodes, and contribute to community-level abuse mitigation. The same observability is bounded by the encryption protections that prevent it from becoming a surveillance vector.
+
+## 9.10 Service-node infrastructure market
+
+The protocol's networking design enables a permissionless market for light-client infrastructure: nodes that serve recursive proofs, Merkle paths, and state queries to wallets that prefer not to maintain full state themselves. This subsection specifies the protocol-level standardisation that makes the market liquid; the economics of the market are between participants, not protocol-funded.
+
+### 9.10.1 Motivation
+
+Per subsection 9.1, light clients maintain only the recursive proof and Merkle paths to specific state of interest. This is the cryptographically lightest mode of participation in the chain — verification time is approximately 50-200 milliseconds on a modern smartphone (subsection 8.5.4), and storage requirements are minimal.
+
+A light client must, however, obtain its data from somewhere. Two paths exist:
+
+1. The wallet operates as a full node itself, maintaining the data it queries. This works but requires significant storage and bandwidth for what is otherwise a lightweight client.
+2. The wallet queries another node that maintains the data and serves it on request. This is the common pattern; it is how Ethereum wallets typically interact with Infura, Alchemy, or QuickNode.
+
+The second path's risk is centralisation: if all wallets query the same handful of providers, those providers become a privileged infrastructure layer that can observe user activity, censor specific queries, or fail in ways that affect the entire ecosystem.
+
+The protocol's response is to standardise the query format and registration mechanism such that *any* node can serve light-client queries, allowing many small operators (including phone-based operators) to participate alongside any large infrastructure providers that emerge. The market itself is permissionless and competitive.
+
+### 9.10.2 Service node role
+
+A **service node** is a node that:
+
+- Maintains the chain state required to answer light-client queries (recursive proofs, Merkle paths, transaction inclusion proofs)
+- Exposes a standardised query/response interface over libp2p
+- Optionally registers its availability and pricing in a discovery topic
+- Earns fees from the parties that pay for its services (specified in subsection 9.10.5)
+
+Service nodes are not validators. They do not participate in consensus, do not generate proofs, do not have stake at risk, and do not earn from issuance. Their role is purely informational: serving public, cryptographically-verifiable data to clients that prefer not to maintain the data themselves.
+
+A node may simultaneously be a validator and a service node; the roles are independent and operate on independent infrastructure. A node may also be a service node only, with no validator responsibilities. Phone-based service nodes are the design's primary intended audience, though the role is open to any hardware capable of maintaining the required state.
+
+### 9.10.3 Standardised query format
+
+Service-node queries use a libp2p protocol identifier `/adamant/service-query/v1` with a defined message schema. The schema covers:
+
+- **State queries.** Given an account address or object ID, return the current value plus a Merkle path to the state commitment.
+- **Inclusion queries.** Given a transaction identifier, return the transaction plus a Merkle path to its containing epoch's transaction commitment.
+- **Recursive proof queries.** Return the recursive proof for a specified epoch.
+- **Range queries.** Given a stealth-address scan range and time window, return all matching note commitments (subject to per-node policy on data volume).
+- **Subscription queries.** Establish a streaming subscription for events matching a specified filter, paid per-event.
+
+Each query type has a defined request schema, response schema, and error format. The full schema is specified in the reference implementation; this subsection documents the categories rather than the specific bytes.
+
+### 9.10.4 Service-node registration
+
+A service node may register its availability via a libp2p gossipsub topic `/adamant/service-nodes/v1`. The registration message contains:
+
+- The node's libp2p endpoint
+- Its supported query types
+- Its fee schedule per query type
+- Optional metadata (geographic region for latency-sensitive selection, supported query subset, archive node status)
+- A cryptographic signature binding the registration to the node's identity
+
+Registration is permissionless. Any node may register. Wallets crawl the topic to build their service-node list and select providers based on advertised criteria (latency, fee, supported queries, geographic preference).
+
+The protocol does not maintain a central registry, does not vet service nodes, and does not provide a "trusted" service-node list. The market is open and competitive.
+
+### 9.10.5 Payment
+
+Service-node payments occur through one of three patterns. The protocol enables all three; nodes and clients select the pattern that suits their relationship.
+
+#### Pattern A: Direct wallet-to-node payment
+
+A wallet pays a service node directly via the protocol's payment-channel infrastructure. The wallet opens a channel with a small ADM deposit, queries are paid as off-chain channel updates, and the channel settles on-chain when closed. This pattern is appropriate when wallets have ADM available and want direct relationships with service nodes.
+
+#### Pattern B: Validator-funded service
+
+A validator funds service-node operation as part of providing infrastructure to their delegator base. The validator pays service nodes (per query, per period, or per uptime, by mutual agreement) from their own commission revenue; delegators of that validator receive service-node access bundled with their delegation, paying nothing additional. This pattern is appropriate for validators competing for delegators on the basis of delegator experience quality (subsection 10.5.5).
+
+#### Pattern C: Application-paid service
+
+An application or wallet developer pays service nodes on behalf of their users — analogous to the sponsored-fee pattern in subsection 10.4.5. This pattern is appropriate for consumer applications that want to abstract infrastructure costs away from end users.
+
+The protocol provides standard smart-contract patterns implementing each payment mode in the standard library (subsection 6.5). Service nodes and clients choose patterns by mutual agreement; the protocol does not privilege one over another.
+
+### 9.10.6 Reputation and verification
+
+Service nodes serve cryptographically-verifiable data. A service node cannot lie about chain state without producing a Merkle path or recursive proof that fails verification — the client detects invalid responses immediately and refuses payment.
+
+The protocol provides a **delivery receipt** primitive: a signed acknowledgement from the client to the service node confirming that a query was served correctly. Service nodes accumulate delivery receipts as evidence of reliable operation. Third parties may build reputation systems on top of these receipts; the protocol does not specify or operate a reputation system itself.
+
+A service node may operate in two modes, advertised in their registration:
+
+- **Verifying mode:** The service node verifies recursive proofs and Merkle paths before serving them. This adds a small marginal cost per query but provides an additional check against malformed data propagating through the network.
+- **Relay mode:** The service node forwards data without independent verification. This is cheaper to operate but offers no observability beyond the wallet's own verification.
+
+Wallets select between modes based on their trust posture; verifying nodes typically charge slightly higher fees.
+
+### 9.10.7 Relationship to onion-routing relays
+
+Subsection 9.4.2 specifies that onion-routing relays support transaction privacy but are not protocol-rewarded. The same service-market mechanism extends naturally to relays: a wallet (or a relay-using application) may pay relays via the same payment patterns described above. The protocol's standardisation extends to relay registration and payment formats; the economics are between participants.
+
+### 9.10.8 What this market does and does not provide
+
+**It does provide:**
+
+- A pathway for phone-based operators to contribute to the network's infrastructure and earn fees from real demand
+- Standardisation that makes the market liquid (any wallet can query any service node; any validator can fund any service node)
+- An alternative to centralised RPC providers without compromising the lightweight-client model
+- Natural amplification of the slashing-evidence-submission mechanism (subsection 8.1.5): service nodes operating in verifying mode are positioned to detect protocol violations as a side effect of their service work
+
+**It does not provide:**
+
+- A guarantee that service nodes will earn meaningfully — that depends on demand materialising
+- A new economic recipient at the protocol layer — service nodes are paid by other participants, not by the protocol
+- Consensus participation — service nodes do not vote, propose, or sign consensus messages
+- Privileged access to private data — service nodes see only the public, cryptographically-verifiable data the chain commits to
+- Censorship resistance for queries — a wallet whose chosen service node refuses to serve them must select another service node; multiple competing nodes are the protection
+
+The market is an enhancement, not a constitutional core property. The chain functions correctly whether or not the service-node market materialises. If no service nodes exist, wallets fall back to running their own full nodes or using whatever centralised RPC providers exist; the protocol works either way. The market's value is in providing an alternative pathway for participation and a check on centralisation pressure.
+
+### 9.10.9 Scope and operational dependencies
+
+The reference implementation includes service-node software as a deployment target distinct from validator software. The service-node software is intentionally lightweight, with hardware requirements compatible with consumer-grade phones and laptops. Specific hardware and storage requirements are documented in the reference implementation's operational guidance, not in this specification.
+
+Service-node operation is voluntary and unincentivised at the protocol layer. Whether a healthy service-node ecosystem develops depends on:
+
+- Wallets choosing to use service nodes rather than running full nodes or using centralised RPC providers
+- Validators choosing to fund service nodes as part of competing for delegators
+- Operators finding the work economically worthwhile at prevailing fee levels
+- Service-node software being usable enough that operators can run it without specialised expertise
+
+The protocol provides the substrate; the ecosystem develops the infrastructure on top.
+
 # 10. Economics & Incentives
 
 This section specifies the protocol's economic model: the native token, the genesis pool and launch mechanics, the post-launch issuance schedule, the fee mechanism, and the staking and reward economy. These specifications are part of the consensus rules; they cannot be modified by any on-chain mechanism (Principle I).
@@ -3393,6 +3528,26 @@ The protocol does not provide liquid staking at the protocol layer. Liquid staki
 
 Validator rewards accrue automatically. Delegators may compound (restake their rewards) by submitting a restake transaction; rewards do not auto-compound by default. This is a deliberate choice: auto-compounding requires defining a compounding interval that may not match every delegator's preferred cadence; manual restaking puts the choice in delegators' hands.
 
+### 10.5.5 Validator-funded infrastructure
+
+Validators may, at their discretion, allocate a portion of their commission revenue to fund infrastructure providers — including but not limited to service nodes (subsection 9.10), onion-routing relays (subsection 9.4.2), and other ecosystem participants whose work supports the validator's delegator base. This is a market mechanism enabled by the protocol but not specified by it.
+
+The economic logic is that validators compete for delegations. Beyond commission rates, validators may compete on the quality of services available to their delegators. A validator who funds well-distributed service-node infrastructure can offer their delegators better wallet experiences (faster queries, lower-latency state lookups) than a validator who relies on centralised RPC providers or who provides no infrastructure at all. This competition is healthy: it creates an economic flow from validator rewards to infrastructure providers, broadening the population of participants who earn from the network's operation.
+
+The protocol does not:
+
+- Require validators to fund infrastructure
+- Specify what infrastructure validators must fund
+- Set rates or terms for validator-to-infrastructure-provider payments
+- Maintain a registry of validators that fund infrastructure
+- Privilege validators that fund infrastructure over those that do not
+
+Validators that fund infrastructure do so out of their own commission revenue (already received per subsection 10.3.2), via voluntary on-chain or off-chain payment. The protocol provides standard smart-contract patterns supporting these payments (subsection 9.10.5), but the existence of such patterns does not constitute a protocol-level allocation: every ADM paid to an infrastructure provider was first earned by a validator, and the validator chose to spend it on infrastructure rather than retain it as commission profit or distribute it to delegators.
+
+This mechanism preserves the constitutional property that issuance goes entirely to validators (subsection 10.3.2) while enabling a downstream market in which validators voluntarily share their earnings with parties whose work supports the validator's competitive position. It also preserves credible neutrality (Principle I): the protocol does not pick infrastructure winners or operate any allocation mechanism beyond enabling the market to function.
+
+The honest expectation: this market may or may not materialise at scale. Its success depends on validators finding it worthwhile to compete on infrastructure quality, on infrastructure providers finding the work economically viable, and on delegators valuing the resulting service quality enough to influence their delegation choices. The protocol enables; the ecosystem develops.
+
 ## 10.6 Genesis economic parameters
 
 The following parameters are set at genesis and cannot be modified:
@@ -3428,6 +3583,7 @@ This section does not contain:
 - Investment-related language of any kind
 
 The protocol is a piece of infrastructure. Its economic model is specified in mechanical terms — issuance schedules, fee formulas, burn rates — and the consequences of those mechanics in terms of token supply and validator economics are derivable from the specifications. Predicting market outcomes is outside the scope of a technical specification and is intentionally absent.
+
 # 11. Genesis & Constitution
 
 This section is the protocol's constitutional commitment. It specifies what is fixed forever at genesis, what cannot be changed by any party including the protocol's original implementers, and the precise mechanism by which the protocol may change despite this — through socially-coordinated hard forks in which every node operator individually chooses whether to adopt new client software.
@@ -3550,6 +3706,8 @@ The economic model specified in section 10:
 - The 28-day unbonding period
 
 The launch phase is a one-time event ending in pool exhaustion or the 5-year time cap; the post-launch operational regime governs the chain in perpetuity thereafter.
+
+The protocol additionally enables, but does not fund or specify in detail, a permissionless service-node infrastructure market (subsection 9.10) and a validator-funded infrastructure mechanism (subsection 10.5.5). The protocol-level commitments fixed at genesis include the standardised query format, the registration mechanism, the smart-contract patterns supporting payment, and the principle that issuance flows only to validators (subsection 10.3.2). The downstream market — its participants, fee schedules, reputation systems, and operational shape — is not constitutionally fixed and may evolve organically without requiring hard-fork coordination. Validators choosing to fund infrastructure do so from their own commission revenue, not from any protocol allocation; the protocol's role is enablement, not allocation.
 
 ### 11.2.8 Genesis state
 
@@ -3676,6 +3834,7 @@ The protocol's constitutional commitment, in the simplest possible terms:
 - A protocol with this property cannot be captured. It can only be replaced by an alternative that participants prefer.
 
 This is what is meant by "the chain you use when you don't trust anyone." The chain itself is what you trust, and it is constructed such that the trust is mechanical, not personal.
+
 # 12. Conclusion & Open Problems
 
 This section closes the whitepaper. It is shorter than the technical sections by design: it does not specify new protocol behaviour but reflects on what has been specified, identifies the open problems that remain, and outlines the path from this document to a running chain.
@@ -3699,6 +3858,8 @@ This whitepaper specifies, in detail sufficient to implement, a Layer 1 blockcha
 - **Mutability as a first-class property.** Every contract declares its mutability rules at creation; declarations are protocol-enforced and visible to users before interaction.
 
 - **Native account abstraction.** Every account is a smart account from genesis. No retrofit, no special cases.
+
+- **Service-node infrastructure market.** Permissionless, standardised market for light-client infrastructure (subsection 9.10), with validator-funded service mechanisms (subsection 10.5.5). The protocol enables the market without funding it from issuance.
 
 - **Adamant Move smart contracts.** Linear-typed, resource-safe, formally verifiable smart-contract language.
 
@@ -3752,6 +3913,12 @@ Several problems are acknowledged as open and will be addressed during implement
 **Long-term storage costs.** Section 5.6 specifies state rent and archival, but the long-term economics of the archival ecosystem (how many archive nodes are needed, who pays for them) are uncertain. The protocol provides the mechanism; the ecosystem must develop in practice.
 
 **Operational tooling.** Wallets, indexers, block explorers, RPC providers, monitoring tooling — these are not part of the protocol but are essential for users. The protocol's launch must be accompanied by reasonable tooling, and the early ecosystem requires bootstrapping.
+
+**Service-node market materialisation.** Subsection 9.10 specifies the standardised infrastructure for a service-node market. Whether such a market develops at meaningful scale depends on multiple factors that are open at the time of this draft: whether wallets prefer service nodes over centralised RPC providers, whether validators choose to fund infrastructure as part of competing for delegators (subsection 10.5.5), whether payment-channel UX is good enough for routine wallet usage, and whether the population of operators is large enough to resist centralisation pressure. The protocol provides the substrate; the ecosystem must develop the market. The chain's correct operation does not depend on the market materialising.
+
+**Service-node payment channel UX.** Subsection 9.10.5 specifies three payment patterns for service-node fees. Pattern A (direct wallet-to-node payment via channels) inherits the well-documented UX challenges of payment-channel networks — channel management, liquidity considerations, force-close handling. The reference implementation aims to make these flows automatic and invisible to users, but achieving that level of polish is non-trivial. Pattern B (validator-funded) and Pattern C (application-paid) avoid these UX issues for end users by absorbing them into validator or application infrastructure.
+
+**Reputation system development.** Subsection 9.10.6 specifies a delivery-receipt primitive but does not specify a reputation system. Practical service-node reputation requires third-party tooling: aggregators of delivery receipts, signed performance attestations, perhaps decentralised reputation networks. The protocol provides the cryptographic primitives; the reputation systems are ecosystem work.
 
 ### 12.2.3 Limitations acknowledged
 

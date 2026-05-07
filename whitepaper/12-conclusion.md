@@ -22,6 +22,8 @@ This whitepaper specifies, in detail sufficient to implement, a Layer 1 blockcha
 
 - **Native account abstraction.** Every account is a smart account from genesis. No retrofit, no special cases.
 
+- **Service-node infrastructure market.** Permissionless, standardised market for light-client infrastructure (subsection 9.10), with validator-funded service mechanisms (subsection 10.5.5). The protocol enables the market without funding it from issuance.
+
 - **Adamant Move smart contracts.** Linear-typed, resource-safe, formally verifiable smart-contract language.
 
 - **Multi-dimensional gas.** Six independent fee dimensions, EIP-1559-style price discovery, fee burn.
@@ -74,6 +76,12 @@ Several problems are acknowledged as open and will be addressed during implement
 **Long-term storage costs.** Section 5.6 specifies state rent and archival, but the long-term economics of the archival ecosystem (how many archive nodes are needed, who pays for them) are uncertain. The protocol provides the mechanism; the ecosystem must develop in practice.
 
 **Operational tooling.** Wallets, indexers, block explorers, RPC providers, monitoring tooling — these are not part of the protocol but are essential for users. The protocol's launch must be accompanied by reasonable tooling, and the early ecosystem requires bootstrapping.
+
+**Service-node market materialisation.** Subsection 9.10 specifies the standardised infrastructure for a service-node market. Whether such a market develops at meaningful scale depends on multiple factors that are open at the time of this draft: whether wallets prefer service nodes over centralised RPC providers, whether validators choose to fund infrastructure as part of competing for delegators (subsection 10.5.5), whether payment-channel UX is good enough for routine wallet usage, and whether the population of operators is large enough to resist centralisation pressure. The protocol provides the substrate; the ecosystem must develop the market. The chain's correct operation does not depend on the market materialising.
+
+**Service-node payment channel UX.** Subsection 9.10.5 specifies three payment patterns for service-node fees. Pattern A (direct wallet-to-node payment via channels) inherits the well-documented UX challenges of payment-channel networks — channel management, liquidity considerations, force-close handling. The reference implementation aims to make these flows automatic and invisible to users, but achieving that level of polish is non-trivial. Pattern B (validator-funded) and Pattern C (application-paid) avoid these UX issues for end users by absorbing them into validator or application infrastructure.
+
+**Reputation system development.** Subsection 9.10.6 specifies a delivery-receipt primitive but does not specify a reputation system. Practical service-node reputation requires third-party tooling: aggregators of delivery receipts, signed performance attestations, perhaps decentralised reputation networks. The protocol provides the cryptographic primitives; the reputation systems are ecosystem work.
 
 ### 12.2.3 Limitations acknowledged
 

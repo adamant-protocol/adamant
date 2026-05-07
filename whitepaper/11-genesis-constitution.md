@@ -121,6 +121,8 @@ The economic model specified in section 10:
 
 The launch phase is a one-time event ending in pool exhaustion or the 5-year time cap; the post-launch operational regime governs the chain in perpetuity thereafter.
 
+The protocol additionally enables, but does not fund or specify in detail, a permissionless service-node infrastructure market (subsection 9.10) and a validator-funded infrastructure mechanism (subsection 10.5.5). The protocol-level commitments fixed at genesis include the standardised query format, the registration mechanism, the smart-contract patterns supporting payment, and the principle that issuance flows only to validators (subsection 10.3.2). The downstream market — its participants, fee schedules, reputation systems, and operational shape — is not constitutionally fixed and may evolve organically without requiring hard-fork coordination. Validators choosing to fund infrastructure do so from their own commission revenue, not from any protocol allocation; the protocol's role is enablement, not allocation.
+
 ### 11.2.8 Genesis state
 
 The specific state at the moment of genesis, including:

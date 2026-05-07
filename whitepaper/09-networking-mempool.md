@@ -224,3 +224,126 @@ What is not observable (without breaking transport encryption):
 - Validator-internal computations
 
 This observability supports the operation of a healthy decentralised network: anyone can monitor the network's health, identify misbehaving nodes, and contribute to community-level abuse mitigation. The same observability is bounded by the encryption protections that prevent it from becoming a surveillance vector.
+
+## 9.10 Service-node infrastructure market
+
+The protocol's networking design enables a permissionless market for light-client infrastructure: nodes that serve recursive proofs, Merkle paths, and state queries to wallets that prefer not to maintain full state themselves. This subsection specifies the protocol-level standardisation that makes the market liquid; the economics of the market are between participants, not protocol-funded.
+
+### 9.10.1 Motivation
+
+Per subsection 9.1, light clients maintain only the recursive proof and Merkle paths to specific state of interest. This is the cryptographically lightest mode of participation in the chain — verification time is approximately 50-200 milliseconds on a modern smartphone (subsection 8.5.4), and storage requirements are minimal.
+
+A light client must, however, obtain its data from somewhere. Two paths exist:
+
+1. The wallet operates as a full node itself, maintaining the data it queries. This works but requires significant storage and bandwidth for what is otherwise a lightweight client.
+2. The wallet queries another node that maintains the data and serves it on request. This is the common pattern; it is how Ethereum wallets typically interact with Infura, Alchemy, or QuickNode.
+
+The second path's risk is centralisation: if all wallets query the same handful of providers, those providers become a privileged infrastructure layer that can observe user activity, censor specific queries, or fail in ways that affect the entire ecosystem.
+
+The protocol's response is to standardise the query format and registration mechanism such that *any* node can serve light-client queries, allowing many small operators (including phone-based operators) to participate alongside any large infrastructure providers that emerge. The market itself is permissionless and competitive.
+
+### 9.10.2 Service node role
+
+A **service node** is a node that:
+
+- Maintains the chain state required to answer light-client queries (recursive proofs, Merkle paths, transaction inclusion proofs)
+- Exposes a standardised query/response interface over libp2p
+- Optionally registers its availability and pricing in a discovery topic
+- Earns fees from the parties that pay for its services (specified in subsection 9.10.5)
+
+Service nodes are not validators. They do not participate in consensus, do not generate proofs, do not have stake at risk, and do not earn from issuance. Their role is purely informational: serving public, cryptographically-verifiable data to clients that prefer not to maintain the data themselves.
+
+A node may simultaneously be a validator and a service node; the roles are independent and operate on independent infrastructure. A node may also be a service node only, with no validator responsibilities. Phone-based service nodes are the design's primary intended audience, though the role is open to any hardware capable of maintaining the required state.
+
+### 9.10.3 Standardised query format
+
+Service-node queries use a libp2p protocol identifier `/adamant/service-query/v1` with a defined message schema. The schema covers:
+
+- **State queries.** Given an account address or object ID, return the current value plus a Merkle path to the state commitment.
+- **Inclusion queries.** Given a transaction identifier, return the transaction plus a Merkle path to its containing epoch's transaction commitment.
+- **Recursive proof queries.** Return the recursive proof for a specified epoch.
+- **Range queries.** Given a stealth-address scan range and time window, return all matching note commitments (subject to per-node policy on data volume).
+- **Subscription queries.** Establish a streaming subscription for events matching a specified filter, paid per-event.
+
+Each query type has a defined request schema, response schema, and error format. The full schema is specified in the reference implementation; this subsection documents the categories rather than the specific bytes.
+
+### 9.10.4 Service-node registration
+
+A service node may register its availability via a libp2p gossipsub topic `/adamant/service-nodes/v1`. The registration message contains:
+
+- The node's libp2p endpoint
+- Its supported query types
+- Its fee schedule per query type
+- Optional metadata (geographic region for latency-sensitive selection, supported query subset, archive node status)
+- A cryptographic signature binding the registration to the node's identity
+
+Registration is permissionless. Any node may register. Wallets crawl the topic to build their service-node list and select providers based on advertised criteria (latency, fee, supported queries, geographic preference).
+
+The protocol does not maintain a central registry, does not vet service nodes, and does not provide a "trusted" service-node list. The market is open and competitive.
+
+### 9.10.5 Payment
+
+Service-node payments occur through one of three patterns. The protocol enables all three; nodes and clients select the pattern that suits their relationship.
+
+#### Pattern A: Direct wallet-to-node payment
+
+A wallet pays a service node directly via the protocol's payment-channel infrastructure. The wallet opens a channel with a small ADM deposit, queries are paid as off-chain channel updates, and the channel settles on-chain when closed. This pattern is appropriate when wallets have ADM available and want direct relationships with service nodes.
+
+#### Pattern B: Validator-funded service
+
+A validator funds service-node operation as part of providing infrastructure to their delegator base. The validator pays service nodes (per query, per period, or per uptime, by mutual agreement) from their own commission revenue; delegators of that validator receive service-node access bundled with their delegation, paying nothing additional. This pattern is appropriate for validators competing for delegators on the basis of delegator experience quality (subsection 10.5.5).
+
+#### Pattern C: Application-paid service
+
+An application or wallet developer pays service nodes on behalf of their users — analogous to the sponsored-fee pattern in subsection 10.4.5. This pattern is appropriate for consumer applications that want to abstract infrastructure costs away from end users.
+
+The protocol provides standard smart-contract patterns implementing each payment mode in the standard library (subsection 6.5). Service nodes and clients choose patterns by mutual agreement; the protocol does not privilege one over another.
+
+### 9.10.6 Reputation and verification
+
+Service nodes serve cryptographically-verifiable data. A service node cannot lie about chain state without producing a Merkle path or recursive proof that fails verification — the client detects invalid responses immediately and refuses payment.
+
+The protocol provides a **delivery receipt** primitive: a signed acknowledgement from the client to the service node confirming that a query was served correctly. Service nodes accumulate delivery receipts as evidence of reliable operation. Third parties may build reputation systems on top of these receipts; the protocol does not specify or operate a reputation system itself.
+
+A service node may operate in two modes, advertised in their registration:
+
+- **Verifying mode:** The service node verifies recursive proofs and Merkle paths before serving them. This adds a small marginal cost per query but provides an additional check against malformed data propagating through the network.
+- **Relay mode:** The service node forwards data without independent verification. This is cheaper to operate but offers no observability beyond the wallet's own verification.
+
+Wallets select between modes based on their trust posture; verifying nodes typically charge slightly higher fees.
+
+### 9.10.7 Relationship to onion-routing relays
+
+Subsection 9.4.2 specifies that onion-routing relays support transaction privacy but are not protocol-rewarded. The same service-market mechanism extends naturally to relays: a wallet (or a relay-using application) may pay relays via the same payment patterns described above. The protocol's standardisation extends to relay registration and payment formats; the economics are between participants.
+
+### 9.10.8 What this market does and does not provide
+
+**It does provide:**
+
+- A pathway for phone-based operators to contribute to the network's infrastructure and earn fees from real demand
+- Standardisation that makes the market liquid (any wallet can query any service node; any validator can fund any service node)
+- An alternative to centralised RPC providers without compromising the lightweight-client model
+- Natural amplification of the slashing-evidence-submission mechanism (subsection 8.1.5): service nodes operating in verifying mode are positioned to detect protocol violations as a side effect of their service work
+
+**It does not provide:**
+
+- A guarantee that service nodes will earn meaningfully — that depends on demand materialising
+- A new economic recipient at the protocol layer — service nodes are paid by other participants, not by the protocol
+- Consensus participation — service nodes do not vote, propose, or sign consensus messages
+- Privileged access to private data — service nodes see only the public, cryptographically-verifiable data the chain commits to
+- Censorship resistance for queries — a wallet whose chosen service node refuses to serve them must select another service node; multiple competing nodes are the protection
+
+The market is an enhancement, not a constitutional core property. The chain functions correctly whether or not the service-node market materialises. If no service nodes exist, wallets fall back to running their own full nodes or using whatever centralised RPC providers exist; the protocol works either way. The market's value is in providing an alternative pathway for participation and a check on centralisation pressure.
+
+### 9.10.9 Scope and operational dependencies
+
+The reference implementation includes service-node software as a deployment target distinct from validator software. The service-node software is intentionally lightweight, with hardware requirements compatible with consumer-grade phones and laptops. Specific hardware and storage requirements are documented in the reference implementation's operational guidance, not in this specification.
+
+Service-node operation is voluntary and unincentivised at the protocol layer. Whether a healthy service-node ecosystem develops depends on:
+
+- Wallets choosing to use service nodes rather than running full nodes or using centralised RPC providers
+- Validators choosing to fund service nodes as part of competing for delegators
+- Operators finding the work economically worthwhile at prevailing fee levels
+- Service-node software being usable enough that operators can run it without specialised expertise
+
+The protocol provides the substrate; the ecosystem develops the infrastructure on top.
