@@ -1,14 +1,17 @@
 //! Adamant validator error type.
 //!
 //! [`AdamantValidationError`] is the single error type returned
-//! by [`super::verify_module`]. The
-//! [`AdamantValidationError::SuiVerifier`] variant wraps Sui's
-//! [`VMError`] for inherited verifier failures (transitional
-//! bridge — see the wrapper docs); per-rule variants carry
-//! rule-specific diagnostic data for the Adamant-specific rules.
+//! by [`super::verify_module`]. Per-rule variants carry rule-
+//! specific diagnostic data for the Adamant-specific rules; per-
+//! pass variants carry pass-specific diagnostic data for the
+//! Adamant-native module-level and per-function passes.
 //!
 //! Eager semantics: callers receive the first violation
 //! encountered.
+//!
+//! Phase 5/5b.5 E-1a removed the transitional `SuiVerifier`
+//! variant when the Sui-verifier bridge tore out; per-pass
+//! Adamant-native coverage is now the only verification path.
 
 use adamant_bytecode_format::{
     CodeOffset, ConstantPoolIndex, DatatypeHandleIndex, EnumDefinitionIndex,
@@ -16,7 +19,6 @@ use adamant_bytecode_format::{
     StructDefinitionIndex, TableIndex,
 };
 use adamant_types::Address;
-use move_binary_format::errors::VMError;
 
 use crate::module_wire::AdamantDeserializeError;
 
@@ -56,8 +58,8 @@ pub enum AdamantValidationError {
     /// The input module bytes are not the canonical encoding of
     /// the parsed [`AdamantCompiledModule`].
     ///
-    /// Sits between [`Self::AdamantDeserializer`] and
-    /// [`Self::SuiVerifier`] in the pipeline: after Adamant's
+    /// Sits between [`Self::AdamantDeserializer`] and the step-3
+    /// module-level passes in the pipeline: after Adamant's
     /// deserializer accepts the bytes, the wrapper re-serializes
     /// the parsed module via [`crate::adamant_serialize`] and
     /// byte-compares the output against the input. A mismatch
@@ -91,31 +93,6 @@ pub enum AdamantValidationError {
         /// input is shorter than the canonical re-serialization.
         input_byte: Option<u8>,
     },
-
-    /// Sui-Move's inherited verifier rejected the parsed module.
-    ///
-    /// Transitional bridge: the wrapper re-parses bytes via
-    /// Sui's deserializer (for modules without Adamant
-    /// extensions) to obtain a [`CompiledModule`] and runs Sui's
-    /// `move-bytecode-verifier` passes against it. This covers
-    /// the inherited checks listed in §6.2.1.6 (type safety,
-    /// reference safety, linearity, stack discipline, control-
-    /// flow integrity, function-call ABI, generic instantiation,
-    /// friend visibility) plus Sui's bounds checking. Phase 5/5b
-    /// (module-level passes) and Phase 5/5c (per-function passes)
-    /// will replace this transitional bridge with Adamant-native
-    /// equivalents.
-    ///
-    /// For modules that contain Adamant extensions per §6.2.1.4,
-    /// Sui's verifier cannot run (the extension opcodes 0x80..=0x90
-    /// are outside Sui's opcode space); the wrapper skips this
-    /// step and per-instruction extension verification lands in
-    /// Phase 5/5c.
-    ///
-    /// The wrapped [`VMError`] carries Sui's diagnostic context.
-    ///
-    /// [`CompiledModule`]: move_binary_format::file_format::CompiledModule
-    SuiVerifier(VMError),
 
     /// Module has no `b"adamant.mutability"` metadata entry per
     /// §6.2.1.3 / §6.2.1.6 Rule 1.
@@ -1621,9 +1598,6 @@ impl core::fmt::Display for AdamantValidationError {
                  (first divergence at byte offset {byte_offset}: \
                  canonical = {canonical_byte:?}, input = {input_byte:?})"
             ),
-            Self::SuiVerifier(e) => {
-                write!(f, "Sui-Move verifier rejected the parsed module: {e}")
-            }
             Self::MissingMutabilityMetadata => write!(
                 f,
                 "missing `adamant.mutability` metadata entry \

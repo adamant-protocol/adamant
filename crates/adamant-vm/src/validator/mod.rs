@@ -2,11 +2,13 @@
 //!
 //! This module implements the Adamant deploy-time bytecode
 //! validator atop the Adamant-native deserializer/serializer
-//! (Phase 5/5a) and Sui-Move's vendored verifier (transitional
-//! bridge until Phase 5/5b–5/5c land Adamant-native verifier
-//! passes). The single public entry point is [`verify_module`],
-//! which takes module **bytes** and returns a parsed
-//! [`AdamantCompiledModule`] on success.
+//! (Phase 5/5a) and the Adamant-native verifier passes (Phase
+//! 5/5b — module-level at 5/5b.2 + 5/5b.3, per-function at
+//! 5/5b.4). Phase 5/5b.5 E-1a tore out the transitional Sui-
+//! verifier bridge; the Adamant-native passes are now the only
+//! verification path. The single public entry point is
+//! [`verify_module`], which takes module **bytes** and returns
+//! a parsed [`AdamantCompiledModule`] on success.
 //!
 //! # Pipeline
 //!
@@ -17,7 +19,7 @@
 //!    decoder rejects each of the 10 deprecated global-storage
 //!    bytecode variants at parse time inside
 //!    [`crate::bytecode_wire::deserialize_function_body_from_cursor`];
-//!    that is the enforcement point for Rule 5 post-step-4.
+//!    that is the enforcement point for Rule 5.
 //! 2. **Canonicality round-trip.** Re-serializes the parsed
 //!    module via [`crate::adamant_serialize`] and byte-compares
 //!    against the input. Mismatch surfaces as
@@ -25,28 +27,30 @@
 //!    requires deployed bytecode to be canonically encoded so
 //!    that two deployments of "the same module" cannot produce
 //!    different `ObjectId`s via trailing-byte smuggling.
-//! 3. **Adamant-native module-level passes** (Phase 5/5b.2 B-5
-//!    wired). Eight passes; constants is first per cross-pass
-//!    eager-error precedence
-//!    ([`AdamantValidationError::MalformedConstantData`] shared
-//!    with limits — constants must win); remaining seven
-//!    alphabetical for audit-friendliness. §6.2.1.8 line 563
-//!    classifies within-step pass orchestration as
-//!    implementation-discretionary, so within-step ordering
-//!    beyond cross-pass-precedence is an Adamant decision (see
-//!    `module_pass/PROVENANCE.md`).
-//! 4. **Per-function passes.** Not yet ported (Phase 5/5b.4 +
-//!    5/5b.5). Currently delegated to the transitional Sui-
-//!    verifier bridge alongside step-3-equivalent passes via
-//!    `move-bytecode-verifier::verify_module_with_config_unmetered`.
-//!    Modules containing Adamant extensions skip the bridge —
-//!    Sui's verifier cannot consume the 0x80..=0x90 opcode
-//!    space.
+//! 3. **Adamant-native module-level passes** (11 passes; Phase
+//!    5/5b.2 B-5 + Phase 5/5b.3 C-4). `bounds_checker` first
+//!    per cross-pass-precedence (`IndexOutOfBounds` reaches
+//!    first against limits' count overflow); `signature_checker`
+//!    before `recursive_data_def` per cross-pass-pipeline-
+//!    dependency; remainder alphabetical for audit-friendliness.
+//!    §6.2.1.8 line 563 classifies within-step pass orchestration
+//!    as implementation-discretionary; cross-pass eager-error
+//!    precedence is consensus-binding (see `module_pass/PROVENANCE.md`).
+//! 4. **Adamant-native per-function passes** (5 passes; Phase
+//!    5/5b.4 D-6). `control_flow` → `stack_usage` →
+//!    `locals_safety` → `type_safety` → `reference_safety` per
+//!    cross-pass-pipeline-dependency. Runs on ALL modules (both
+//!    inherited-subset and Adamant-extension); the per-extension
+//!    rule arms cover the 0x80..=0x90 opcode space.
 //! 5. **Adamant-specific rules per §6.2.1.6.** Rule 1
-//!    (mutability), Rule 2 (privacy), Rule 4 (no natives) wired
-//!    in numerical order. Rule 5 is enforced at step 1; Rules
-//!    3, 6, 7 land in subsequent sub-arcs; Rule 8 is a no-op at
-//!    deployment per §6.2.1.6 amendment 804d9db.
+//!    (mutability), Rule 2 (privacy), Rule 3 (privacy-consistency
+//!    call-graph walker; single-module variant), Rule 4 (no
+//!    natives) wired in numerical order. Rule 5 is enforced at
+//!    step 1; Rules 6, 7 land in Phase 5/5b.5 sub-arcs E-3 +
+//!    E-4; Rule 8 is a no-op at deployment per §6.2.1.6
+//!    amendment 804d9db. Cross-module Rule 3 enforcement
+//!    (deployment-validator wiring) lands at Phase 5/5b.5 E-2
+//!    in `validator/cross_module/`.
 //!
 //! Eager error semantics: returns the first violation
 //! encountered at any pipeline stage.
@@ -138,7 +142,8 @@ pub use error::{
     IrreducibleReason, MalformedConstantReason, TypeMismatchReason,
 };
 
-use move_binary_format::{errors::Location, file_format::CompiledModule};
+// Sui-side `Location` / `CompiledModule` imports removed at
+// Phase 5/5b.5 E-1a alongside the bridge tear-out.
 
 use crate::module::AdamantCompiledModule;
 use crate::module_wire::{adamant_deserialize, adamant_serialize};
@@ -160,16 +165,16 @@ use crate::module_wire::{adamant_deserialize, adamant_serialize};
 ///    parse time for deprecated global-storage opcodes.
 /// 2. Canonicality round-trip ([`adamant_serialize`] +
 ///    byte-compare).
-/// 3. Adamant-native module-level passes (eight passes;
-///    constants first per cross-pass precedence; rest
-///    alphabetical).
-/// 4. Transitional Sui-verifier bridge for inherited per-
-///    function passes (control-flow, type-safety, reference-
-///    safety, etc.). Skipped for modules containing Adamant
-///    extensions; per-instruction extension verification lands
-///    in Phase 5/5c.
+/// 3. Adamant-native module-level passes (11 passes;
+///    `bounds_checker` first per cross-pass-precedence;
+///    `signature_checker` before `recursive_data_def` per
+///    cross-pass-pipeline-dependency; remainder alphabetical).
+/// 4. Adamant-native per-function passes (5 passes:
+///    `control_flow` → `stack_usage` → `locals_safety` →
+///    `type_safety` → `reference_safety`). Runs on ALL modules.
 /// 5. Adamant-specific rules per §6.2.1.6: Rule 1, Rule 2,
-///    Rule 4.
+///    Rule 3 (single-module), Rule 4. Rules 6, 7 land in
+///    Phase 5/5b.5; Rule 8 is a no-op at deployment.
 ///
 /// # Errors
 ///
@@ -179,10 +184,8 @@ use crate::module_wire::{adamant_deserialize, adamant_serialize};
 /// - [`AdamantValidationError::NonCanonicalBytecode`] if the
 ///   bytes are not Adamant's canonical re-serialization of the
 ///   parsed module.
-/// - [`AdamantValidationError::SuiVerifier`] if the parsed module
-///   fails any inherited verifier pass (transitional; covers
-///   Sui's `BoundsChecker` and verifier passes).
-/// - Per-rule variants for Adamant-specific rule failures.
+/// - Per-pass and per-rule variants for Adamant-native module-
+///   level / per-function pass and rule-specific failures.
 ///
 /// # Panics
 ///
@@ -190,12 +193,7 @@ use crate::module_wire::{adamant_deserialize, adamant_serialize};
 /// an [`AdamantCompiledModule`] that Adamant's deserializer just
 /// produced — an invariant violation in this crate that would
 /// indicate a serialise/deserialise asymmetry. In normal operation
-/// this branch is unreachable. Likewise panics if Sui's
-/// deserializer rejects bytes that Adamant accepted **and** for
-/// which the canonicality round-trip succeeded — that combination
-/// implies a byte-format divergence between the two implementations
-/// that the Phase 5/5a step 2/3 cross-validation tests assert
-/// cannot occur.
+/// this branch is unreachable.
 pub fn verify_module(
     module_bytes: &[u8],
     config: &AdamantVerifierConfig,
@@ -300,45 +298,20 @@ pub fn verify_module(
     // Phase 5/5b.4 D-6 wires the batch.
     function_pass::verify_function_bodies(&module, config.structural_limits())?;
 
-    // Sui-verifier bridge (transitional defense-in-depth
-    // until Phase 5/5b.5). Modules with Adamant extensions
-    // skip this — Sui's verifier cannot consume bytecode that
-    // includes the 0x80..=0x90 opcode space.
-    //
-    // For inherited-subset modules this runs after the
-    // Adamant-native step-3 batch and the now-complete
-    // Adamant-native step-4 batch above. The two paths are
-    // parallel-redundant on inherited-subset modules
-    // (both ports of `constants`, `friends`, etc. at step 3
-    // and per-instruction `type_safety` / `reference_safety`
-    // at step 4 validate overlapping properties); the
-    // redundancy is intentional defense-in-depth during the
-    // transition. The bridge serves as a soundness-test
-    // infrastructure: if Adamant accepts but Sui rejects on
-    // the same module, the divergence indicates a cross-
-    // pass-pipeline-dependency drift in Adamant. After
-    // 5/5b.5 tears out the Sui bridge, Adamant-native
-    // passes are the only path.
-    if !module.contains_adamant_extensions() {
-        // Re-deserialize via Sui to obtain a CompiledModule. The
-        // bytes are guaranteed to be Sui's canonical encoding for
-        // any module that just passed steps 1-2 (asserted by the
-        // Phase 5/5a step 2/3 cross-validation tests), so this
-        // call succeeds for every module that reaches it. Rule 5
-        // was already enforced at step 1, but we keep
-        // `deprecate_global_storage_ops = true` in the wrapped
-        // BinaryConfig as defense-in-depth in case a future Sui
-        // upgrade changes Rule-5-equivalent enforcement behavior.
-        let sui_module =
-            CompiledModule::deserialize_with_config(module_bytes, config.sui_binary_config())
-                .map_err(|e| AdamantValidationError::SuiVerifier(e.finish(Location::Undefined)))?;
-
-        move_bytecode_verifier::verifier::verify_module_with_config_unmetered(
-            config.sui_verifier_config(),
-            &sui_module,
-        )
-        .map_err(AdamantValidationError::SuiVerifier)?;
-    }
+    // Phase 5/5b.5 E-1a tear-out: the transitional Sui-
+    // verifier bridge previously sat here as defense-in-
+    // depth on inherited-subset modules. With Phase 5/5b.4
+    // closing the Adamant-native step-3 + step-4 coverage
+    // (11 module-level passes + 5 per-function passes + Rule 3
+    // privacy-consistency call-graph walker), the Adamant-
+    // native passes are now the only verification path. Per-
+    // pass Layer B coverage at module_pass/ + function_pass/
+    // carries the soundness claim against the vendored Sui
+    // reference; the bridge-redundancy-validation tests
+    // landed at D-6 (#5 + #6) served their purpose during
+    // the transition and continue to pin the
+    // Adamant-typed-error vs composite-pipeline-parity
+    // posture.
 
     // Step 5: Adamant-specific rules per §6.2.1.6 in
     // numerical rule order. Rule 5 (no global storage
@@ -387,34 +360,24 @@ mod tests {
 
     #[test]
     fn config_default_matches_new() {
-        // The Default impl forwards to new(), preserving the
-        // structural lock-down of `deprecate_global_storage_ops`
-        // in both wrapped configs. Regression coverage against
-        // accidentally diverging Default and new() in the future.
+        // The Default impl forwards to new(). Pre-Phase-5/5b.5
+        // E-1a, this test asserted on the wrapped Sui-side
+        // `deprecate_global_storage_ops` lock-down on both
+        // configs; E-1a tear-out removed those fields. Rule 5
+        // enforcement now lives entirely in adamant_deserialize's
+        // strict mode (covered by bytecode_wire's
+        // `strict_mode_rejects_each_deprecated_opcode` plus the
+        // pipeline-level rejects_module_with_deprecated_global_storage_opcode
+        // test below). The Default → new() forwarding is still
+        // worth pinning structurally as a regression guard
+        // against the impl Default accidentally diverging.
         let from_new = AdamantVerifierConfig::new();
         let from_default = AdamantVerifierConfig::default();
         assert_eq!(
-            from_new.sui_verifier_config().deprecate_global_storage_ops,
-            from_default
-                .sui_verifier_config()
-                .deprecate_global_storage_ops
-        );
-        assert!(
-            from_new.sui_verifier_config().deprecate_global_storage_ops,
-            "AdamantVerifierConfig must force deprecate_global_storage_ops = true \
-             in the verifier config (defense in depth)"
-        );
-        assert_eq!(
-            from_new.sui_binary_config().deprecate_global_storage_ops,
-            from_default
-                .sui_binary_config()
-                .deprecate_global_storage_ops
-        );
-        assert!(
-            from_new.sui_binary_config().deprecate_global_storage_ops,
-            "AdamantVerifierConfig must force deprecate_global_storage_ops = true \
-             in the binary config (defense in depth post-step-4; primary enforcement \
-             is now in adamant_deserialize)"
+            from_new.structural_limits().max_loop_depth,
+            from_default.structural_limits().max_loop_depth,
+            "Default::default() must forward to new() so the structural-limits \
+             genesis defaults match."
         );
     }
 
@@ -1439,16 +1402,21 @@ mod tests {
         }
     }
 
-    /// D-6 step-4-vs-bridge ordering for inherited modules: a
-    /// pure-Sui-base module with a type-safety violation is
-    /// rejected by Adamant step 4 (with a typed `TypeMismatch`),
-    /// not by the Sui bridge (which would emit `SuiVerifier`).
-    /// Confirms Adamant step 4 fires first on inherited modules
-    /// AND that the typed Adamant error variant wins over the
-    /// Sui-formatted bridge error. Bridge-redundancy-validation
-    /// test per Q5 at D-6 plan-gate.
+    /// D-6 step-4 typed-error-variant assertion for inherited
+    /// modules: a pure-Sui-base module with a type-safety
+    /// violation is rejected by Adamant step 4 with a typed
+    /// `TypeMismatch` carrying the precise sub-reason (rather
+    /// than a generic verifier rejection). Confirms the typed-
+    /// error surface that Adamant maintains across both
+    /// inherited-subset and Adamant-extension modules.
+    ///
+    /// Pre-Phase-5/5b.5 E-1a, this test also asserted that
+    /// Adamant step 4 fired before the transitional Sui-verifier
+    /// bridge (the `SuiVerifier` arm panic). E-1a tear-out
+    /// removed the bridge; the typed-error assertion remains
+    /// canonical.
     #[test]
-    fn d6_e2e_step4_fires_before_bridge_on_inherited_module() {
+    fn d6_e2e_step4_typed_error_on_inherited_module() {
         let mut m = integration_base_module();
         // Inherited-only module: no Adamant extensions in body.
         // Type-safety violation: LdTrue + CastU8.
@@ -1479,11 +1447,9 @@ mod tests {
                 jump_tables: vec![],
             }),
         });
-        // Confirm contains_adamant_extensions returns false (so
-        // the bridge would run if step 4 didn't reject first).
         assert!(
             !m.contains_adamant_extensions(),
-            "test fixture must be a pure-inherited module to exercise the bridge path"
+            "test fixture must be a pure-inherited module"
         );
         let bytes = serialize_module(&m);
         let config = AdamantVerifierConfig::new();
@@ -1492,22 +1458,24 @@ mod tests {
                 reason: TypeMismatchReason::CastTargetTypeInvalid,
                 ..
             }) => {}
-            Err(AdamantValidationError::SuiVerifier(_)) => panic!(
-                "Sui bridge should not have run — Adamant step 4 must fire first \
-                 with TypeMismatch on inherited modules"
+            other => panic!(
+                "expected Adamant step 4 TypeMismatch on inherited module, got {other:?}"
             ),
-            other => panic!("expected Adamant step 4 TypeMismatch before bridge, got {other:?}"),
         }
     }
 
     /// D-6 happy path inherited-only: a pure-Sui-base module
-    /// with no Adamant extensions and no violations passes all
-    /// steps including step 4 + bridge defense-in-depth.
-    /// Pairs with the previous test to confirm both branches
-    /// (step 4 reject and bridge defense-in-depth pass) are
-    /// exercised.
+    /// with no Adamant extensions and no violations passes the
+    /// full Adamant-native pipeline. Pairs with the previous
+    /// test to confirm both branches (typed step-4 reject and
+    /// clean acceptance) are exercised.
+    ///
+    /// Pre-Phase-5/5b.5 E-1a, this test was framed around
+    /// "passes through bridge defense-in-depth". E-1a tear-out
+    /// removed the bridge; the test now confirms clean
+    /// acceptance through the Adamant-native pipeline alone.
     #[test]
-    fn d6_e2e_inherited_module_with_clean_body_passes_through_bridge() {
+    fn d6_e2e_inherited_module_with_clean_body_passes() {
         let mut m = integration_base_module();
         let empty_sig = SignatureIndex(u16::try_from(m.signatures.len()).unwrap());
         m.signatures.push(Signature(vec![]));
@@ -1536,7 +1504,7 @@ mod tests {
         let config = AdamantVerifierConfig::new();
         assert!(
             verify_module(&bytes, &config).is_ok(),
-            "clean inherited module must pass step 4 + bridge defense-in-depth + step 5"
+            "clean inherited module must pass the full Adamant-native pipeline (steps 1-5)"
         );
     }
 }

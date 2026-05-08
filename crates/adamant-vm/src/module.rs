@@ -65,12 +65,16 @@ use adamant_bytecode_format::{
     VariantInstantiationHandle, VariantJumpTable, Visibility,
 };
 // Sui's `CompiledModule`/`CodeUnit`/`FunctionDefinition` are
-// retained as imports so that `to_sui_module` can produce a
-// vendored-Sui shape for test-time cross-validation per
-// whitepaper §6.2.1.8. The conversion converts each Adamant
-// field to its Sui counterpart via BCS round-trip (byte-
-// identity verified by `adamant-bytecode-format`'s Phase 5/5b.6
-// cross-validation suite).
+// imported only at test time so that `to_sui_module` can produce
+// a vendored-Sui shape for cross-validation per whitepaper
+// §6.2.1.8. The conversion converts each Adamant field to its
+// Sui counterpart via BCS round-trip (byte-identity verified by
+// `adamant-bytecode-format`'s cross-validation suite). Phase
+// 5/5b.5 E-1a tear-out gated this import as `#[cfg(test)]`
+// alongside `to_sui_module` itself; production builds carry no
+// reference to vendored Sui types per §6.2.1.8's resistant-proof
+// posture.
+#[cfg(test)]
 use move_binary_format::file_format::{CodeUnit, CompiledModule, FunctionDefinition};
 
 use crate::bytecode::BytecodeInstruction;
@@ -277,6 +281,15 @@ impl AdamantCompiledModule {
     /// [`CompiledModule`] for test-time cross-validation against
     /// the vendored Sui reference implementation per §6.2.1.8.
     ///
+    /// **Test-only.** Phase 5/5b.5 E-1a gated this method as
+    /// `#[cfg(test)]` alongside the test-only Sui import; the
+    /// method does not exist in production builds. Production
+    /// callers do not need an Adamant-to-Sui conversion path
+    /// (the resistant-proof posture per §6.2.1.8 keeps Sui's
+    /// codebase entirely out of the production binary's
+    /// dependency graph). Callers in test code continue to use
+    /// it for Layer B cross-validation parity tests.
+    ///
     /// The conversion is gated on
     /// [`Self::contains_adamant_extensions`] returning `false` —
     /// modules containing Adamant extensions are explicitly
@@ -311,6 +324,7 @@ impl AdamantCompiledModule {
     /// [`crate::adamant_deserialize`] respects those bounds, so
     /// this branch is unreachable for inputs the public pipeline
     /// produces.
+    #[cfg(test)]
     pub fn to_sui_module(&self) -> Result<CompiledModule, AdamantToSuiConversionError> {
         // Per-field conversion strategy: Adamant's bytecode-
         // format types are byte-identical to Sui's vendored
@@ -416,6 +430,14 @@ impl AdamantCompiledModule {
 }
 
 /// Errors from [`AdamantCompiledModule::to_sui_module`].
+///
+/// **Test-only.** Phase 5/5b.5 E-1a gated this type as
+/// `#[cfg(test)]` alongside `to_sui_module`; the type does not
+/// exist in production builds per the §6.2.1.8 resistant-proof
+/// posture (Sui's codebase entirely out of the production
+/// binary's dependency graph). Re-exported via `crate::lib.rs`
+/// only at test time.
+#[cfg(test)]
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum AdamantToSuiConversionError {
     /// At least one function body contains an Adamant-variant
@@ -431,6 +453,7 @@ pub enum AdamantToSuiConversionError {
     },
 }
 
+#[cfg(test)]
 impl core::fmt::Display for AdamantToSuiConversionError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -447,6 +470,7 @@ impl core::fmt::Display for AdamantToSuiConversionError {
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for AdamantToSuiConversionError {}
 
 #[cfg(test)]
