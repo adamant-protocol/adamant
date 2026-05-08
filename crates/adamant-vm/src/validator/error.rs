@@ -1094,12 +1094,17 @@ pub enum AdamantValidationError {
     /// a public function whose declared privacy mode is the
     /// opposite of the instruction's mode. Carries a
     /// [`PrivacyConsistencyViolationReason`] closed-enum sub-
-    /// reason discriminator.
+    /// reason discriminator. Single-module scope: the call
+    /// graph is bounded to the deploying module's own
+    /// function bodies.
     ///
-    /// Whitepaper §6.2.1.6 Rule 3. Phase 5/5b.4 D-5c.
-    /// Cross-module enforcement is deferred to Phase 5/5b.5
-    /// per §6.2.1.6 line 477 ("statically checked at deploy
-    /// time against annotations of dependency modules").
+    /// Whitepaper §6.2.1.6 Rule 3. Phase 5/5b.4 D-5c (single-
+    /// module). The cross-module variant
+    /// [`Self::CrossModulePrivacyConsistencyViolation`] covers
+    /// call edges across module boundaries per §6.2.1.6 line
+    /// 477's "Cross-module call graphs are statically checked
+    /// at deploy time against the annotations of dependency
+    /// modules visible on chain at that moment".
     PrivacyConsistencyViolation {
         /// Public function (entry point of the call graph)
         /// whose declared privacy mode is being violated.
@@ -1111,6 +1116,57 @@ pub enum AdamantValidationError {
         /// Bytecode offset of the offending `Invoke*`.
         code_offset: CodeOffset,
         /// Sub-reason discriminator.
+        reason: PrivacyConsistencyViolationReason,
+    },
+    /// Rule 3 (privacy consistency) cross-module call-graph
+    /// walker found a privacy-mismatched call edge across a
+    /// module boundary. The deploying module's call graph
+    /// reaches a function in a dependency module whose
+    /// declared privacy annotation conflicts with the
+    /// reachable-from public function's mode.
+    ///
+    /// Reuses [`PrivacyConsistencyViolationReason`] sub-reason
+    /// closed enum with single-module
+    /// [`Self::PrivacyConsistencyViolation`] (same-rule-
+    /// different-scope-shares-sub-reason-enum methodology
+    /// pattern; canonical at Phase 5/5b.5 E-2). The
+    /// `target_module` + `target_function_handle_idx` fields
+    /// localize the cross-module call site within the
+    /// dependency module; `target_module_id` carries the
+    /// dependency module's `(address, name)` identity so
+    /// auditors can trace the call across modules.
+    ///
+    /// Whitepaper §6.2.1.6 Rule 3 + line 477. Phase 5/5b.5
+    /// E-2 (cross-module).
+    CrossModulePrivacyConsistencyViolation {
+        /// Public function in the deploying module (entry
+        /// point of the cross-module call graph) whose
+        /// declared privacy mode is being violated.
+        calling_public_index: FunctionDefinitionIndex,
+        /// Function in the deploying module (possibly the
+        /// public function itself, or a transitively-called
+        /// private function) containing the call instruction
+        /// that crosses the module boundary.
+        calling_function_index: FunctionDefinitionIndex,
+        /// Bytecode offset of the cross-module call
+        /// (`Call`/`CallGeneric`) within the calling
+        /// function's body.
+        code_offset: CodeOffset,
+        /// `(address, name)` identity of the dependency
+        /// module the call resolves to.
+        target_module_id: super::cross_module::ModuleId,
+        /// `FunctionHandleIndex` value within the deploying
+        /// module's `function_handles[]` table that the call
+        /// instruction references. The handle's
+        /// `(module, name)` resolves to the cross-module
+        /// target; the handle's name resolves through the
+        /// dependency module's own `function_defs[]` to
+        /// surface the target function's privacy annotation.
+        calling_function_handle_idx: FunctionHandleIndex,
+        /// Sub-reason discriminator. Reuses single-module
+        /// [`PrivacyConsistencyViolationReason`] per the
+        /// same-rule-different-scope-shares-sub-reason-enum
+        /// pattern.
         reason: PrivacyConsistencyViolationReason,
     },
     // Rule 5 (no global storage instructions) is enforced at
@@ -2074,6 +2130,25 @@ impl core::fmt::Display for AdamantValidationError {
                  (offending instruction in function {} at offset {code_offset}): {reason} \
                  (whitepaper §6.2.1.6 Rule 3)",
                 calling_public_index.0, violating_function_index.0
+            ),
+            Self::CrossModulePrivacyConsistencyViolation {
+                calling_public_index,
+                calling_function_index,
+                code_offset,
+                target_module_id,
+                calling_function_handle_idx,
+                reason,
+            } => write!(
+                f,
+                "cross-module privacy-consistency violation reachable from public function {} \
+                 (cross-module call in function {} at offset {code_offset}; \
+                 target module {:?}::{} via FunctionHandleIndex {}): {reason} \
+                 (whitepaper §6.2.1.6 Rule 3 + line 477)",
+                calling_public_index.0,
+                calling_function_index.0,
+                target_module_id.address,
+                target_module_id.name,
+                calling_function_handle_idx.0,
             ),
         }
     }

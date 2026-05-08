@@ -125,6 +125,7 @@
 //! [`CompiledModule::deserialize_with_config`]: move_binary_format::file_format::CompiledModule::deserialize_with_config
 
 mod config;
+mod cross_module;
 mod error;
 mod function_pass;
 mod module_pass;
@@ -137,6 +138,7 @@ mod rule_04_no_natives;
 mod test_fixtures;
 
 pub use config::AdamantVerifierConfig;
+pub use cross_module::{ModuleId, ModuleResolver};
 pub use error::{
     AdamantValidationError, DefKind, FieldOwnerKind, HandleKind, InvalidSignatureReason,
     IrreducibleReason, MalformedConstantReason, TypeMismatchReason,
