@@ -914,6 +914,60 @@ pub enum AdamantValidationError {
         /// instruction's signature.
         actual: usize,
     },
+    /// Function body is empty (zero instructions).
+    ///
+    /// Whitepaper §6.2.1.8 step 4 (per-function passes:
+    /// control-flow validation). Phase 5/5b.4 D-2.
+    EmptyFunctionBody {
+        /// Function-definition index whose body is empty.
+        fn_def_idx: FunctionDefinitionIndex,
+    },
+    /// Function body's last instruction is not an unconditional
+    /// terminator (`Ret`, `Abort`, `Branch`, `VariantSwitch`).
+    /// Without an unconditional terminator the function would
+    /// fall off the end of its body.
+    ///
+    /// Adamant extensions are non-branching by construction
+    /// ([`BytecodeInstruction::is_unconditional_branch`][branch]
+    /// always returns `false` for any `Adamant(_)` arm); a
+    /// function ending in an Adamant extension is therefore
+    /// rejected here as missing a terminator.
+    ///
+    /// Whitepaper §6.2.1.8 step 4 (per-function passes:
+    /// control-flow validation). Phase 5/5b.4 D-2.
+    ///
+    /// [branch]: crate::bytecode::BytecodeInstruction::is_unconditional_branch
+    MissingFallthroughTerminator {
+        /// Function-definition index whose body falls through.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Bytecode offset of the last instruction in the body.
+        code_offset: CodeOffset,
+    },
+    /// Function body's control-flow graph is irreducible per
+    /// Tarjan 1974, or its loop-nesting depth exceeds
+    /// [`AdamantStructuralLimits::max_loop_depth`][max].
+    ///
+    /// Irreducible CFGs cannot be decomposed into nested loops,
+    /// which makes the verifier's downstream
+    /// abstract-interpretation passes (Phase 5/5b.4 D-3.. /
+    /// 5/5b.5) potentially run for pathologically long.
+    ///
+    /// Whitepaper §6.2.1.8 step 4 (per-function passes:
+    /// control-flow validation). Phase 5/5b.4 D-2.
+    ///
+    /// [max]: super::config::AdamantStructuralLimits
+    IrreducibleControlFlow {
+        /// Function-definition index whose CFG was rejected.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Block-entry offset where the irreducibility was
+        /// detected. For [`IrreducibleReason::InvalidLoopSplit`],
+        /// the offending non-dominated pred's block. For
+        /// [`IrreducibleReason::LoopMaxDepthReached`], the
+        /// loop head whose nesting exceeds the limit.
+        code_offset: CodeOffset,
+        /// Sub-reason discriminator.
+        reason: IrreducibleReason,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 3, 6, 7 land in subsequent
@@ -1026,6 +1080,54 @@ impl core::fmt::Display for InvalidSignatureReason {
                     f,
                     "reference appearing as a struct or enum-variant field type"
                 )
+            }
+        }
+    }
+}
+
+/// Sub-reason discriminator for an
+/// [`AdamantValidationError::IrreducibleControlFlow`] rejection.
+///
+/// Mirrors upstream `move-bytecode-verifier`'s two distinct
+/// reducibility status codes (`INVALID_LOOP_SPLIT` and
+/// `LOOP_MAX_DEPTH_REACHED`) as a closed-enum sub-reason rather
+/// than two flat top-level variants. Same shape as
+/// [`InvalidSignatureReason`] (C-3) and [`MalformedConstantReason`]
+/// (B-2.1) — the closed-enum sub-reason pattern lets a single
+/// validator-error variant carry an upstream-status-code-style
+/// distinction without inflating
+/// [`AdamantValidationError`]'s top-level variant count.
+///
+/// 5th instance of the deliberate-Adamant-decision pattern (see
+/// `module_pass/PROVENANCE.md`); 6th public closed enum at the
+/// validator surface.
+///
+/// Phase 5/5b.4 D-2 (`function_pass::control_flow`).
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum IrreducibleReason {
+    /// A node in a loop's body is not dominated by the loop
+    /// head — Tarjan property 1 violated. The CFG is not
+    /// reducible.
+    InvalidLoopSplit,
+    /// Loop nesting depth exceeded
+    /// [`AdamantStructuralLimits::max_loop_depth`][max]. The CFG
+    /// is reducible but pathologically nested.
+    ///
+    /// [max]: super::config::AdamantStructuralLimits
+    LoopMaxDepthReached,
+}
+
+impl core::fmt::Display for IrreducibleReason {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InvalidLoopSplit => {
+                write!(
+                    f,
+                    "control-flow graph is not reducible (loop body not dominated by head)"
+                )
+            }
+            Self::LoopMaxDepthReached => {
+                write!(f, "loop nesting depth exceeded the configured maximum")
             }
         }
     }
@@ -1467,6 +1569,33 @@ impl core::fmt::Display for AdamantValidationError {
                 f,
                 "vec op expects 1 type argument, got {actual} \
                  (whitepaper §6.2.1.8 step 3, `module_pass::signature_checker`)"
+            ),
+            Self::EmptyFunctionBody { fn_def_idx } => write!(
+                f,
+                "function definition {} has an empty body (whitepaper §6.2.1.8 \
+                 step 4, `function_pass::control_flow`)",
+                fn_def_idx.0
+            ),
+            Self::MissingFallthroughTerminator {
+                fn_def_idx,
+                code_offset,
+            } => write!(
+                f,
+                "function definition {} offset {code_offset}: last instruction \
+                 is not an unconditional terminator (Ret, Abort, Branch, or \
+                 VariantSwitch) (whitepaper §6.2.1.8 step 4, \
+                 `function_pass::control_flow`)",
+                fn_def_idx.0
+            ),
+            Self::IrreducibleControlFlow {
+                fn_def_idx,
+                code_offset,
+                reason,
+            } => write!(
+                f,
+                "function definition {} offset {code_offset}: {reason} \
+                 (whitepaper §6.2.1.8 step 4, `function_pass::control_flow`)",
+                fn_def_idx.0
             ),
         }
     }

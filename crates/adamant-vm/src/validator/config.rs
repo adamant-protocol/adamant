@@ -106,6 +106,13 @@ pub(super) struct AdamantStructuralLimits {
     /// If true, reject the literal identifier `<SELF>` (a Move
     /// internal sentinel that should never appear in user code).
     pub(super) disallow_self_identifier: bool,
+    /// Maximum loop nesting depth permitted in any single
+    /// function body. Consumed by the per-function
+    /// reducibility check at Phase 5/5b.4 D-2
+    /// (`function_pass::control_flow::verify_reducibility`).
+    /// `None` disables the check; `Some(N)` rejects bodies
+    /// whose loop nesting collapses to depth > N.
+    pub(super) max_loop_depth: Option<u16>,
 }
 
 impl AdamantStructuralLimits {
@@ -180,6 +187,17 @@ impl AdamantStructuralLimits {
             // Rejecting at zero cost. Documented in
             // module_pass/PROVENANCE.md.
             disallow_self_identifier: true,
+            // Bucket C (spec gap, provisional — D-2). Sui ships
+            // None with no commented alternative; Adamant's
+            // verifier is the consensus boundary, where None
+            // would expose validators to deploy-time DoS via
+            // pathologically-nested loops (abstract
+            // interpretation cost is exponential in nesting
+            // depth). Documented in module_pass/PROVENANCE.md
+            // "Genesis structural-limits values" — D-2 entry.
+            // Pre-mainnet calibration tracked under §6.2.1.7
+            // amendment workstream.
+            max_loop_depth: Some(64),
         }
     }
 }

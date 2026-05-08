@@ -816,6 +816,7 @@ mod tests {
             max_constant_vector_len: None,
             max_identifier_len: None,
             disallow_self_identifier: false,
+            max_loop_depth: None,
         };
         assert!(verify(&m, &limits).is_ok());
     }
