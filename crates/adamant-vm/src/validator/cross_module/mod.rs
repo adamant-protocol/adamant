@@ -41,6 +41,22 @@
 //! variant + trait/API correctness tests. E-2b lands the
 //! cross-module Rule 3 walker (`rule_03_privacy_consistency`)
 //! and its happy-path / negative-path walker tests.
+//!
+//! # `dead_code` allow rationale
+//!
+//! The cross-module walker has no production caller in
+//! `adamant-vm` itself; the eventual caller is the AVM runtime
+//! stdlib's `adamant::module::deploy` function (Phase 5/6) per
+//! whitepaper §6.5 line 97. Same shape as the D-1a / D-1b
+//! foundation-then-producer arc where the per-function-pass
+//! infrastructure was built before its D-6 wiring. The
+//! module-level `allow(dead_code)` will be removed once the
+//! deployment-validator wiring lands its production caller.
+
+#![allow(
+    dead_code,
+    reason = "cross-module verifier has no production caller in adamant-vm; the AVM runtime stdlib's adamant::module::deploy (Phase 5/6) is the eventual caller"
+)]
 
 use adamant_bytecode_format::Identifier;
 use adamant_types::Address;
@@ -139,5 +155,4 @@ pub trait ModuleResolver {
     fn resolve(&self, id: &ModuleId) -> Option<&AdamantCompiledModule>;
 }
 
-// E-2b lands `rule_03_privacy_consistency` here — the cross-
-// module call-graph walker that consumes the trait above.
+pub(in crate::validator) mod rule_03_privacy_consistency;

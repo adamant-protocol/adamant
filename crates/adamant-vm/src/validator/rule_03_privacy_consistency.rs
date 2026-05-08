@@ -259,13 +259,22 @@ fn verify_function_call_graph(
 /// call kinds: `Call`, `CallGeneric`, `InvokeShielded`,
 /// `InvokeTransparent`. Returns `None` for non-call
 /// instructions.
+///
+/// Visibility promoted to `pub(in crate::validator)` at
+/// Phase 5/5b.5 E-2b alongside the cross-module Rule 3
+/// walker landing — both single-module Rule 3 (this file)
+/// and cross-module Rule 3
+/// (`validator/cross_module/rule_03_privacy_consistency.rs`)
+/// consume the same helper. Methodology-positive: spec-
+/// text-DIRECTS-shared-helper canonical principle continues
+/// operating across module-boundary rule scopes.
 #[allow(
     clippy::match_same_arms,
     reason = "byte-faithful per-call-kind table preserving the §6.2.1.4 line 408 audit anchor; \
               merging same-result arms (Call + InvokeShielded + InvokeTransparent) would lose \
               the spec-text-DIRECTS-shared-helper canonical principle's per-kind enumeration"
 )]
-fn call_target_handle(
+pub(in crate::validator) fn call_target_handle(
     module: &AdamantCompiledModule,
     instr: &BytecodeInstruction,
 ) -> Option<FunctionHandleIndex> {
