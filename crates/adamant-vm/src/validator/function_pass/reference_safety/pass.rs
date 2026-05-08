@@ -1182,24 +1182,23 @@ mod tests {
         }
     }
 
-    // `WriteRefHasBorrow`, `FreezeRefHasMutableBorrow`,
-    // `ReadRefHasMutableBorrow`, `CallTransfersBorrowedMutable`,
-    // `VecElementHasMutableBorrow`, `VecUpdateHasMutableBorrow`,
-    // `RetBorrowedMutableReference` audit pins require multi-
-    // block CFG aliasing setups (an outstanding mutable borrow
-    // on a ref while the ref itself is the operand of a
-    // freeze/read/write/call/vec-op). Adamant's "release as you
-    // go" abstract-state model means single-block bodies don't
-    // naturally produce these scenarios — the offending borrow
-    // gets factored or released before the consuming
-    // instruction. Honest-scope-flag at D-5b.2 impl-gate: 7 of
-    // 13 BorrowViolationReason sub-reasons audit-pinned at this
-    // sub-checkpoint; remaining 6 deferred to integration tests
-    // at D-6 (full pipeline wire-in) or pre-mainnet hardening.
-    // Variant-vs-test mapping audit principle (D-5a.1.b origin)
-    // closes the audit on the 7 covered sub-reasons; tracks the
-    // 6 deferred sub-reasons as known coverage gap for D-7
-    // PROVENANCE.md.
+    // E-6 closes the previously-deferred audit pins for the
+    // 7 sub-reasons that need aliased-mutable-reference
+    // setups: WriteRefHasBorrow, FreezeRefHasMutableBorrow,
+    // ReadRefHasMutableBorrow, CallTransfersBorrowedMutable,
+    // VecElementHasMutableBorrow, VecUpdateHasMutableBorrow,
+    // RetBorrowedMutableReference. (Empirical-scope-inventory
+    // grep at E-6 plan-gate corrected the D-5b.2 framing of
+    // "6 of 13 deferred" to 7 of 13 — ReadRefHasMutableBorrow
+    // is also deferred; the running-total drift discipline
+    // operating at sub-reason-count level catches this. See
+    // PROVENANCE.md "Phase 5/5b.5 closure" methodology
+    // accumulation streams for the corrigendum.) Each fixture
+    // uses the cp_loc-of-mutable-reference pattern (mirrors
+    // borrow_field_with_outstanding_full_borrow_rejected at
+    // D-5b.2) to create aliased &mut references on the stack
+    // — the outstanding-mutable-borrow precondition for
+    // is_writable / is_readable / is_freezable to fail.
 
     /// `BorrowLocHasBorrow` audit pin: ImmBorrowLoc on a local
     /// that's mutably borrowed.
@@ -1446,5 +1445,228 @@ mod tests {
             vec![extension(AdamantBytecode::RecursiveVerify), ret_inst()],
         );
         run(&m).expect("RecursiveVerify fails open at borrow layer");
+    }
+
+    // ----- E-6: Open Layer B gaps closure for the 7 deferred
+    // BorrowViolationReason sub-reasons. Each fixture uses
+    // the cp_loc-of-mutable-reference pattern to create
+    // aliased &mut references on the stack — when the
+    // targeted instruction operates on one of the aliases,
+    // is_writable/is_readable/is_freezable returns false and
+    // the corresponding BorrowViolationReason fires. -----
+
+    /// `FreezeRefHasMutableBorrow` audit pin: FreezeRef on a
+    /// &mut whose source has an outstanding mutable borrow.
+    #[test]
+    fn freeze_ref_with_outstanding_mut_borrow_rejected() {
+        // params[0]: &mut u64; body: cp_loc(0) twice → two
+        // &mut on stack aliasing param 0; FreezeRef pops one,
+        // but the other &mut is outstanding.
+        let m = module_with_function(
+            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![],
+            vec![],
+            vec![
+                cp_loc(0),
+                cp_loc(0),
+                freeze_ref(),
+                pop_inst(),
+                pop_inst(),
+                ret_inst(),
+            ],
+        );
+        match run(&m) {
+            Err(AdamantValidationError::BorrowViolation {
+                reason: BorrowViolationReason::FreezeRefHasMutableBorrow,
+                ..
+            }) => {}
+            other => panic!("expected FreezeRefHasMutableBorrow, got {other:?}"),
+        }
+    }
+
+    /// `ReadRefHasMutableBorrow` audit pin: ReadRef on a &mut
+    /// whose source has an outstanding mutable borrow.
+    #[test]
+    fn read_ref_with_outstanding_mut_borrow_rejected() {
+        let m = module_with_function(
+            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![],
+            vec![],
+            vec![
+                cp_loc(0),
+                cp_loc(0),
+                read_ref(),
+                pop_inst(),
+                pop_inst(),
+                ret_inst(),
+            ],
+        );
+        match run(&m) {
+            Err(AdamantValidationError::BorrowViolation {
+                reason: BorrowViolationReason::ReadRefHasMutableBorrow,
+                ..
+            }) => {}
+            other => panic!("expected ReadRefHasMutableBorrow, got {other:?}"),
+        }
+    }
+
+    /// `WriteRefHasBorrow` audit pin: WriteRef on a &mut whose
+    /// source has an outstanding borrow. WriteRef expects
+    /// `[val, ref]` with ref on top of stack (per the existing
+    /// mut_borrow_loc_then_write_ref happy-path test); the
+    /// fixture orders cp_loc, ld_u64, cp_loc to leave
+    /// `[&mut[A], u64, &mut[B]]` on the stack — WriteRef pops
+    /// &mut[B] (top) and u64 (below); &mut[A] remains as the
+    /// outstanding aliased borrow on param 0.
+    #[test]
+    fn write_ref_with_outstanding_mut_borrow_rejected() {
+        let m = module_with_function(
+            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![],
+            vec![],
+            vec![
+                cp_loc(0),
+                ld_u64(7),
+                cp_loc(0),
+                write_ref(),
+                pop_inst(),
+                ret_inst(),
+            ],
+        );
+        match run(&m) {
+            Err(AdamantValidationError::BorrowViolation {
+                reason: BorrowViolationReason::WriteRefHasBorrow,
+                ..
+            }) => {}
+            other => panic!("expected WriteRefHasBorrow, got {other:?}"),
+        }
+    }
+
+    /// `CallTransfersBorrowedMutable` audit pin: Call passes
+    /// a &mut argument that has an outstanding mutable borrow.
+    #[test]
+    fn call_transfers_borrowed_mutable_rejected() {
+        let mut m = module_with_function(
+            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![],
+            vec![],
+            vec![ret_inst()],
+        );
+        // External 'g' takes &mut u64 and returns ().
+        let g_handle = add_function_handle(
+            &mut m,
+            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![],
+        );
+        m.function_defs[0].code = Some(AdamantCodeUnit {
+            locals: SignatureIndex(1),
+            code: vec![
+                cp_loc(0),
+                cp_loc(0),
+                BytecodeInstruction::Inherited(Bytecode::Call(g_handle)),
+                pop_inst(),
+                ret_inst(),
+            ],
+            jump_tables: vec![],
+        });
+        match run(&m) {
+            Err(AdamantValidationError::BorrowViolation {
+                reason: BorrowViolationReason::CallTransfersBorrowedMutable,
+                ..
+            }) => {}
+            other => panic!("expected CallTransfersBorrowedMutable, got {other:?}"),
+        }
+    }
+
+    /// `VecElementHasMutableBorrow` audit pin: VecMutBorrow on
+    /// a &mut Vec<T> whose source has an outstanding mutable
+    /// borrow.
+    #[test]
+    fn vec_element_borrow_with_outstanding_mut_borrow_rejected() {
+        let vec_t = SignatureToken::MutableReference(Box::new(SignatureToken::Vector(
+            Box::new(SignatureToken::U64),
+        )));
+        // Inner-element type for VecMutBorrow operand: SI(2).
+        let mut m = module_with_function(vec![vec_t], vec![], vec![], vec![ret_inst()]);
+        let elem_sig_idx = u16::try_from(m.signatures.len()).unwrap();
+        m.signatures
+            .push(Signature(vec![SignatureToken::U64]));
+        m.function_defs[0].code = Some(AdamantCodeUnit {
+            locals: SignatureIndex(1),
+            code: vec![
+                cp_loc(0),
+                cp_loc(0),
+                ld_u64(0),
+                BytecodeInstruction::Inherited(Bytecode::VecMutBorrow(SignatureIndex(elem_sig_idx))),
+                pop_inst(),
+                pop_inst(),
+                ret_inst(),
+            ],
+            jump_tables: vec![],
+        });
+        match run(&m) {
+            Err(AdamantValidationError::BorrowViolation {
+                reason: BorrowViolationReason::VecElementHasMutableBorrow,
+                ..
+            }) => {}
+            other => panic!("expected VecElementHasMutableBorrow, got {other:?}"),
+        }
+    }
+
+    /// `VecUpdateHasMutableBorrow` audit pin: VecPushBack on a
+    /// &mut Vec<T> whose source has an outstanding mutable
+    /// borrow.
+    #[test]
+    fn vec_update_with_outstanding_mut_borrow_rejected() {
+        let vec_t = SignatureToken::MutableReference(Box::new(SignatureToken::Vector(
+            Box::new(SignatureToken::U64),
+        )));
+        let mut m = module_with_function(vec![vec_t], vec![], vec![], vec![ret_inst()]);
+        let elem_sig_idx = u16::try_from(m.signatures.len()).unwrap();
+        m.signatures
+            .push(Signature(vec![SignatureToken::U64]));
+        m.function_defs[0].code = Some(AdamantCodeUnit {
+            locals: SignatureIndex(1),
+            code: vec![
+                cp_loc(0),
+                cp_loc(0),
+                ld_u64(7),
+                BytecodeInstruction::Inherited(Bytecode::VecPushBack(SignatureIndex(elem_sig_idx))),
+                pop_inst(),
+                ret_inst(),
+            ],
+            jump_tables: vec![],
+        });
+        match run(&m) {
+            Err(AdamantValidationError::BorrowViolation {
+                reason: BorrowViolationReason::VecUpdateHasMutableBorrow,
+                ..
+            }) => {}
+            other => panic!("expected VecUpdateHasMutableBorrow, got {other:?}"),
+        }
+    }
+
+    /// `RetBorrowedMutableReference` audit pin: function with
+    /// (&mut u64, &mut u64) return signature; both ret values
+    /// alias the same param. The first checked has an
+    /// outstanding mutable borrow from the second.
+    #[test]
+    fn ret_borrowed_mutable_reference_rejected() {
+        let m = module_with_function(
+            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![],
+            vec![
+                SignatureToken::MutableReference(Box::new(SignatureToken::U64)),
+                SignatureToken::MutableReference(Box::new(SignatureToken::U64)),
+            ],
+            vec![cp_loc(0), cp_loc(0), ret_inst()],
+        );
+        match run(&m) {
+            Err(AdamantValidationError::BorrowViolation {
+                reason: BorrowViolationReason::RetBorrowedMutableReference,
+                ..
+            }) => {}
+            other => panic!("expected RetBorrowedMutableReference, got {other:?}"),
+        }
     }
 }

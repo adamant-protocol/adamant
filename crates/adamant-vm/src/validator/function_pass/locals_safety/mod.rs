@@ -958,4 +958,45 @@ mod tests {
         m.function_defs[0].code.as_mut().unwrap().code = vec![mv_loc(0), st_loc(0), ret()];
         cross_validate_locals_safety_pipeline(&m);
     }
+
+    /// Phase 5/5b.5 E-6 closure: `st_loc_destroys_non_drop`
+    /// Layer B parity (D-7a carry-forward). Two non-drop
+    /// parameters; the body moves param 0 into local 0
+    /// (`locals[0]` becomes Available with non-drop value),
+    /// then attempts `StLoc` with param 1 onto local 0
+    /// (would destroy the existing non-drop value). Both
+    /// Adamant and Sui `locals_safety` reject; composite-
+    /// pipeline parity asserted.
+    ///
+    /// Closes the Open Layer B gap registered at D-7a; first
+    /// instance of gap-fill closure sub-shape of the Open
+    /// Layer B gaps closure pattern (after E-1a's gap-source-
+    /// removal closure 1st instance).
+    #[test]
+    fn cross_validation_rejects_st_loc_destroys_non_drop() {
+        let mut m = module_with_function(vec![], vec![], vec![ret()]);
+        let nd = add_non_drop_datatype(&mut m);
+        // params: [nd, nd] — two non-drop parameter sources.
+        m.signatures[0] = Signature(vec![nd.clone(), nd.clone()]);
+        // locals: [nd] — single non-drop local (slot for the
+        // destroy-attempt site).
+        m.signatures[1] = Signature(vec![nd]);
+        // Function handle params: SI(0) = (nd, nd); locals:
+        // SI(1) = (nd,). With params first and locals after,
+        // local 0 lives at frame slot index 2 (after the two
+        // params at slots 0 and 1).
+        m.function_defs[0].code.as_mut().unwrap().code = vec![
+            mv_loc(0), // move param 0 to stack
+            st_loc(2), // store into local 0 (frame slot 2;
+                       // first non-param slot). Locals[0]
+                       // becomes Available with non-drop.
+            mv_loc(1), // move param 1 to stack
+            st_loc(2), // attempt to store into local 0 (which
+                       // is Available with non-drop) → would
+                       // destroy the existing non-drop value
+                       // → StLocDestroysNonDrop rejection.
+            ret(),
+        ];
+        cross_validate_locals_safety_pipeline(&m);
+    }
 }
