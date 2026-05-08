@@ -2764,4 +2764,164 @@ mod tests {
             },
         );
     }
+
+    // ----- Phase 5/5c F-2: Layer B parity backfill -----
+    //
+    // Sui's `type_safety::verify` is `pub(crate)` — only the
+    // composite per-function entry `code_unit_verifier::verify_module`
+    // is reachable from our test code. Composite-pipeline parity
+    // is the right shape per the Sui-public-API-shape-constrains-
+    // parity-helper sub-pattern (D-7b registration; 3rd instance
+    // at F-2). Each fixture is curated to isolate type_safety's
+    // behaviour: well-formed at every other pass; triggers the
+    // type rule under test on both sides. Pipeline-position note:
+    // Adamant runs type_safety at position 4 (control_flow →
+    // stack_usage → locals_safety → type_safety →
+    // reference_safety) while Sui runs type_safety at position 3
+    // (control_flow → stack_usage → type_safety → locals_safety
+    // → reference_safety). For type-violation fixtures the
+    // ordering difference doesn't change the rejection set —
+    // type-mismatched fixtures reject at type_safety on both
+    // sides; locals-violation fixtures (per E-6 backfill) are
+    // type-correct by construction.
+
+    use super::super::test_helpers::{
+        assert_function_pass_parity_vm, run_adamant_pipeline, run_sui_code_unit_verifier,
+        sui_config_from, to_sui,
+    };
+    use crate::validator::config::AdamantStructuralLimits;
+    use adamant_types::Address as AccountAddress;
+
+    fn add_self_address_typesafe(m: &mut AdamantCompiledModule) {
+        if m.address_identifiers.is_empty() {
+            m.address_identifiers
+                .push(AccountAddress::from_bytes([0u8; 32]));
+        }
+    }
+
+    /// Cross-validate `type_safety` pipeline parity. Mirror of
+    /// D-7a's `locals_safety` / `stack_usage` helper shape.
+    fn cross_validate_type_safety_pipeline(m: &AdamantCompiledModule) {
+        let mut m = m.clone();
+        add_self_address_typesafe(&mut m);
+        // Add mutability metadata so Rule 1 doesn't pre-empt
+        // (defensive-fixture-isolation pattern from E-5).
+        if !m.metadata.iter().any(|md| md.key == b"adamant.mutability") {
+            m.metadata.push(adamant_bytecode_format::Metadata {
+                key: b"adamant.mutability".to_vec(),
+                value: bcs::to_bytes(&adamant_types::Mutability::Immutable).unwrap(),
+            });
+        }
+        let limits = AdamantStructuralLimits::genesis();
+        let adamant_result = run_adamant_pipeline(&m, &limits);
+        let sui_module = to_sui(&m);
+        let sui_config = sui_config_from(&limits);
+        let sui_result = run_sui_code_unit_verifier(&sui_module, &sui_config);
+        assert_function_pass_parity_vm("type_safety", adamant_result, sui_result);
+    }
+
+    #[test]
+    fn cross_validation_accepts_simple_balanced_function() {
+        // Body: empty params/locals/returns; just Ret. Both
+        // Adamant and Sui accept.
+        let m = module_with_function(vec![], vec![], vec![], vec![ret()]);
+        cross_validate_type_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_cast_to_u8_on_bool() {
+        let m = module_with_function(
+            vec![],
+            vec![],
+            vec![SignatureToken::U8],
+            vec![ld_true(), cast_u8(), ret()],
+        );
+        cross_validate_type_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_add_with_mismatched_int_widths() {
+        let m = module_with_function(
+            vec![],
+            vec![],
+            vec![SignatureToken::U64],
+            vec![ld_u8(1), ld_u64(2), add(), ret()],
+        );
+        cross_validate_type_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_ret_with_wrong_return_type() {
+        let m = module_with_function(
+            vec![],
+            vec![],
+            vec![SignatureToken::U64],
+            vec![ld_true(), ret()],
+        );
+        cross_validate_type_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_st_loc_wrong_value_type() {
+        // Local declared as u8; body pushes u64 + StLoc 0.
+        let m = module_with_function(
+            vec![],
+            vec![SignatureToken::U8],
+            vec![],
+            vec![ld_u64(1), st_loc(0), ret()],
+        );
+        cross_validate_type_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_br_true_on_non_bool() {
+        // BrTrue expects a bool on stack; supply u64.
+        let m = module_with_function(
+            vec![],
+            vec![],
+            vec![],
+            vec![
+                ld_u64(1),
+                BytecodeInstruction::Inherited(Bytecode::BrTrue(2)),
+                ret(),
+                ret(),
+            ],
+        );
+        cross_validate_type_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_read_ref_on_non_reference() {
+        // ReadRef expects &T on stack; supply u64.
+        let m = module_with_function(
+            vec![],
+            vec![],
+            vec![],
+            vec![
+                ld_u64(1),
+                BytecodeInstruction::Inherited(Bytecode::ReadRef),
+                pop(),
+                ret(),
+            ],
+        );
+        cross_validate_type_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_freeze_ref_on_imm_ref() {
+        // FreezeRef expects &mut T; supply &T (immutable
+        // reference). Param 0: &u64.
+        let m = module_with_function(
+            vec![SignatureToken::Reference(Box::new(SignatureToken::U64))],
+            vec![],
+            vec![],
+            vec![
+                BytecodeInstruction::Inherited(Bytecode::CopyLoc(0)),
+                BytecodeInstruction::Inherited(Bytecode::FreezeRef),
+                pop(),
+                ret(),
+            ],
+        );
+        cross_validate_type_safety_pipeline(&m);
+    }
 }

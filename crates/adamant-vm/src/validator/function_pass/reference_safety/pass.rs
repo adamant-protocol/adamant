@@ -1669,4 +1669,196 @@ mod tests {
             other => panic!("expected RetBorrowedMutableReference, got {other:?}"),
         }
     }
+
+    // ----- Phase 5/5c F-2: Layer B parity backfill -----
+    //
+    // Sui's `reference_safety::verify` is `pub(crate)` — only
+    // the composite per-function entry
+    // `code_unit_verifier::verify_module` is reachable from our
+    // test code. Composite-pipeline parity per the Sui-public-
+    // API-shape-constrains-parity-helper sub-pattern (D-7b
+    // registration; 3rd instance at F-2). Each fixture is
+    // curated to isolate reference_safety's behaviour: well-
+    // formed at every other pass; triggers the borrow rule
+    // under test on both sides.
+    //
+    // Layer-B-coverage-shape sub-classification: F-2 D-5b
+    // demonstrates retroactive-promotion (NEW sub-shape per
+    // F-2 plan-gate Q2 refinement; 1st instance). Layer A
+    // coverage was established at D-5b.2 (and extended at
+    // E-6 with 7 deferred BorrowViolationReason sub-reasons +
+    // 1 st_loc_destroys_non_drop fixture); F-2 promotes a
+    // representative subset to Layer B parity.
+
+    use crate::validator::config::AdamantStructuralLimits;
+    use crate::validator::function_pass::test_helpers::{
+        assert_function_pass_parity_vm, run_adamant_pipeline, run_sui_code_unit_verifier,
+        sui_config_from, to_sui,
+    };
+    use adamant_types::Address as AccountAddress;
+
+    fn add_self_address_refsafe(m: &mut AdamantCompiledModule) {
+        if m.address_identifiers.is_empty() {
+            m.address_identifiers
+                .push(AccountAddress::from_bytes([0u8; 32]));
+        }
+    }
+
+    fn cross_validate_reference_safety_pipeline(m: &AdamantCompiledModule) {
+        let mut m = m.clone();
+        add_self_address_refsafe(&mut m);
+        // Add mutability metadata so Rule 1 doesn't pre-empt
+        // (defensive-fixture-isolation pattern from E-5).
+        if !m.metadata.iter().any(|md| md.key == b"adamant.mutability") {
+            m.metadata.push(adamant_bytecode_format::Metadata {
+                key: b"adamant.mutability".to_vec(),
+                value: bcs::to_bytes(&adamant_types::Mutability::Immutable).unwrap(),
+            });
+        }
+        let limits = AdamantStructuralLimits::genesis();
+        let adamant_result = run_adamant_pipeline(&m, &limits);
+        let sui_module = to_sui(&m);
+        let sui_config = sui_config_from(&limits);
+        let sui_result = run_sui_code_unit_verifier(&sui_module, &sui_config);
+        assert_function_pass_parity_vm("reference_safety", adamant_result, sui_result);
+    }
+
+    #[test]
+    fn cross_validation_accepts_simple_borrow_release() {
+        // Body: empty function body that just returns. Both
+        // Adamant and Sui accept.
+        let m = module_with_function(vec![], vec![], vec![], vec![ret_inst()]);
+        cross_validate_reference_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_copy_loc_while_mut_borrowed() {
+        // params[0]: u64; body: mut_borrow_loc(0); cp_loc(0);
+        // pop; write_ref; ret. CopyLoc on mutably-borrowed
+        // local rejects on both sides.
+        let m = module_with_function(
+            vec![SignatureToken::U64],
+            vec![],
+            vec![],
+            vec![
+                mut_borrow_loc(0),
+                cp_loc(0),
+                pop_inst(),
+                write_ref(),
+                ret_inst(),
+            ],
+        );
+        cross_validate_reference_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_move_loc_while_borrowed() {
+        // params[0]: u64; body: imm_borrow_loc(0); mv_loc(0);
+        // pop; pop; ret.
+        let m = module_with_function(
+            vec![SignatureToken::U64],
+            vec![],
+            vec![],
+            vec![imm_borrow_loc(0), mv_loc(0), pop_inst(), pop_inst(), ret_inst()],
+        );
+        cross_validate_reference_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_st_loc_while_borrowed() {
+        // locals: [u64]; body: imm_borrow_loc(0); ld_u64(7);
+        // st_loc(0); pop; ret.
+        let m = module_with_function(
+            vec![],
+            vec![SignatureToken::U64],
+            vec![],
+            vec![
+                imm_borrow_loc(0),
+                ld_u64(7),
+                st_loc(0),
+                pop_inst(),
+                ret_inst(),
+            ],
+        );
+        cross_validate_reference_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_imm_borrow_loc_while_mut_borrowed() {
+        // params[0]: u64; body: mut_borrow_loc(0);
+        // imm_borrow_loc(0); pop; pop; ret.
+        let m = module_with_function(
+            vec![SignatureToken::U64],
+            vec![],
+            vec![],
+            vec![
+                mut_borrow_loc(0),
+                imm_borrow_loc(0),
+                pop_inst(),
+                pop_inst(),
+                ret_inst(),
+            ],
+        );
+        cross_validate_reference_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_ret_while_local_borrowed() {
+        // params[0]: u64; return: &mut u64; body:
+        // mut_borrow_loc(0); ret. Returning a mutable
+        // reference to a local destroys the frame.
+        let m = module_with_function(
+            vec![SignatureToken::U64],
+            vec![],
+            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![mut_borrow_loc(0), ret_inst()],
+        );
+        cross_validate_reference_safety_pipeline(&m);
+    }
+
+    /// Phase 5/5c F-2 Layer-B-coverage-shape retroactive-
+    /// promotion 1st instance: promotes E-6's
+    /// freeze_ref_with_outstanding_mut_borrow_rejected fixture
+    /// (Layer A) to Layer B parity. Uses the same cp_loc-of-
+    /// mutable-reference pattern.
+    #[test]
+    fn cross_validation_rejects_freeze_ref_with_outstanding_mut_borrow() {
+        let m = module_with_function(
+            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![],
+            vec![],
+            vec![
+                cp_loc(0),
+                cp_loc(0),
+                freeze_ref(),
+                pop_inst(),
+                pop_inst(),
+                ret_inst(),
+            ],
+        );
+        cross_validate_reference_safety_pipeline(&m);
+    }
+
+    /// Retroactive-promotion of E-6's
+    /// write_ref_with_outstanding_mut_borrow_rejected fixture
+    /// to Layer B parity. WriteRef expects ref on TOP of stack
+    /// (per the existing mut_borrow_loc_then_write_ref happy-
+    /// path test; D-5b.2 + E-6 fixture analysis).
+    #[test]
+    fn cross_validation_rejects_write_ref_with_outstanding_mut_borrow() {
+        let m = module_with_function(
+            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![],
+            vec![],
+            vec![
+                cp_loc(0),
+                ld_u64(7),
+                cp_loc(0),
+                write_ref(),
+                pop_inst(),
+                ret_inst(),
+            ],
+        );
+        cross_validate_reference_safety_pipeline(&m);
+    }
 }
