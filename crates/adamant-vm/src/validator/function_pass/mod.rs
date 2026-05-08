@@ -221,8 +221,15 @@ pub(super) fn verify_function_bodies(
             &cfg,
             &mut type_safety_cache,
         )?;
-        // D-5b will add reference_safety here; full pipeline
-        // wires into `super::verify_module` step 4 at D-6.
+        reference_safety::verify_function(
+            module,
+            fn_def_idx,
+            function_definition,
+            &code_unit.code,
+            &cfg,
+        )?;
+        // D-5c adds Rules 3, 4, 5 here. Full pipeline wires
+        // into `super::verify_module` step 4 at D-6.
     }
     Ok(())
 }

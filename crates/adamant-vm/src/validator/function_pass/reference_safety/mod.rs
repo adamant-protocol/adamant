@@ -84,4 +84,8 @@
 
 #![allow(dead_code)] // D-5b.1 foundation; first consumer (reference-safety pass) lands at D-5b.2.
 
+pub(super) mod abstract_state;
 pub(super) mod borrow_graph;
+pub(super) mod pass;
+
+pub(super) use pass::verify_function;

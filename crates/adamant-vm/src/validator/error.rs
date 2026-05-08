@@ -1093,6 +1093,25 @@ pub enum AdamantValidationError {
         /// Sub-reason discriminator.
         reason: TypeMismatchReason,
     },
+    /// Per-instruction reference-safety check rejected a
+    /// borrow-graph violation (dangling reference, mutable-
+    /// reference aliasing, etc.). Carries a
+    /// [`BorrowViolationReason`] closed-enum sub-reason for
+    /// diagnostic precision while keeping the top-level variant
+    /// count bounded.
+    ///
+    /// Whitepaper §6.2.1.8 step 4 (per-function passes:
+    /// reference safety; whitepaper §6.2.1.6 Rule "reference
+    /// safety"). Phase 5/5b.4 D-5b.
+    BorrowViolation {
+        /// Function-definition index whose body fired the
+        /// rejection.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Bytecode offset of the offending instruction.
+        code_offset: CodeOffset,
+        /// Sub-reason discriminator.
+        reason: BorrowViolationReason,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 3, 6, 7 land in subsequent
@@ -1345,6 +1364,97 @@ impl core::fmt::Display for TypeMismatchReason {
             Self::VariantSwitchTypeMismatch => write!(f, "VariantSwitch operand is not an immutable reference to the expected enum"),
             Self::RetTypeMismatch => write!(f, "Ret operand types do not match function's declared return signature"),
             Self::LocalTypeMismatch => write!(f, "local-variable operation type does not match the local's declared type"),
+        }
+    }
+}
+
+/// Structured reason for an
+/// [`AdamantValidationError::BorrowViolation`] rejection. Each
+/// variant maps to a specific borrow-graph invariant a
+/// per-instruction transfer function may rule out.
+///
+/// Phase 5/5b.4 D-5b.2 (`function_pass::reference_safety`).
+/// Closed-enum shape mirrors `TypeMismatchReason` (D-5a.0
+/// precedent); declared lazily alongside producer per Q5 at
+/// D-5b plan-gate (Rust error-type lifecycle).
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum BorrowViolationReason {
+    /// `CopyLoc` of a non-reference local that has an
+    /// outstanding mutable borrow. Maps to Sui's
+    /// `COPYLOC_EXISTS_BORROW_ERROR`.
+    CopyLocBorrowed,
+    /// `MoveLoc` of a non-reference local that has an
+    /// outstanding borrow. Maps to Sui's
+    /// `MOVELOC_EXISTS_BORROW_ERROR`.
+    MoveLocBorrowed,
+    /// `StLoc` to a non-reference local that has an
+    /// outstanding borrow (so the destruction of the existing
+    /// value is unsafe). Maps to Sui's
+    /// `STLOC_UNSAFE_TO_DESTROY_ERROR`.
+    StLocDestroyBorrowed,
+    /// `FreezeRef` on a mutable reference whose target has an
+    /// outstanding mutable borrow. Maps to Sui's
+    /// `FREEZEREF_EXISTS_MUTABLE_BORROW_ERROR`.
+    FreezeRefHasMutableBorrow,
+    /// `ReadRef` (or `Eq` / `Neq` comparison) on a reference
+    /// whose target has an outstanding mutable borrow. Maps
+    /// to Sui's `READREF_EXISTS_MUTABLE_BORROW_ERROR`.
+    ReadRefHasMutableBorrow,
+    /// `WriteRef` to a mutable reference whose target has any
+    /// outstanding borrow. Maps to Sui's
+    /// `WRITEREF_EXISTS_BORROW_ERROR`.
+    WriteRefHasBorrow,
+    /// `ImmBorrowLoc` / `MutBorrowLoc` of a local whose
+    /// borrow-graph state precludes the requested borrow shape.
+    /// Maps to Sui's `BORROWLOC_EXISTS_BORROW_ERROR`.
+    BorrowLocHasBorrow,
+    /// `MutBorrowField` / `ImmBorrowField` (and ref-unpack of
+    /// enum variants) where the parent reference has an
+    /// outstanding incompatible borrow. Maps to Sui's
+    /// `FIELD_EXISTS_MUTABLE_BORROW_ERROR`.
+    BorrowFieldHasMutableBorrow,
+    /// `Call` / `CallGeneric` / `InvokeShielded` /
+    /// `InvokeTransparent` argument is a mutable reference
+    /// that cannot be transferred (the reference has an
+    /// outstanding borrow). Maps to Sui's
+    /// `CALL_BORROWED_MUTABLE_REFERENCE_ERROR`.
+    CallTransfersBorrowedMutable,
+    /// `VecImmBorrow` / `VecMutBorrow` on a vector reference
+    /// whose state precludes the requested element borrow.
+    /// Maps to Sui's
+    /// `VEC_BORROW_ELEMENT_EXISTS_MUTABLE_BORROW_ERROR`.
+    VecElementHasMutableBorrow,
+    /// `VecPushBack` / `VecPopBack` / `VecSwap` on a mutable
+    /// vector reference whose state precludes the update
+    /// (some other mutable borrow is outstanding). Maps to
+    /// Sui's `VEC_UPDATE_EXISTS_MUTABLE_BORROW_ERROR`.
+    VecUpdateHasMutableBorrow,
+    /// `Ret` from a frame where some local or resource is
+    /// still borrowed. Maps to Sui's
+    /// `UNSAFE_RET_LOCAL_OR_RESOURCE_STILL_BORROWED`.
+    RetWithBorrowedFrame,
+    /// `Ret` returning a mutable reference that cannot be
+    /// transferred (the reference has an outstanding borrow).
+    /// Maps to Sui's `RET_BORROWED_MUTABLE_REFERENCE_ERROR`.
+    RetBorrowedMutableReference,
+}
+
+impl core::fmt::Display for BorrowViolationReason {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::CopyLocBorrowed => write!(f, "CopyLoc of a non-reference local with an outstanding mutable borrow"),
+            Self::MoveLocBorrowed => write!(f, "MoveLoc of a non-reference local with an outstanding borrow"),
+            Self::StLocDestroyBorrowed => write!(f, "StLoc would destroy a non-reference local with an outstanding borrow"),
+            Self::FreezeRefHasMutableBorrow => write!(f, "FreezeRef on a mutable reference with an outstanding mutable borrow"),
+            Self::ReadRefHasMutableBorrow => write!(f, "ReadRef / Eq / Neq on a reference with an outstanding mutable borrow"),
+            Self::WriteRefHasBorrow => write!(f, "WriteRef on a mutable reference with an outstanding borrow"),
+            Self::BorrowLocHasBorrow => write!(f, "ImmBorrowLoc / MutBorrowLoc precluded by an outstanding borrow on the local or frame"),
+            Self::BorrowFieldHasMutableBorrow => write!(f, "MutBorrowField / ImmBorrowField (or ref-unpack) precluded by an outstanding borrow on the parent reference"),
+            Self::CallTransfersBorrowedMutable => write!(f, "Call argument is a mutable reference that cannot be transferred"),
+            Self::VecElementHasMutableBorrow => write!(f, "VecImmBorrow / VecMutBorrow precluded by an outstanding borrow on the vector reference"),
+            Self::VecUpdateHasMutableBorrow => write!(f, "VecPushBack / VecPopBack / VecSwap on a mutable vector reference with an outstanding mutable borrow"),
+            Self::RetWithBorrowedFrame => write!(f, "Ret from a frame with locals still borrowed"),
+            Self::RetBorrowedMutableReference => write!(f, "Ret returning a mutable reference that cannot be transferred"),
         }
     }
 }
@@ -1901,6 +2011,16 @@ impl core::fmt::Display for AdamantValidationError {
                 f,
                 "function definition {} offset {code_offset}: {reason} \
                  (whitepaper §6.2.1.8 step 4, `function_pass::type_safety`)",
+                fn_def_idx.0
+            ),
+            Self::BorrowViolation {
+                fn_def_idx,
+                code_offset,
+                reason,
+            } => write!(
+                f,
+                "function definition {} offset {code_offset}: {reason} \
+                 (whitepaper §6.2.1.8 step 4, `function_pass::reference_safety`)",
                 fn_def_idx.0
             ),
         }
