@@ -1171,8 +1171,38 @@ pub enum AdamantValidationError {
     },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
-    // variant. Variants for Rules 6, 7 land in subsequent
-    // waves.
+    // variant.
+    /// Rule 6 (no dynamic dispatch) found a `Call` /
+    /// `CallGeneric` whose target resolves to a Sui-Move
+    /// dynamic-field module (address `0x2`, module name
+    /// `dynamic_field` or `dynamic_object_field`) without the
+    /// deploying module carrying a `b"adamant.allows_dynamic"`
+    /// metadata entry whose value is `true`.
+    ///
+    /// Whitepaper §6.2.1.6 Rule 6 + line 485
+    /// (forbidden-module enumeration). Phase 5/5b.5 E-3.
+    ///
+    /// The `calling_function_index` + `code_offset` localize
+    /// the offending call instruction within the deploying
+    /// module; `calling_function_handle_idx` carries the raw
+    /// `FunctionHandleIndex` referenced by the
+    /// `Call`/`CallGeneric` so auditors can resolve the
+    /// `(target_module, target_function_name)` pair via the
+    /// module's handle tables. `reason` discriminates which
+    /// dynamic-field family triggered the rejection.
+    DynamicDispatchViolation {
+        /// Function in the deploying module containing the
+        /// offending `Call`/`CallGeneric`.
+        calling_function_index: FunctionDefinitionIndex,
+        /// Bytecode offset of the offending instruction.
+        code_offset: CodeOffset,
+        /// `FunctionHandleIndex` referenced by the
+        /// `Call`/`CallGeneric` instruction.
+        calling_function_handle_idx: FunctionHandleIndex,
+        /// Sub-reason discriminator.
+        reason: DynamicDispatchViolationReason,
+    },
+    // Variant for Rule 7 lands in subsequent E-4 sub-arc.
 }
 
 /// Whether a handle is a datatype handle or a function
@@ -1533,6 +1563,44 @@ impl core::fmt::Display for PrivacyConsistencyViolationReason {
             Self::TransparentReachesInvokeShielded => write!(
                 f,
                 "transparent public function reaches InvokeShielded (directly or transitively)"
+            ),
+        }
+    }
+}
+
+/// Sub-reason for [`AdamantValidationError::DynamicDispatchViolation`].
+///
+/// Whitepaper §6.2.1.6 Rule 6 + line 485 enumerates two
+/// forbidden module names at address `0x2`: `dynamic_field`
+/// and `dynamic_object_field`. Closed-enum sub-reason
+/// distinguishes which family triggered the rejection so the
+/// diagnostic surface for module authors points at the precise
+/// API they invoked.
+///
+/// Closed-enum shape mirrors `TypeMismatchReason` /
+/// `BorrowViolationReason` / `PrivacyConsistencyViolationReason`
+/// per the established closed-enum-sub-reason pattern. Phase
+/// 5/5b.5 E-3 (10th public closed enum).
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum DynamicDispatchViolationReason {
+    /// `Call`/`CallGeneric` targets `0x2::dynamic_field::*`
+    /// without `b"adamant.allows_dynamic" = true` opt-in.
+    DynamicFieldNotOptedIn,
+    /// `Call`/`CallGeneric` targets `0x2::dynamic_object_field::*`
+    /// without `b"adamant.allows_dynamic" = true` opt-in.
+    DynamicObjectFieldNotOptedIn,
+}
+
+impl core::fmt::Display for DynamicDispatchViolationReason {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::DynamicFieldNotOptedIn => write!(
+                f,
+                "module calls 0x2::dynamic_field::* without `adamant.allows_dynamic = true` opt-in"
+            ),
+            Self::DynamicObjectFieldNotOptedIn => write!(
+                f,
+                "module calls 0x2::dynamic_object_field::* without `adamant.allows_dynamic = true` opt-in"
             ),
         }
     }
@@ -2149,6 +2217,18 @@ impl core::fmt::Display for AdamantValidationError {
                 target_module_id.address,
                 target_module_id.name,
                 calling_function_handle_idx.0,
+            ),
+            Self::DynamicDispatchViolation {
+                calling_function_index,
+                code_offset,
+                calling_function_handle_idx,
+                reason,
+            } => write!(
+                f,
+                "dynamic-dispatch violation in function {} at offset {code_offset} \
+                 (FunctionHandleIndex {}): {reason} \
+                 (whitepaper §6.2.1.6 Rule 6)",
+                calling_function_index.0, calling_function_handle_idx.0,
             ),
         }
     }
