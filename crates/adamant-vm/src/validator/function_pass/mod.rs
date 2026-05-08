@@ -148,6 +148,7 @@ pub(super) mod cfg;
 pub(super) mod control_flow;
 pub(super) mod locals_safety;
 pub(super) mod loop_summary;
+pub(super) mod reference_safety;
 pub(super) mod stack_usage;
 pub(super) mod type_safety;
 
