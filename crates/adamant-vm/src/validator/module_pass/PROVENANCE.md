@@ -3,18 +3,23 @@
 This document is the **canonical audit anchor for the Adamant
 bytecode-verifier fork plus the Adamant-specific rule modules
 landed across Phase 5/5b plus the Phase 5/5c cross-validation
-infrastructure formalization**. Originally established at Phase
-5/5b.2 for module-level passes; **expanded at Phase 5/5b.4 D-7
-to cover per-function passes**; **re-expanded at Phase 5/5b.5
-E-7 to cover cross-module verifier work + the Phase 5/5b.5
-rule modules** (`rule_06_no_dynamic_dispatch` +
-`rule_07_privacy_circuit_in_shielded_only` +
+infrastructure formalization plus the Phase 5/6 AVM runtime**.
+Originally established at Phase 5/5b.2 for module-level passes;
+**expanded at Phase 5/5b.4 D-7 to cover per-function passes**;
+**re-expanded at Phase 5/5b.5 E-7 to cover cross-module verifier
+work + the Phase 5/5b.5 rule modules** (`rule_06_no_dynamic_dispatch`
++ `rule_07_privacy_circuit_in_shielded_only` +
 `rule_08_bounded_loops`); **re-expanded at Phase 5/5c F-3 to
 cover the cross-validation tier framework (T0/T1/T2/T3)
 formalization + Phase 5/5 cumulative methodology framework
-documentation**. 3rd instance of scope-expansion-history-as-
-canonical-record sub-pattern (rule-of-three threshold MET at
-F-3; 1st instance at D-7; 2nd instance at E-7).
+documentation**; **re-expanded at Phase 5/6.1 to cover the AVM
+runtime subtree** (`runtime/error.rs` + `runtime/state_view.rs`
++ `runtime/state_mutator.rs` + `runtime/state_buffer.rs` +
+`runtime/frame.rs` + `runtime/interpreter.rs` +
+`runtime/test_helpers.rs`). 4th instance of scope-expansion-
+history-as-canonical-record sub-pattern (operating beyond rule-
+of-three threshold; 1st instance at D-7; 2nd instance at E-7;
+3rd instance at F-3; 4th instance at 5/6.1).
 
 Subtrees covered:
 
@@ -30,11 +35,19 @@ Subtrees covered:
 - Cross-validation tier framework (T0/T1/T2/T3) coverage
   discipline applied across all of the above subtrees;
   Phase 5/5c F-1/F-2/F-3 audit closure shape
+- `adamant-vm/src/runtime/` (AVM runtime; Phase 5/6.1
+  foundation onward — error types, state-view + state-
+  mutator trait abstractions, transaction-local state
+  buffer, per-function execution frame, multi-frame
+  interpreter state, direct-interpreter dispatch-loop
+  scaffold; instruction handlers land at 5/6.2 / 5/6.3 /
+  5/6.4)
 
 The file remains physically located under `module_pass/` for
 git-history continuity; the scope is bytecode-verifier-wide
 plus the validator's full §6.2.1.6 rule surface plus the
-cross-validation tier framework.
+cross-validation tier framework plus the AVM runtime
+subtree.
 
 The fork is parallel to `crates/adamant-bytecode-format/PROVENANCE.md`
 (which forks the bytecode-format primitives from

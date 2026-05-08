@@ -69,6 +69,7 @@ pub mod bytecode;
 pub mod bytecode_wire;
 pub mod module;
 pub mod module_wire;
+pub mod runtime;
 pub mod transaction;
 pub mod tx_hash;
 pub mod validator;
