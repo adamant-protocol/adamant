@@ -120,8 +120,8 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Twenty-one confirmed instances during Phases
-1, 2, 4, and 5:
+sources before proceeding. Twenty-two confirmed instances during
+Phases 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
   original "fixed-length domain tag" text admitted prefix collisions
@@ -658,6 +658,77 @@ sources before proceeding. Twenty-one confirmed instances during Phases
   5/5c landed; the escalation reframes the work to lay down full
   coverage in one architectural arc with no transitional gap
   (commits 19d744b, 0651e2f).
+- **Arithmetic semantics for the inherited Sui-Move subset**
+  (whitepaper 6.2.1.9) — Phase 5/6.2 (AVM runtime instruction
+  handlers) plan-gate surfaced that whitepaper §6.2.1.4 enumerates
+  the inherited bytecode instructions and their stack effects but
+  does not pin the runtime semantics of arithmetic, comparison,
+  shift, and cast operations. Eight semantic gaps spanning a
+  single coherent surface: overflow handling on Add/Sub/Mul;
+  division and modulo by zero; shift amount bounds for Shl/Shr
+  across all six integer widths; cast semantics across same-type
+  / widening / narrowing distinctions; comparison ordering
+  (signed vs unsigned); cross-type comparison verifier residual
+  binding; equality semantics on primitives, structs, vectors,
+  and shielded values; and whether wrapping-arithmetic opcodes
+  exist. Each gap is consensus-binding — divergent runtime
+  semantics across validators produces consensus disagreement —
+  yet none was pinned at spec level prior to this amendment.
+  Resolved by spec revision adding §6.2.1.9 ("Arithmetic
+  semantics") as a new subsubsection appended after §6.2.1.8,
+  pinning all eight gaps. The amendment aligns Adamant's runtime
+  semantics with Sui-Move's empirically-verified runtime
+  semantics for the inherited subset (verbatim source quote of
+  Sui's `IntegerValue::shl_checked` / `shr_checked` and the
+  interpreter's Shl/Shr dispatch arms taken at the vendored
+  Sui commit `a9a6825eaf6273cc819ee3bcf65fd4909f7624a9`,
+  preserving the strict-superset commitment of §6.2.1.1 — pure-
+  Sui modules with abort-on-overflow / abort-on-shift-too-large
+  / abort-on-cast-not-representable expectations on Sui exhibit
+  the same runtime behaviour on Adamant. Methodologically, this
+  is the **first comprehensive-semantics-amendment instance** —
+  prior spec-first verification instances (instances 1–21) each
+  resolved a single semantic gap or a related cluster within one
+  topic; instance 22 resolves an entire semantic surface (all
+  arithmetic-class instructions) in one amendment. Pre-
+  ratification empirical reads at draft submission caught three
+  load-bearing issues that initial draft text didn't surface:
+  (a) verifier admits cast-to-same-type as no-op (confirmed by
+  reading `validator/function_pass/type_safety.rs` cast
+  handlers), prompting three-case cast framing rather than two-
+  case widening/narrowing framing; (b) Sui-VM Shl/Shr abort
+  semantics confirmed by verbatim source quote rather than
+  hearsay (initial Claude Code framing said "Sui-Move's recent
+  versions reportedly abort"; user direction required empirical
+  verification before locking the disposition; the verbatim
+  source confirmed abort, replacing "reportedly" with a quoted
+  reference). The empirical-grounding-discipline operating at
+  pre-ratification gate caught the §7 carry-forward as well:
+  (c) §7's shielded encryption posture is implicitly probabilistic
+  via the Poseidon-with-randomness scheme in §7.1.1 and the
+  ChaCha20-Poly1305-with-nonce scheme in §7.6.1, but §7.8.1
+  shielded object contents reference "encrypted" without
+  explicitly specifying the encryption scheme. The §6.2.1.9
+  shielded-value-equality paragraph names the probabilistic
+  schemes in use under §7 by their cross-references rather than
+  asserting a universal "all shielded encryption is
+  probabilistic" claim that §7 doesn't explicitly back. **§7
+  carry-forward (load-bearing):** future §7 amendment should
+  pin "all shielded encryption is probabilistic" or
+  equivalently specify the encryption scheme for §7.8.1
+  shielded object contents to lock the §6.2.1.9 shielded-value-
+  equality privacy property at spec level rather than at
+  scheme-by-scheme implicit level. Without this, future
+  implementations could add deterministic shielded encryption
+  for §7.8.1 object contents and create a privacy hole that
+  current spec text does not forbid; the §6.2.1.9 text is
+  robust to §7's posture either way (it pins ciphertext-byte-
+  comparison runtime behaviour unambiguously and notes the
+  privacy-leakage relationship depends on §7's scheme), but
+  pinning §7's posture explicitly would strengthen the
+  privacy guarantee from "depends on §7's scheme" to "ciphertext
+  equality does not imply plaintext equality at protocol
+  level."
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
