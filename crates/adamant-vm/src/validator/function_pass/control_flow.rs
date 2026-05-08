@@ -690,4 +690,174 @@ mod tests {
         verify_function(&AdamantStructuralLimits::genesis(), fn_idx(0), &code, &jts)
             .expect("extension-then-Ret terminates correctly");
     }
+
+    // --- Layer B: cross-validation against vendored Sui ---
+    //
+    // For each fixture below, run Adamant's `verify_function` and
+    // Sui's `move_bytecode_verifier::control_flow::verify_function`
+    // over the same single-function module (after BCS round-trip
+    // via `to_sui_module`), assert accept/reject parity via the
+    // shared `assert_function_pass_parity` helper extracted at
+    // D-7a. Adamant extensions are excluded from Layer B by design
+    // (no upstream counterpart); the Adamant-extension tests above
+    // cover the per-extension shape at Layer A only.
+
+    use super::super::test_helpers::{assert_function_pass_parity, sui_config_from, to_sui};
+    use crate::module::{AdamantCodeUnit, AdamantCompiledModule, AdamantFunctionDefinition};
+    use adamant_bytecode_format::{
+        AddressIdentifierIndex, FunctionHandle, Identifier, IdentifierIndex, ModuleHandle,
+        ModuleHandleIndex, Signature, SignatureIndex,
+    };
+    use adamant_types::Address as AccountAddress;
+    use move_bytecode_verifier_meter::dummy::DummyMeter;
+
+    /// Build a single-function module wrapping `code` + `jts`.
+    /// Mirrors the minimal valid module shape `stack_usage`'s
+    /// fixture uses, with empty parameter / locals / returns.
+    fn module_with_body(
+        code: Vec<BytecodeInstruction>,
+        jts: Vec<VariantJumpTable>,
+    ) -> AdamantCompiledModule {
+        let mut m = AdamantCompiledModule::default();
+        m.module_handles.push(ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(0),
+        });
+        m.signatures.push(Signature(vec![])); // SignatureIndex(0): empty
+        m.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(0),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(0),
+            type_parameters: vec![],
+        });
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: adamant_bytecode_format::FunctionHandleIndex(0),
+            code: Some(AdamantCodeUnit {
+                locals: SignatureIndex(0),
+                code,
+                jump_tables: jts,
+            }),
+            ..AdamantFunctionDefinition::default()
+        });
+        m.identifiers.push(Identifier::new("f").unwrap());
+        m.address_identifiers.push(AccountAddress::from_bytes([0u8; 32]));
+        m
+    }
+
+    /// Run both sides of `control_flow`'s `verify_function` and
+    /// assert accept/reject parity.
+    fn cross_validate_control_flow(m: &AdamantCompiledModule) {
+        let limits = AdamantStructuralLimits::genesis();
+        let function_def = &m.function_defs[0];
+        let code_unit = function_def
+            .code
+            .as_ref()
+            .expect("test fixture has body");
+        let adamant_result =
+            verify_function(&limits, fn_idx(0), &code_unit.code, &code_unit.jump_tables).map(|_| ());
+
+        let sui_module = to_sui(m);
+        let sui_config = sui_config_from(&limits);
+        let sui_fn_def_idx =
+            move_binary_format::file_format::FunctionDefinitionIndex(0);
+        let sui_function_def = &sui_module.function_defs()[0];
+        let sui_code_unit = sui_function_def
+            .code
+            .as_ref()
+            .expect("Sui twin has body too");
+        let sui_result = move_bytecode_verifier::control_flow::verify_function(
+            &sui_config,
+            &sui_module,
+            sui_fn_def_idx,
+            sui_function_def,
+            sui_code_unit,
+            &mut DummyMeter,
+        )
+        .map(|_| ());
+
+        assert_function_pass_parity("control_flow", adamant_result, sui_result);
+    }
+
+    #[test]
+    fn cross_validation_accepts_single_ret() {
+        let m = module_with_body(vec![ret()], vec![]);
+        cross_validate_control_flow(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_single_abort() {
+        let m = module_with_body(vec![abort()], vec![]);
+        cross_validate_control_flow(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_single_branch() {
+        // Branch(0) — self-loop on the only block; CFG is reducible
+        // (self-loop has unique back edge).
+        let m = module_with_body(vec![branch(0)], vec![]);
+        cross_validate_control_flow(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_empty_body() {
+        let m = module_with_body(vec![], vec![]);
+        cross_validate_control_flow(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_pop_terminator() {
+        // Last instruction is `Pop`, which is not an unconditional
+        // branch — fall-through violation.
+        let m = module_with_body(vec![ld_u64(0), pop()], vec![]);
+        cross_validate_control_flow(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_nop_terminator() {
+        let m = module_with_body(vec![nop()], vec![]);
+        cross_validate_control_flow(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_brtrue_terminator() {
+        // BrTrue is a conditional branch (not unconditional);
+        // last-instruction-must-be-unconditional violated.
+        let m = module_with_body(vec![ld_true(), br_true(0)], vec![]);
+        cross_validate_control_flow(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_irreducible_two_entry_loop() {
+        // Same shape as `irreducible_two_entry_loop` Layer A test:
+        // blocks 2 and 3 form a cycle with no unique dominator.
+        let m = module_with_body(
+            vec![ld_true(), br_true(3), branch(3), branch(2)],
+            vec![],
+        );
+        cross_validate_control_flow(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_diamond_cfg() {
+        // 0: BrTrue 3
+        // 1: LdU64 0
+        // 2: Branch 4
+        // 3: LdU64 1
+        // 4: Pop
+        // 5: Ret
+        let m = module_with_body(
+            vec![
+                ld_true(),
+                br_true(4),
+                ld_u64(0),
+                branch(5),
+                ld_u64(1),
+                pop(),
+                ret(),
+            ],
+            vec![],
+        );
+        cross_validate_control_flow(&m);
+    }
 }

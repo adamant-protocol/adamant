@@ -788,4 +788,174 @@ mod tests {
         .unwrap();
         assert_eq!(initial.local_state(0), LocalState::Available);
     }
+
+    // --- Layer B: cross-validation against vendored Sui ---
+    //
+    // Sui's `locals_safety::verify` is `pub(crate)` — only the
+    // composite per-function entry `code_unit_verifier::verify_module`
+    // is reachable from our test code. Composite-pipeline parity
+    // is the right shape: each fixture is curated to isolate
+    // locals_safety's behaviour (well-formed at every other pass;
+    // triggers the rule under test on both sides).
+    //
+    // Pipeline-position note: Adamant runs locals_safety at
+    // position 3 (control_flow → stack_usage → locals_safety →
+    // type_safety → reference_safety) while Sui runs locals_safety
+    // at position 4 (control_flow → stack_usage → type_safety →
+    // locals_safety → reference_safety). For locals-violation
+    // fixtures the Sui-side pipeline must pass type_safety BEFORE
+    // hitting locals_safety; the fixtures below are type-correct
+    // by construction (every local has a well-formed type-token,
+    // every operand position has a compatible type, no
+    // type-mismatched operations). Composite-level accept/reject
+    // parity follows.
+
+    use super::super::test_helpers::{
+        assert_function_pass_parity_vm, run_adamant_pipeline, run_sui_code_unit_verifier,
+        sui_config_from, to_sui,
+    };
+    use crate::validator::config::AdamantStructuralLimits;
+    use adamant_types::Address as AccountAddress;
+
+    /// Add the minimal address-identifier the Sui-side
+    /// `module.self_id()` needs (Layer A `module_with_function`
+    /// fixture omits `address_identifiers` because Adamant's
+    /// `locals_safety` pass never consults them).
+    fn add_self_address(m: &mut AdamantCompiledModule) {
+        m.address_identifiers
+            .push(AccountAddress::from_bytes([0u8; 32]));
+    }
+
+    fn cross_validate_locals_safety_pipeline(m: &AdamantCompiledModule) {
+        let mut m = m.clone();
+        add_self_address(&mut m);
+        let limits = AdamantStructuralLimits::genesis();
+        let adamant_result = run_adamant_pipeline(&m, &limits);
+        let sui_module = to_sui(&m);
+        let sui_config = sui_config_from(&limits);
+        let sui_result = run_sui_code_unit_verifier(&sui_module, &sui_config);
+        assert_function_pass_parity_vm("locals_safety", adamant_result, sui_result);
+    }
+
+    #[test]
+    fn cross_validation_accepts_simple_st_loc_then_move() {
+        // Body: LdU64 0; StLoc 0; MoveLoc 0; Pop; Ret.
+        // Locals = [u64] (Unavailable at entry, Available after StLoc).
+        let m = module_with_function(
+            vec![],
+            vec![SignatureToken::U64],
+            vec![ld_u64(0), st_loc(0), mv_loc(0), pop(), ret()],
+        );
+        cross_validate_locals_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_copyloc_after_stloc() {
+        // u64 has copy + drop; CopyLoc on Available local OK.
+        let m = module_with_function(
+            vec![],
+            vec![SignatureToken::U64],
+            vec![ld_u64(1), st_loc(0), cp_loc(0), pop(), ret()],
+        );
+        cross_validate_locals_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_move_loc_unavailable() {
+        // MoveLoc on Unavailable local (never stored).
+        let m = module_with_function(
+            vec![],
+            vec![SignatureToken::U64],
+            vec![mv_loc(0), pop(), ret()],
+        );
+        cross_validate_locals_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_copy_loc_unavailable() {
+        let m = module_with_function(
+            vec![],
+            vec![SignatureToken::U64],
+            vec![cp_loc(0), pop(), ret()],
+        );
+        cross_validate_locals_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_imm_borrow_loc_unavailable() {
+        let m = module_with_function(
+            vec![],
+            vec![SignatureToken::U64],
+            vec![imm_borrow_loc(0), pop(), ret()],
+        );
+        cross_validate_locals_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_mut_borrow_loc_unavailable() {
+        let m = module_with_function(
+            vec![],
+            vec![SignatureToken::U64],
+            vec![mut_borrow_loc(0), pop(), ret()],
+        );
+        cross_validate_locals_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_parameter_movement() {
+        // Param 0 is Available at entry; MoveLoc 0 + Pop + Ret.
+        let m = module_with_function(
+            vec![SignatureToken::U64],
+            vec![],
+            vec![mv_loc(0), pop(), ret()],
+        );
+        cross_validate_locals_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_move_then_store_uninitialized_local() {
+        // Happy-path coverage: MoveLoc on Available non-drop
+        // param + StLoc into Unavailable local 1 (no destroy on
+        // overwrite, since the local is uninitialized). Both
+        // sides accept.
+        //
+        // The complementary rejection-path fixture for the
+        // st_loc-destroys-non-drop rule is registered as an open
+        // Layer B gap for pre-mainnet hardening — exercising the
+        // rule via cross-validation requires two non-drop value
+        // sources (one to populate the local, another to trigger
+        // the destroy attempt), which exceeds D-7a's fixture-
+        // construction scope. Adamant's Layer A
+        // `stloc_to_available_no_drop_local_rejected` covers the
+        // pass directly; the Sui-side rule is verified via
+        // upstream's own test suite. See `PROVENANCE.md`'s "Open
+        // Layer B gaps" entry registered at D-7b.
+        let mut m = module_with_function(vec![], vec![], vec![]);
+        let nd = add_non_drop_datatype(&mut m);
+        m.signatures[0] = Signature(vec![nd.clone()]);
+        m.signatures[1] = Signature(vec![nd]);
+        m.function_defs[0].code.as_mut().unwrap().code = vec![mv_loc(0), st_loc(1), ret()];
+        cross_validate_locals_safety_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_ret_with_undropped_locals() {
+        // Function has a non-drop local that's been made
+        // Available; Ret without consuming it triggers
+        // RetWithUndroppedLocals on Adamant; Sui's locals_safety
+        // rejects with the same shape.
+        //
+        // Setup: param 0 = non-drop datatype; locals = [non-drop
+        // datatype]. Body: MoveLoc 0 (consume param) + StLoc 1
+        // (locals[1] becomes Available with non-drop value) +
+        // Ret. At Ret, locals[1] is Available with non-drop —
+        // rejection.
+        let mut m = module_with_function(vec![], vec![], vec![ret()]);
+        let nd = add_non_drop_datatype(&mut m);
+        m.signatures[0] = Signature(vec![nd.clone()]);  // params: [nd]
+        m.signatures[1] = Signature(vec![nd]);  // locals: [nd]
+        // Function handle params now = SI(0) (non-drop), locals = SI(1) (non-drop).
+        m.function_defs[0].code.as_mut().unwrap().code = vec![mv_loc(0), st_loc(0), ret()];
+        cross_validate_locals_safety_pipeline(&m);
+    }
 }

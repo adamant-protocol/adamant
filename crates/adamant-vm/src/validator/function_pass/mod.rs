@@ -152,6 +152,9 @@ pub(super) mod reference_safety;
 pub(super) mod stack_usage;
 pub(super) mod type_safety;
 
+#[cfg(test)]
+pub(in crate::validator::function_pass) mod test_helpers;
+
 use adamant_bytecode_format::FunctionDefinitionIndex;
 
 use crate::module::AdamantCompiledModule;

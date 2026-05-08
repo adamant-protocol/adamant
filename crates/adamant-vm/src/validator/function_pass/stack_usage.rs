@@ -1236,4 +1236,125 @@ mod tests {
             other => panic!("expected StackUnderflow on first Pop, got {other:?}"),
         }
     }
+
+    // --- Layer B: cross-validation against vendored Sui ---
+    //
+    // Sui's per-pass entries (`StackUsageVerifier::verify`,
+    // `locals_safety::verify`, `type_safety::verify`) are
+    // `pub(crate)` — only the composite per-function entry
+    // `code_unit_verifier::verify_module` is reachable from our
+    // test code. Composite-pipeline parity is the right shape:
+    // each fixture is curated to isolate stack_usage's behaviour
+    // (well-formed at every other pass; triggers the rule under
+    // test on both sides). Both pipelines run control_flow first
+    // and stack_usage second; pure-stack-usage rejections fire
+    // at stack_usage on both sides. Composite-level accept/
+    // reject parity follows.
+    //
+    // Adamant extensions are excluded from Layer B by design (no
+    // upstream counterpart); per-extension stack effects are
+    // covered at Layer A by the Category A / B / C / D tests
+    // above.
+
+    use super::super::test_helpers::{
+        assert_function_pass_parity_vm, run_adamant_pipeline, run_sui_code_unit_verifier,
+        sui_config_from, to_sui,
+    };
+    use adamant_types::Address as AccountAddress;
+
+    /// Add the minimal address-identifier the Sui-side
+    /// `module.self_id()` needs (the Layer A `module_with_body`
+    /// fixture omits `address_identifiers` because Adamant's
+    /// `stack_usage` pass never consults them; Sui's
+    /// `code_unit_verifier::verify_module` → `module.self_id()`
+    /// dereferences `module_handles[0].address`).
+    fn add_self_address(m: &mut AdamantCompiledModule) {
+        m.address_identifiers
+            .push(AccountAddress::from_bytes([0u8; 32]));
+    }
+
+    fn cross_validate_stack_usage_pipeline(m: &AdamantCompiledModule) {
+        let mut m = m.clone();
+        add_self_address(&mut m);
+        let limits = AdamantStructuralLimits::genesis();
+        let adamant_result = run_adamant_pipeline(&m, &limits);
+        let sui_module = to_sui(&m);
+        let sui_config = sui_config_from(&limits);
+        let sui_result = run_sui_code_unit_verifier(&sui_module, &sui_config);
+        assert_function_pass_parity_vm("stack_usage", adamant_result, sui_result);
+    }
+
+    #[test]
+    fn cross_validation_accepts_empty_function_body_via_arity_zero() {
+        // Function with no params, no returns, body = `Ret`. The
+        // simplest balanced body that passes every per-function
+        // pass on both sides.
+        let m = module_with_body(0, 0, vec![ret()]);
+        cross_validate_stack_usage_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_push_pop_balanced() {
+        // Body: LdU64 0; Pop; Ret. Stack delta = 0 at block end.
+        let m = module_with_body(0, 0, vec![ld_u64(0), pop(), ret()]);
+        cross_validate_stack_usage_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_pop_with_empty_stack() {
+        // Body: Pop; Ret. Pop at block start underflows.
+        let m = module_with_body(0, 0, vec![pop(), ret()]);
+        cross_validate_stack_usage_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_block_ends_with_extra_push() {
+        // Body: LdU64 0; Ret. Function declares 0 returns but
+        // block ends with non-zero stack.
+        let m = module_with_body(0, 0, vec![ld_u64(1), ret()]);
+        cross_validate_stack_usage_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_ret_with_wrong_arity() {
+        // Function declares 1 return; body Rets without pushing.
+        let m = module_with_body(0, 1, vec![ret()]);
+        cross_validate_stack_usage_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_binop_with_one_operand() {
+        // Add pops 2; body provides only 1.
+        let m = module_with_body(0, 1, vec![ld_u64(1), add(), ret()]);
+        cross_validate_stack_usage_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_rejects_unbalanced_at_branch_target() {
+        // 0: LdTrue
+        // 1: BrTrue 3
+        // 2: Branch 3
+        // 3: Pop          <- branch-target block expects empty entry
+        // 4: Ret
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_true(),
+                BytecodeInstruction::Inherited(Bytecode::BrTrue(3)),
+                BytecodeInstruction::Inherited(Bytecode::Branch(3)),
+                pop(),
+                ret(),
+            ],
+        );
+        cross_validate_stack_usage_pipeline(&m);
+    }
+
+    #[test]
+    fn cross_validation_accepts_balanced_loop_via_branch() {
+        // 0: Branch 0 — self-loop with empty body. Stack delta
+        // per iteration = 0; CFG is reducible (self-loop).
+        let m = module_with_body(0, 0, vec![BytecodeInstruction::Inherited(Bytecode::Branch(0))]);
+        cross_validate_stack_usage_pipeline(&m);
+    }
 }
