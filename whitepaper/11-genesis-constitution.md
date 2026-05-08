@@ -104,8 +104,10 @@ The consensus mechanism specified in section 8:
 
 - DAG structure with 250ms target round duration
 - 36-second epochs (144 rounds per epoch)
-- Dynamic active set: constitutional floor of 7 validators, soft ceiling of 75 validators (calibrated to the throughput floor on residential-fibre hardware)
-- First-come-first-served selection with persistent membership: validators admitted in registration order, slots held continuously until liveness failure or voluntary unbonding; no forced rotation; no stake-weighted lottery; commitment and continuity rewarded over hardware budget or stake size
+- Dynamic active set: constitutional floor of 7 validators, soft ceiling of 75 validators at launch (calibrated to the residential-fibre hardware profile of the launch period; subject to revision via hard fork as the chain's hardware composition evolves, subsection 8.1.10)
+- First-come-first-served selection with transferable membership: validators admitted in registration order, slots held continuously through participation, slots transferable to other addresses by mutual consent (subsection 8.1.8); no forced rotation; no stake-weighted lottery
+- Slot transfer: validators may transfer their active-set slot to another address by mutual consent at any time; the protocol is neutral on the economic terms of the transfer; the chain accepts that slot transferability produces hardware-tier evolution over time as a deliberate design choice
+- Genesis cohort: the first 75 validator addresses to take active-set slots receive a permanent, non-transferable on-chain marker recording their position, activation epoch, and chain-state commitment; in addition, a tradeable Genesis NFT is minted to each genesis cohort address as a cultural artefact with no protocol-level function (subsection 8.1.9)
 - 2/3+1 quorum threshold within the active set
 - Genesis activation gate: chain self-activates when 7 validators are simultaneously registered, stake-eligible, and online; no coordination event, no recruited cohort, no human-in-the-loop activation
 - Halt-on-disagreement: at the floor, the chain pauses rather than forks if quorum cannot be reached; safety is preserved at the cost of liveness during severe-unavailability periods
@@ -236,11 +238,19 @@ The protocol's single-shard throughput floor (50,000 TPS) may eventually be insu
 
 New zero-knowledge proving systems, new signature schemes, and new threshold encryption schemes are likely to mature during the chain's lifetime. Migration to these — when they are clearly superior, peer-reviewed, and production-tested — will be proposed via the same hard-fork mechanism.
 
-### 11.5.4 Bug fixes
+### 11.5.4 Stake-parameter re-evaluation
+
+The protocol specifies absolute ADM amounts for participation thresholds: 1,000 ADM minimum for Node Runners (validators) and 100 ADM minimum for Node Watchers (witnesses). These values are calibrated for the expected token-value range during the chain's first five years. They are denominated in ADM rather than in any external unit (USD-equivalent, fractional supply, fee-equivalent, or oracle-priced) because every external denomination introduces a centralisation vector incompatible with Principle I.
+
+To prevent these thresholds from becoming exclusionary if ADM appreciates substantially over time, the protocol commits to **scheduled re-evaluation of stake parameters at five-year intervals post-genesis**. At each five-year checkpoint, the network may draft a hard fork proposing recalibrated stake floors based on the chain's then-current market conditions and participation patterns. The mechanism is the same as for any other parameter change: social coordination, no governance entity, no automatic adjustment.
+
+This is not a binding commitment to *change* the parameters at each checkpoint — only to *consider* whether they should change. If the absolute amounts remain accessible (because ADM has not appreciated dramatically), no fork is needed. If they have become exclusionary, the network coordinates a fork. The five-year cadence is structural rather than reactive: by committing in advance to revisit the parameters periodically, the chain avoids the ossification dynamic that produced Bitcoin's block-size conflict.
+
+### 11.5.5 Bug fixes
 
 Despite extensive review and testing, some bugs in the reference implementation may be discovered post-launch. Bug fixes that do not change protocol semantics (e.g. fixing a memory leak in the validator) can be deployed by validators choosing to run patched software without coordinating with anyone. Bug fixes that *do* change protocol semantics (e.g. fixing an underflow in fee calculation) require the same hard-fork mechanism as any other change.
 
-### 11.5.5 What is not anticipated
+### 11.5.6 What is not anticipated
 
 The protocol does not anticipate:
 

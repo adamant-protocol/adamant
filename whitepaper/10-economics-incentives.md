@@ -97,18 +97,23 @@ A participant burns external crypto at a verifiably unspendable address on the s
 
 The burned external crypto is permanently destroyed. No party — including the protocol — receives, custodies, or holds any claim on the burned assets.
 
-Supported source chains at launch:
+Supported source assets at launch:
 
 - Bitcoin (BTC), via burn to a verifiably unspendable address derived from a known public construction
 - Ethereum (ETH), via burn to the Ethereum null address or a verifiably unspendable contract
-- Additional source chains may be supported per the protocol's specification at launch
+- USD-denominated stablecoins (USDT, USDC), via burn to a verifiably unspendable address on the issuing chain
+- Additional source assets may be supported per the protocol's specification at launch
 
-The conversion rate is constant throughout the launch phase. Reference rates (subject to calibration prior to mainnet):
+**Stablecoin acknowledgment.** The protocol accepts USDT and USDC as burnable source assets at genesis to broaden the participation surface and provide price-stable acquisition. This is an honest concession to accessibility: stablecoin issuers (Tether, Circle) are centralised entities, and burning USDT/USDC creates an indirect dependency on those issuers' continued solvency and good behaviour during the burn window. The protocol does not custody, hold, or rely on these assets after the burn — the participant burns them to a verifiably unspendable address; the chain mints ADM in proof; the relationship ends there. Subsequent issuer behaviour does not affect Adamant's state. The dependency is bounded to the moment of burn.
 
-- 1 BTC burned → X ADM (X to be calibrated)
-- 1 ETH burned → Y ADM (Y to be calibrated)
+The conversion rate is constant throughout the launch phase. Rates:
 
-Conversion rates across source chains are defined in USD-equivalent terms at protocol design time, not at burn time. This avoids gaming based on currency-fluctuation arbitrage during the launch window.
+- 1 USDT burned → 20 ADM
+- 1 USDC burned → 20 ADM
+- 1 BTC burned → ADM at the equivalent rate calibrated to BTC's USD-equivalent at protocol design time
+- 1 ETH burned → ADM at the equivalent rate calibrated to ETH's USD-equivalent at protocol design time
+
+Conversion rates across non-stablecoin source assets are defined in USD-equivalent terms at protocol design time, not at burn time. This avoids gaming based on currency-fluctuation arbitrage during the launch window. At the launch-phase rate of 20 ADM per USD-equivalent, fully draining the 70,000,000 ADM burn-allocated sub-counter requires approximately 3,500,000 USD-equivalent in burns.
 
 **Per-address claim cap.** A single claim address cannot accumulate more than a defined fraction of the burn-allocated sub-counter via path A. The cap grows over time:
 
@@ -476,13 +481,13 @@ The following parameters are set at genesis and cannot be modified:
 - Pool partition: 70% burn-allocated / 30% validator-allocated (subject to calibration)
 - Per-address claim cap schedule: 1% / 2% / 4% / 8% / unlimited at months 0–1 / 1–3 / 3–6 / 6–12 / 12+ (subject to calibration)
 - Time cap: 5 years from genesis (subject to calibration)
-- Conversion rates per source chain: defined in USD-equivalent at protocol design time, subject to calibration
+- Conversion rates per source asset: 20 ADM per 1 USD-equivalent at protocol design time; stablecoin rates fixed at 1 USDT = 20 ADM and 1 USDC = 20 ADM
 - Validator block reward during launch phase: calibrated to drain the validator-allocated sub-counter over the target launch duration
-- Minimum per-validator stake: TBD (suggested order of magnitude: 1,000 ADM; specific value calibrated prior to mainnet to balance entry accessibility against trivial-stake spam)
-- Witness Sybil-resistance stake: TBD (suggested order of magnitude: 100 ADM; calibrated prior to mainnet)
+- Minimum per-validator (Node Runner) stake: 1,000 ADM (subject to scheduled re-evaluation per subsection 11.5)
+- Minimum per-witness (Node Watcher) Sybil-resistance stake: 100 ADM (subject to scheduled re-evaluation per subsection 11.5)
 - Genesis activation gate: 7 simultaneously-online stake-eligible validators (constitutional floor; subsection 8.1.6)
 - Active set: dynamic with constitutional floor of 7 validators and soft ceiling of 75 validators (subsection 8.1.3); ceiling subject to empirical validation prior to mainnet
-- Active set selection: first-come-first-served with persistent membership — validators admitted in registration order; slots held continuously until liveness failure or voluntary unbonding; no forced rotation; standby queue admits new validators when slots open
+- Active set selection: first-come-first-served with transferable membership — validators admitted in registration order; slots held continuously through participation; slots may be transferred to other addresses by mutual consent (subsection 8.1.8); no forced rotation; standby queue admits new validators when slots open
 - Security tier boundaries: Tier I at N=7–14, Tier II at N=15–29, Tier III at N=30+ (subsection 8.1.7)
 - Encryption regime transition thresholds: switch to threshold encryption at N≥15, switch back to time-lock encryption at N<10 (hysteresis preventing flapping; subsection 8.4.2)
 - Time-lock parameter T for VDF: calibrated to 10–15 seconds of decryption delay on consensus-grade hardware; specific value set prior to mainnet

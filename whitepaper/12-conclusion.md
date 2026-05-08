@@ -18,7 +18,7 @@ This whitepaper specifies, in detail sufficient to implement, a Layer 1 blockcha
 
 - **Hybrid post-quantum signatures.** ML-DSA (FIPS 204) for identity-binding operations; Ed25519 for ordinary transactions and validator messages by default; per-transaction opt-in to ML-DSA. ML-KEM-768 (FIPS 203) for post-quantum-secure key agreement underlying privacy primitives. Trade-off honestly disclosed: ordinary transaction signatures are quantum-forgeable; identity, structural state, and historical privacy are not.
 
-- **Dynamic active validator set.** Constitutional floor of 7 validators; soft ceiling of 75; first-come-first-served selection with persistent membership (slots held continuously until liveness failure or voluntary unbonding); on-chain security tier disclosure (Tier I / II / III) so wallets and applications can adapt to current chain scale.
+- **Dynamic active validator set.** Constitutional floor of 7 validators; soft ceiling of 75 at launch; first-come-first-served selection with transferable membership (slots held through participation, transferable between addresses by mutual consent); genesis cohort recognition (permanent on-chain marker plus tradeable Genesis NFT) for the first 75 validators; on-chain security tier disclosure (Tier I / II / III) so wallets and applications can adapt to current chain scale.
 
 - **Four-tier participation model.** Validators (consensus + decryption + fallback proofs); provers (steady-state recursive proof generation in a permissionless market); witnesses (attestation, data availability sampling, proof verification, fraud detection on phone-class hardware); service nodes (light-client infrastructure). Each tier has bounded power.
 
