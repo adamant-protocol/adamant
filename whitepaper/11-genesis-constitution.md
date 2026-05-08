@@ -104,7 +104,8 @@ The consensus mechanism specified in section 8:
 
 - DAG structure with 250ms target round duration
 - 36-second epochs (144 rounds per epoch)
-- Dynamic active set: constitutional floor of 7 validators, soft ceiling near 60–80 validators (calibrated to the throughput target on residential-fiber hardware)
+- Dynamic active set: constitutional floor of 7 validators, soft ceiling of 75 validators (calibrated to the throughput floor on residential-fibre hardware)
+- First-come-first-served selection with persistent membership: validators admitted in registration order, slots held continuously until liveness failure or voluntary unbonding; no forced rotation; no stake-weighted lottery; commitment and continuity rewarded over hardware budget or stake size
 - 2/3+1 quorum threshold within the active set
 - Genesis activation gate: chain self-activates when 7 validators are simultaneously registered, stake-eligible, and online; no coordination event, no recruited cohort, no human-in-the-loop activation
 - Halt-on-disagreement: at the floor, the chain pauses rather than forks if quorum cannot be reached; safety is preserved at the cost of liveness during severe-unavailability periods
@@ -229,7 +230,7 @@ This is anticipated but not specified in detail because the specific post-quantu
 
 ### 11.5.2 Throughput improvements
 
-The protocol's single-shard throughput target (200,000 TPS) may eventually be insufficient. Sharding extensions, parallel consensus instances, or other techniques may be proposed. These extensions require hard forks; they are not anticipated to occur before year 5 of the chain's operation, by which point empirical data on usage patterns will inform the design.
+The protocol's single-shard throughput floor (50,000 TPS) may eventually be insufficient. Sharding extensions, parallel consensus instances, or other techniques may be proposed. These extensions require hard forks; they are not anticipated to occur before year 5 of the chain's operation, by which point empirical data on usage patterns will inform the design.
 
 ### 11.5.3 Cryptographic algorithm improvements
 

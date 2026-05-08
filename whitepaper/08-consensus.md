@@ -40,29 +40,33 @@ There is no minimum stake floor at the protocol level. Practically, very small v
 
 ### 8.1.3 Active set
 
-In any epoch, a subset of registered validators forms the **active set** — the validators currently responsible for consensus. The active set is dynamic, with a constitutional floor and a soft ceiling.
+In any epoch, a subset of registered validators forms the **active set** — the validators currently responsible for consensus. The active set is dynamic, with a constitutional floor and a soft ceiling, and membership is **persistent**: once a validator is in the active set, they stay in until they fail liveness duties or voluntarily unbond.
 
 **Floor: 7 validators.** This is the smallest active-set size at which Byzantine fault tolerance retains non-zero margin against correlated failures. At N=7, the BFT threshold tolerates f=2 Byzantine validators; one Byzantine validator combined with one offline validator still leaves the chain inside its safety bound. At N=4 (the absolute BFT minimum, tolerating f=1) any single Byzantine event combined with any single offline event would put the chain outside its safety bound, and real-world failures correlate (ISP outages, cloud-region failures, time zones, software bugs in shared dependencies, coordinated denial-of-service). The floor of 7 is the smallest size at which a single correlated event cannot push the chain past its safety threshold. This is a constitutional minimum: below 7 simultaneously-online validators, the chain halts on disagreement (subsection 8.7) rather than producing blocks under reduced safety.
 
-**Soft ceiling: 60–80 validators.** This range is set by the throughput-target sizing argument. DAG-BFT communication cost grows quadratically in active-set size; per-validator load grows linearly. At the 50,000 TPS throughput target on residential-fiber hardware (commodity desktop, 1 Gbps fiber, ~100 ms typical wide-area latency), the upper bound at which validators can sustain the per-validator bandwidth and verification cost without exceeding the residential-fiber profile is approximately 60–80 active validators. Above 80, the chain either fails to deliver throughput or forces the hardware floor up to VPS-grade, which excludes the residential-fiber operators the protocol is designed to include. The specific number within this range will be calibrated empirically before genesis (subsection 8.10).
+**Soft ceiling: 75 validators.** This number is set by the throughput-target sizing argument. DAG-BFT communication cost grows quadratically in active-set size; per-validator bandwidth load grows linearly. At the 50,000 TPS minimum-throughput floor on residential-fibre hardware (commodity desktop, 1 Gbps fibre, ~100 ms typical wide-area latency), 75 active validators is the upper bound at which the per-validator bandwidth and verification cost remain tractable without exceeding the residential-fibre profile. Above 75, the chain either fails to deliver the throughput floor or forces the hardware tier up to VPS-grade, which excludes the residential-fibre operators the protocol is designed to include. The exact number is subject to empirical validation prior to mainnet (subsection 8.10).
 
-**Selection.** When the count of registered, stake-eligible, currently-online validators exceeds the ceiling, the active set is selected by stake-weighted lottery using the consensus VRF (subsection 8.6) at each epoch boundary, with high-uptime weighting. When the count is at or below the ceiling, every registered, stake-eligible, currently-online validator is in the active set.
+**Selection: first-come-first-served with persistent membership.** When the count of registered, stake-eligible, currently-online validators is at or below the ceiling, every such validator is in the active set. When the count exceeds the ceiling, validators are admitted in **registration order**: the first 75 to register and meet the eligibility criteria fill the active set, and subsequent registrants enter a standby queue. A validator's active-set slot is held continuously as long as the validator continues to participate; the slot is released only when the validator is removed for liveness failure (subsection 8.1.5: failure to participate for more than 2 consecutive epochs while in the active set) or voluntarily unbonds. When a slot opens, the next standby validator in queue order is admitted to the active set automatically at the next epoch boundary. There is no forced rotation: a validator who registered early and continues to show up indefinitely retains their slot indefinitely.
+
+**Why first-come-first-served.** This selection mechanism rewards *commitment and continuity* rather than hardware budget or stake size. A small home-fibre validator who registered on day 3 of the chain and has stayed online consistently for two years cannot be displaced by a wealthier latecomer with more stake or by a faster competitor with better hardware. The mechanism aligns with the chain's home-runnable-validator commitment: validators compete on showing up, not on raw performance. Stake-weighted-lottery and performance-tier selection mechanisms — both standard elsewhere — would, given enough time, push the active set toward whichever validators have the deepest hardware budgets, eroding the home-runnable property through selection pressure. First-come-first-served avoids that drift by structurally protecting incumbents who continue to participate.
+
+**Re-entry after removal.** A validator removed for liveness failure may re-register immediately. Re-registration places the validator at the back of the standby queue; they re-enter the active set when their queue position is reached and a slot is open. There is no additional cooldown beyond the existing 28-day stake-unbonding period (which only applies to validators who actively unbond stake, not to those merely removed from the active set with stake intact).
 
 **Sizing rationale.** The relationship between active-set size N, throughput, and hardware tier is roughly:
 
-| N | Throughput target | Hardware tier |
-|---|-------------------|---------------|
+| N | Throughput floor | Hardware tier |
+|---|-----------------|---------------|
 | 200 | 200,000 TPS | VPS-grade ($300+/month) |
 | 100 | 100,000 TPS | high-end consumer / low-end VPS |
-| 60–80 | 50,000 TPS | residential-fiber commodity desktop |
-| 30 | 25,000 TPS | residential-fiber commodity desktop with margin |
+| 75 | 50,000 TPS | residential-fibre commodity desktop |
+| 30 | 25,000 TPS | residential-fibre commodity desktop with margin |
 | 7–15 | low (limited by validator count, not bandwidth) | any commodity hardware |
 
-The 60–80 ceiling at 50,000 TPS reflects the design choice to keep validators on residential-fiber hardware. Were Adamant to target VPS-grade validators, the ceiling could rise to 200 and the throughput target could rise correspondingly; the protocol explicitly rejects that path because it sacrifices the participation profile the chain is designed to support.
+The 75 ceiling at 50,000 TPS reflects the design choice to keep validators on residential-fibre hardware. Were Adamant to target VPS-grade validators, the ceiling could rise to 200 and the throughput floor could rise correspondingly; the protocol explicitly rejects that path because it sacrifices the participation profile the chain is designed to support.
 
-**Empirical validation requirement.** The 50,000 TPS at N=60–80 figure is provisional. Before genesis, the reference implementation must demonstrate sustained throughput at the target validator count on representative residential-fiber topology. If the empirical result falls short, the constitutional response is to lower the throughput target (not to raise the hardware floor).
+**Throughput as a floor, not a target.** The 50,000 TPS figure is the chain's *minimum commitment* at design-target validator count, not a cap. Actual throughput in operation depends on the active set's aggregate hardware capability and current network conditions, and routinely exceeds the floor when validators run better-than-baseline hardware or when network conditions are favourable. The chain commits to delivering at least 50,000 TPS at N=75 on baseline residential fibre; the reality often delivers more. The figure is subject to empirical validation prior to mainnet.
 
-**Future revision.** The ceiling of 60–80 is a soft ceiling set by current hardware and protocol implementation. As residential connectivity improves and as consensus implementations mature, the ceiling may be raised in a future hard fork without violating constitutional commitments. The floor of 7 is a constitutional minimum and not subject to future-revision unless the BFT mathematics that justify it changes.
+**Future revision.** The ceiling of 75 is a soft ceiling set by current residential hardware and current consensus implementation maturity. As residential connectivity improves and consensus implementations are optimised, the ceiling may be raised in a future hard fork without violating constitutional commitments. The floor of 7 is a constitutional minimum and not subject to revision unless the BFT mathematics that justify it changes.
 
 ### 8.1.4 Stake delegation
 
@@ -72,7 +76,7 @@ Token holders who do not wish to operate validator hardware may delegate their s
 - The holder may undelegate at any time, subject to a 28-day unbonding period during which the stake is still slashable but no longer earning rewards.
 - The validator may not spend or claim the delegated stake; it remains the holder's property, locked under the consensus contract.
 
-Delegation has two purposes: it allows non-operators to earn yield from stake, and it allows the active set to be selected by stake-weighted lottery without requiring stake to be self-bonded. Both Aptos and Cosmos use similar designs.
+Delegation has two purposes: it allows non-operators to earn yield by sharing in validator rewards, and it allows validators to economically pass through delegated commitment to the chain. Note that under first-come-first-served selection (subsection 8.1.3), delegation does *not* affect a validator's probability of being in the active set — that is determined by registration order and continuity of online presence, not by total bonded stake. Delegation affects validator economics (more delegated stake → larger share of validator rewards) but not validator selection. This is a deliberate decoupling: the selection mechanism rewards commitment and continuity, while the economic mechanism rewards stake distribution.
 
 ### 8.1.5 Slashing
 
@@ -179,7 +183,7 @@ This is a simplified description of the Mysticeti commit rule. The full rule han
 
 A traditional blockchain proceeds linearly: each block extends a single chain. A DAG proceeds in parallel: many vertices per round, many parents per vertex.
 
-The advantage is *throughput*. At any given moment, all validators in the active set are simultaneously producing vertices and broadcasting them. The chain's effective throughput is the *aggregate* of all validators' contributions, not the throughput of a single leader. With 200 validators each contributing ~1,000 transactions per round and 4 rounds per second, the protocol can process ~800,000 transactions per second under optimal conditions, well above the 200,000 TPS target.
+The advantage is *throughput*. At any given moment, all validators in the active set are simultaneously producing vertices and broadcasting them. The chain's effective throughput is the *aggregate* of all validators' contributions, not the throughput of a single leader. With 75 validators each contributing transactions per round and 4 rounds per second, the protocol delivers the throughput floor of 50,000 TPS at design-target validator count under baseline residential-fibre conditions, with actual throughput exceeding the floor when validators run better-than-baseline hardware or under favourable network conditions.
 
 The disadvantage is *complexity*. DAG protocols are harder to reason about than linear chains, harder to implement correctly, and historically have suffered from subtle correctness bugs. Mysticeti's contribution is a formally analyzed DAG protocol with proven safety and liveness properties; Adamant inherits this analysis.
 

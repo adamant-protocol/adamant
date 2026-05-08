@@ -89,7 +89,7 @@ Typical transaction sizes:
 - **Complex shielded contract execution:** ~4-10 KB
 - **Account creation (with dual-signature setup):** ~5 KB
 
-The chain's bandwidth requirement at 200,000 TPS with mostly-shielded transactions is approximately 600 MB/sec aggregate across all validators. Per-validator bandwidth is approximately 3-6 MB/sec, well within consumer-grade home-internet capabilities.
+The chain's bandwidth requirement at 50,000 TPS with mostly-shielded transactions is approximately 150 MB/sec aggregate across all validators. Per-validator bandwidth is approximately 2-4 MB/sec, well within consumer-grade home-internet capabilities.
 
 ### 9.3.3 Mempool replacement
 

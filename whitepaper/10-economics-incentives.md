@@ -129,7 +129,7 @@ Validators that participate in consensus receive block rewards minted from the v
 Reference reward sizing (subject to calibration prior to mainnet):
 
 - Target launch duration: approximately two to three years
-- At 8-second blocks and an active set of 200 validators, this implies a per-block reward in the order of single-digit ADM
+- At 8-second blocks and an active set near the ceiling (75 validators), this implies a per-block reward in the order of single-digit ADM
 
 The validator path serves the audience that wishes to participate by securing the network rather than by burning external value, and solves the proof-of-stake bootstrap problem: early validators can earn stake by validating, not exclusively by burning external assets.
 
@@ -481,8 +481,8 @@ The following parameters are set at genesis and cannot be modified:
 - Minimum per-validator stake: TBD (suggested order of magnitude: 1,000 ADM; specific value calibrated prior to mainnet to balance entry accessibility against trivial-stake spam)
 - Witness Sybil-resistance stake: TBD (suggested order of magnitude: 100 ADM; calibrated prior to mainnet)
 - Genesis activation gate: 7 simultaneously-online stake-eligible validators (constitutional floor; subsection 8.1.6)
-- Active set: dynamic with constitutional floor of 7 validators and soft ceiling of 60–80 validators (subsection 8.1.3); ceiling subject to empirical validation prior to mainnet
-- Active set selection at or below ceiling: every registered, stake-eligible, currently-online validator is in the active set; above ceiling, stake-weighted lottery via consensus VRF with high-uptime weighting
+- Active set: dynamic with constitutional floor of 7 validators and soft ceiling of 75 validators (subsection 8.1.3); ceiling subject to empirical validation prior to mainnet
+- Active set selection: first-come-first-served with persistent membership — validators admitted in registration order; slots held continuously until liveness failure or voluntary unbonding; no forced rotation; standby queue admits new validators when slots open
 - Security tier boundaries: Tier I at N=7–14, Tier II at N=15–29, Tier III at N=30+ (subsection 8.1.7)
 - Encryption regime transition thresholds: switch to threshold encryption at N≥15, switch back to time-lock encryption at N<10 (hysteresis preventing flapping; subsection 8.4.2)
 - Time-lock parameter T for VDF: calibrated to 10–15 seconds of decryption delay on consensus-grade hardware; specific value set prior to mainnet
