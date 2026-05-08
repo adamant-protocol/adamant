@@ -134,6 +134,7 @@ mod rule_02_privacy;
 mod rule_03_privacy_consistency;
 mod rule_04_no_natives;
 mod rule_06_no_dynamic_dispatch;
+mod rule_07_privacy_circuit_in_shielded_only;
 
 #[cfg(test)]
 mod test_fixtures;
@@ -142,7 +143,8 @@ pub use config::AdamantVerifierConfig;
 pub use cross_module::{ModuleId, ModuleResolver};
 pub use error::{
     AdamantValidationError, DefKind, DynamicDispatchViolationReason, FieldOwnerKind, HandleKind,
-    InvalidSignatureReason, IrreducibleReason, MalformedConstantReason, TypeMismatchReason,
+    InvalidSignatureReason, IrreducibleReason, MalformedConstantReason,
+    PrivacyCircuitContextViolationReason, TypeMismatchReason,
 };
 
 // Sui-side `Location` / `CompiledModule` imports removed at
@@ -332,6 +334,7 @@ pub fn verify_module(
     rule_03_privacy_consistency::verify(&module)?;
     rule_04_no_natives::verify(&module)?;
     rule_06_no_dynamic_dispatch::verify(&module)?;
+    rule_07_privacy_circuit_in_shielded_only::verify(&module)?;
 
     Ok(module)
 }

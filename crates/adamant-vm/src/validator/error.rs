@@ -1202,7 +1202,46 @@ pub enum AdamantValidationError {
         /// Sub-reason discriminator.
         reason: DynamicDispatchViolationReason,
     },
-    // Variant for Rule 7 lands in subsequent E-4 sub-arc.
+    /// Rule 7 (privacy-circuit instructions in shielded
+    /// context only) found one of `GenerateProof`,
+    /// `VerifyProof`, `RecursiveVerify`, or `ReleaseSubViewKey`
+    /// in a function reachable from a `#[transparent]` public
+    /// function (or its transitively-called callees). Per
+    /// §6.2.1.6 Rule 7: these instructions may appear only in
+    /// the body of `#[shielded]` functions or their internal
+    /// callees; calling them from a transparent context is
+    /// rejected at verification time.
+    ///
+    /// Whitepaper §6.2.1.6 Rule 7. Phase 5/5b.5 E-4.
+    ///
+    /// Cross-module Rule 7 enforcement is NOT a separate
+    /// walker: cross-module privacy-mode boundary crossings
+    /// are caught by Rule 3 (single-module at D-5c +
+    /// cross-module at E-2b's
+    /// `cross_module::rule_03_privacy_consistency`); within
+    /// each module, this walker catches privacy-circuit
+    /// instructions in transparent-reachable code. The
+    /// composition (Rule 3 cross-module + Rule 7 per-module)
+    /// covers transparent → shielded boundary → privacy-
+    /// circuit-instruction transitively. 1st instance of
+    /// rule-composition-for-cross-module-coverage methodology
+    /// pattern; registered at E-4 plan-gate Q6.
+    PrivacyCircuitContextViolation {
+        /// `#[transparent]` public function (entry point of
+        /// the call graph) whose declared mode is being
+        /// violated.
+        calling_public_index: FunctionDefinitionIndex,
+        /// Function (possibly the public function itself, or
+        /// a transitively-called private function) containing
+        /// the offending privacy-circuit instruction.
+        violating_function_index: FunctionDefinitionIndex,
+        /// Bytecode offset of the offending privacy-circuit
+        /// instruction.
+        code_offset: CodeOffset,
+        /// Sub-reason discriminator (which privacy-circuit
+        /// instruction triggered the rejection).
+        reason: PrivacyCircuitContextViolationReason,
+    },
 }
 
 /// Whether a handle is a datatype handle or a function
@@ -1601,6 +1640,60 @@ impl core::fmt::Display for DynamicDispatchViolationReason {
             Self::DynamicObjectFieldNotOptedIn => write!(
                 f,
                 "module calls 0x2::dynamic_object_field::* without `adamant.allows_dynamic = true` opt-in"
+            ),
+        }
+    }
+}
+
+/// Sub-reason for [`AdamantValidationError::PrivacyCircuitContextViolation`].
+///
+/// Per whitepaper §6.2.1.6 Rule 7, four Adamant-extension
+/// instructions are restricted to `#[shielded]` contexts:
+/// `GenerateProof`, `VerifyProof`, `RecursiveVerify`,
+/// `ReleaseSubViewKey`. Closed-enum sub-reason discriminates
+/// which instruction triggered the rejection so the diagnostic
+/// surface points at the precise opcode the module author
+/// invoked.
+///
+/// Closed-enum shape mirrors `TypeMismatchReason` /
+/// `BorrowViolationReason` / `PrivacyConsistencyViolationReason`
+/// / `DynamicDispatchViolationReason` per the established
+/// closed-enum-sub-reason pattern. Phase 5/5b.5 E-4 (11th
+/// public closed enum).
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum PrivacyCircuitContextViolationReason {
+    /// `GenerateProof(CircuitId)` reached from a transparent
+    /// public function.
+    GenerateProofInTransparentContext,
+    /// `VerifyProof(CircuitId)` reached from a transparent
+    /// public function.
+    VerifyProofInTransparentContext,
+    /// `RecursiveVerify` reached from a transparent public
+    /// function.
+    RecursiveVerifyInTransparentContext,
+    /// `ReleaseSubViewKey` reached from a transparent public
+    /// function.
+    ReleaseSubViewKeyInTransparentContext,
+}
+
+impl core::fmt::Display for PrivacyCircuitContextViolationReason {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::GenerateProofInTransparentContext => write!(
+                f,
+                "GenerateProof reachable from a transparent public function"
+            ),
+            Self::VerifyProofInTransparentContext => write!(
+                f,
+                "VerifyProof reachable from a transparent public function"
+            ),
+            Self::RecursiveVerifyInTransparentContext => write!(
+                f,
+                "RecursiveVerify reachable from a transparent public function"
+            ),
+            Self::ReleaseSubViewKeyInTransparentContext => write!(
+                f,
+                "ReleaseSubViewKey reachable from a transparent public function"
             ),
         }
     }
@@ -2229,6 +2322,18 @@ impl core::fmt::Display for AdamantValidationError {
                  (FunctionHandleIndex {}): {reason} \
                  (whitepaper §6.2.1.6 Rule 6)",
                 calling_function_index.0, calling_function_handle_idx.0,
+            ),
+            Self::PrivacyCircuitContextViolation {
+                calling_public_index,
+                violating_function_index,
+                code_offset,
+                reason,
+            } => write!(
+                f,
+                "privacy-circuit-context violation reachable from transparent public function {} \
+                 (offending instruction in function {} at offset {code_offset}): {reason} \
+                 (whitepaper §6.2.1.6 Rule 7)",
+                calling_public_index.0, violating_function_index.0
             ),
         }
     }
