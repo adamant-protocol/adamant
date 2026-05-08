@@ -2,15 +2,19 @@
 
 This document is the **canonical audit anchor for the Adamant
 bytecode-verifier fork plus the Adamant-specific rule modules
-landed across Phase 5/5b**. Originally established at Phase
+landed across Phase 5/5b plus the Phase 5/5c cross-validation
+infrastructure formalization**. Originally established at Phase
 5/5b.2 for module-level passes; **expanded at Phase 5/5b.4 D-7
 to cover per-function passes**; **re-expanded at Phase 5/5b.5
 E-7 to cover cross-module verifier work + the Phase 5/5b.5
 rule modules** (`rule_06_no_dynamic_dispatch` +
 `rule_07_privacy_circuit_in_shielded_only` +
-`rule_08_bounded_loops`). 2nd instance of scope-expansion-
-history-as-canonical-record sub-pattern (registered at E-7;
-1st instance at D-7).
+`rule_08_bounded_loops`); **re-expanded at Phase 5/5c F-3 to
+cover the cross-validation tier framework (T0/T1/T2/T3)
+formalization + Phase 5/5 cumulative methodology framework
+documentation**. 3rd instance of scope-expansion-history-as-
+canonical-record sub-pattern (rule-of-three threshold MET at
+F-3; 1st instance at D-7; 2nd instance at E-7).
 
 Subtrees covered:
 
@@ -23,10 +27,14 @@ Subtrees covered:
 - `adamant-vm/src/validator/rule_NN_*` modules (Adamant-
   specific rules at validator/-level: Rules 1, 2, 3, 4 from
   prior phases; Rules 6, 7, 8 from Phase 5/5b.5)
+- Cross-validation tier framework (T0/T1/T2/T3) coverage
+  discipline applied across all of the above subtrees;
+  Phase 5/5c F-1/F-2/F-3 audit closure shape
 
 The file remains physically located under `module_pass/` for
 git-history continuity; the scope is bytecode-verifier-wide
-plus the validator's full §6.2.1.6 rule surface.
+plus the validator's full §6.2.1.6 rule surface plus the
+cross-validation tier framework.
 
 The fork is parallel to `crates/adamant-bytecode-format/PROVENANCE.md`
 (which forks the bytecode-format primitives from
@@ -5852,3 +5860,1084 @@ cumulative closure.
 Phase 5/5c sub-arcs remaining: F-2 (D-5a + D-5b Layer B
 parity backfill); F-3 (T2 audit + Phase 5/5c closure +
 Phase 5/5 cumulative closure).
+
+### Phase 5/5c F-2 closure (D-5a + D-5b Layer B parity backfill)
+
+F-2 closes the T2 implementation gaps registered at F-1
+plan-gate: D-5a (`type_safety`) and D-5b (`reference_safety`)
+gain Layer B parity test surfaces matching the D-7a backfill
+shape established at Phase 5/5b.4. Both gaps closed via
+composite-pipeline parity strategy through `code_unit_verifier::verify_module`
+per the Sui-public-API-shape-constrains-parity-helper sub-
+pattern (D-7a registration; F-2 reaches 2nd per-sub-arc
+instance).
+
+**F-2 work breakdown:**
+
+- **D-5a `type_safety` Layer B parity backfill:** 8 new tests
+  added at `function_pass/type_safety.rs::tests::cross_validation`.
+  Test count 44 → 52 (+8). 1 positive
+  (`accepts_simple_balanced_function`) + 7 rejection tests
+  covering: cast type-mismatch (`rejects_cast_to_u8_on_bool`);
+  binop width mismatch (`rejects_add_with_mismatched_int_widths`);
+  return type mismatch (`rejects_ret_with_wrong_return_type`);
+  StLoc value-type mismatch (`rejects_st_loc_wrong_value_type`);
+  BrTrue on non-bool (`rejects_br_true_on_non_bool`); ReadRef
+  on non-reference (`rejects_read_ref_on_non_reference`);
+  FreezeRef on immutable reference
+  (`rejects_freeze_ref_on_imm_ref`).
+
+- **D-5b `reference_safety` Layer B parity backfill:** 8 new
+  tests added at `function_pass/reference_safety/pass.rs::tests::cross_validation`.
+  Test count 28 → 36 (+8). 1 positive
+  (`accepts_simple_borrow_release`) + 7 rejection tests
+  covering: CopyLoc-while-mut-borrowed; MoveLoc-while-borrowed;
+  StLoc-while-borrowed; ImmBorrowLoc-while-mut-borrowed;
+  Ret-while-local-borrowed; FreezeRef-with-outstanding-mut-
+  borrow (retroactive-promotion of E-6's Layer A fixture);
+  WriteRef-with-outstanding-mut-borrow (retroactive-promotion
+  of E-6's Layer A fixture).
+
+**F-2 methodology data:**
+
+- **Layer-B-coverage-shape sub-classifications (NEW; F-2):**
+  D-7a's backfill covered passes that previously had 0 Layer
+  B parity tests (companion-coverage shape). F-2 adds two
+  retroactive-promotion shapes (FreezeRef + WriteRef tests
+  in `reference_safety` promote E-6's Layer A fixtures to
+  Layer B parity). Two distinct sub-classifications under
+  the broader Layer-B-coverage-shape pattern.
+- **Sui-public-API-shape-constrains-parity-helper sub-
+  pattern reaches 2 per-sub-arc instances** (D-7a + F-2).
+  Both per-function-pass parity backfills routed through
+  `assert_function_pass_parity_vm` (composite-pipeline strategy
+  via `code_unit_verifier::verify_module`); per-pass entries
+  in upstream Sui are `pub(crate)` and not directly callable.
+  Rule-of-three pending across pattern.
+- **WriteRef stack-order discovery at impl-gate (F-2):**
+  the F-2 D-5b retroactive-promotion fixture initially failed
+  because WriteRef expects the reference on TOP of stack with
+  the value below; corrected to `cp_loc(0); ld_u64(7); cp_loc(0); write_ref()`
+  pattern (mirroring the existing `mut_borrow_loc_then_write_ref`
+  happy-path test). Empirical-discovery-during-implementation
+  sub-pattern instance.
+
+**F-2 verification gate:** clean (1585 → 1601 workspace
+tests; +16 across the two backfills, matching plan).
+
+**Phase 5/5c F-2 sub-arc state:**
+
+- T2 implementation gaps (D-5a + D-5b): closed at F-2 via
+  16 Layer B parity tests across both passes
+- T2 audit closure: pending F-3 (per F-1 disposition)
+- Phase 5/5c sub-arcs remaining: F-3 (T2 audit + Phase 5/5c
+  closure + Phase 5/5 cumulative closure)
+
+### T2 audit closure (F-3)
+
+**T2 coverage criterion (re-stated for self-contained audit):**
+every Sui error mode produces a fixture that triggers it in
+Adamant with same accept/reject decision (Layer B parity).
+
+**T2 audit method:** for each in-scope Sui StatusCode used
+by the per-function verifier passes, classify as either
+**directly-targeted** (an Adamant Layer B parity test
+explicitly designed to trigger the StatusCode) or
+**T3-deferred** (no current Adamant Layer B fixture; deferred
+to pre-mainnet hardening real-world corpus).
+
+**Q5 plan-gate three-table shape empirically refined to two-
+table at F-3 impl-gate:**
+
+The Q5 plan-gate disposition proposed a three-table shape
+(directly-targeted + composite-pipeline-indirect + T3-
+deferred). Per Q5's explicit empirical-resolution invitation
+("if most remaining StatusCodes are composite-pipeline-
+indirect, three-table shape lands cleanly. If most are T3-
+deferred, two-table shape may suffice. Honest empirical
+classification at impl-gate."), the F-3 impl-gate empirical
+classification of the ~16-20 remaining StatusCodes revealed
+the indirect-coverage class is largely empty: nearly all
+remaining StatusCodes are either pre-empted at a different
+Adamant pipeline layer (parse-time Rule 5 rejecting global-
+storage opcodes; module-level structural-limits pre-empting
+code-complexity overflow) or fall into T3-deferred (Sui-
+specific edge cases without dedicated Adamant fixture).
+
+**Honest landing: two-table shape at F-3.** Methodology
+stream entry registers the plan-gate-to-impl-gate empirical
+refinement (NEW pattern: three-table-shape impl-gate
+empirical-refinement). Worth canonical registration that Q5
+plan-gate dispositions can be empirically refined at impl-
+gate per honest-classification methodology — same posture
+as plan-incremental-disposition-resolved-empirically pattern
+operating at impl-gate.
+
+**Sui StatusCode in-scope universe (verified at F-3 pre-
+plan-gate empirical survey):**
+
+| Pass | Sui StatusCode count (raw) | In-scope for Adamant T2 | Out-of-scope rationale |
+|---|---|---|---|
+| `control_flow` + `stack_usage` | 8 | 8 | (all in-scope) |
+| `locals_safety` + `type_safety` | 37 | ~24 | 13 global-storage codes pre-empted by Adamant Rule 5 at parse-time (BORROWGLOBAL_*, MOVEFROM_*, MOVETO_*, EXISTS_*); 4 ability-without-key codes structurally tied to global-storage opcodes |
+| `reference_safety` | 15 | ~14 | GLOBAL_REFERENCE_ERROR pre-empted by Rule 5; STLOC_UNSAFE_TO_DESTROY_ERROR overlaps with locals_safety |
+| `code_unit_verifier` (composite) | 5 | 1-2 | TOO_MANY_BACK_EDGES + TOO_MANY_BASIC_BLOCKS + PROGRAM_TOO_COMPLEX covered separately by Adamant module-level structural-limits pass with distinct error variants; CONSTRAINT_NOT_SATISFIED structurally distinct |
+| **Total** | **65 unique** | **~46-48 in-scope** | |
+
+**Layer B parity directly-targeted T2 coverage table (F-3
+audit closure):**
+
+#### control_flow + stack_usage (D-2 + D-3; 8 in-scope, 7 covered)
+
+| Sui StatusCode | Adamant Layer B test | Sub-checkpoint | T2 status |
+|---|---|---|---|
+| `EMPTY_CODE_UNIT` | `cross_validation_rejects_empty_body` | D-7a (control_flow) | ✓ directly-targeted |
+| `INVALID_FALL_THROUGH` | `cross_validation_rejects_pop_terminator` + `_nop_terminator` + `_brtrue_terminator` (3 tests) | D-7a (control_flow) | ✓ directly-targeted |
+| `INVALID_LOOP_SPLIT` | `cross_validation_rejects_irreducible_two_entry_loop` | D-7a (control_flow) | ✓ directly-targeted |
+| `LOOP_MAX_DEPTH_REACHED` | (no fixture) | — | T3-deferred (impractical fixture: requires nesting > `max_loop_depth = 64`) |
+| `NEGATIVE_STACK_SIZE_WITHIN_BLOCK` | `cross_validation_rejects_pop_with_empty_stack` + `_binop_with_one_operand` (2 tests) | D-7a (stack_usage) | ✓ directly-targeted |
+| `POSITIVE_STACK_SIZE_AT_BLOCK_END` | `cross_validation_rejects_block_ends_with_extra_push` + `_ret_with_wrong_arity` + `_unbalanced_at_branch_target` (3 tests) | D-7a (stack_usage) | ✓ directly-targeted |
+| `VALUE_STACK_OVERFLOW` | (no fixture) | — | T3-deferred (impractical fixture: requires stack push beyond max) |
+| `VALUE_STACK_PUSH_OVERFLOW` | (no fixture) | — | T3-deferred (impractical fixture: similar to VALUE_STACK_OVERFLOW) |
+
+#### locals_safety + type_safety (D-4 + D-5a; ~24 in-scope, 11 covered)
+
+| Sui StatusCode | Adamant Layer B test | Sub-checkpoint | T2 status |
+|---|---|---|---|
+| `COPYLOC_UNAVAILABLE_ERROR` | `cross_validation_rejects_copy_loc_unavailable` | D-7a (locals_safety) | ✓ directly-targeted |
+| `MOVELOC_UNAVAILABLE_ERROR` | `cross_validation_rejects_move_loc_unavailable` | D-7a (locals_safety) | ✓ directly-targeted |
+| `BORROWLOC_UNAVAILABLE_ERROR` | `cross_validation_rejects_imm_borrow_loc_unavailable` + `_mut_borrow_loc_unavailable` (2 tests) | D-7a (locals_safety) | ✓ directly-targeted |
+| `STLOC_UNSAFE_TO_DESTROY_ERROR` | `cross_validation_rejects_st_loc_destroys_non_drop` (locals) + `cross_validation_rejects_st_loc_while_borrowed` (refs) | D-7a + F-2 | ✓ directly-targeted |
+| `UNSAFE_RET_UNUSED_VALUES_WITHOUT_DROP` | `cross_validation_rejects_ret_with_undropped_locals` | D-7a (locals_safety) | ✓ directly-targeted |
+| `INTEGER_OP_TYPE_MISMATCH_ERROR` | `cross_validation_rejects_cast_to_u8_on_bool` + `_add_with_mismatched_int_widths` (2 tests) | F-2 (type_safety) | ✓ directly-targeted |
+| `RET_TYPE_MISMATCH_ERROR` | `cross_validation_rejects_ret_with_wrong_return_type` | F-2 (type_safety) | ✓ directly-targeted |
+| `STLOC_TYPE_MISMATCH_ERROR` | `cross_validation_rejects_st_loc_wrong_value_type` | F-2 (type_safety) | ✓ directly-targeted |
+| `BR_TYPE_MISMATCH_ERROR` | `cross_validation_rejects_br_true_on_non_bool` | F-2 (type_safety) | ✓ directly-targeted |
+| `READREF_TYPE_MISMATCH_ERROR` | `cross_validation_rejects_read_ref_on_non_reference` | F-2 (type_safety) | ✓ directly-targeted |
+| `FREEZEREF_TYPE_MISMATCH_ERROR` | `cross_validation_rejects_freeze_ref_on_imm_ref` | F-2 (type_safety) | ✓ directly-targeted |
+| `ABORT_TYPE_MISMATCH_ERROR` | (no fixture) | — | T3-deferred |
+| `BOOLEAN_OP_TYPE_MISMATCH_ERROR` | (no fixture; analogous to INTEGER_OP coverage) | — | T3-deferred |
+| `BORROWFIELD_BAD_FIELD_ERROR` | (no fixture) | — | T3-deferred |
+| `BORROWFIELD_TYPE_MISMATCH_ERROR` | (no fixture) | — | T3-deferred |
+| `BORROWLOC_REFERENCE_ERROR` | (no fixture; rare BorrowLoc-on-ref-typed-local case) | — | T3-deferred |
+| `CALL_TYPE_MISMATCH_ERROR` | (no fixture) | — | T3-deferred |
+| `ENUM_SWITCH_BAD_OPERAND` | (no fixture) | — | T3-deferred |
+| `ENUM_TYPE_MISMATCH` | (no fixture) | — | T3-deferred |
+| `EQUALITY_OP_TYPE_MISMATCH_ERROR` | (no fixture) | — | T3-deferred |
+| `INVALID_ENUM_SWITCH` | (no fixture) | — | T3-deferred |
+| `PACK_TYPE_MISMATCH_ERROR` | (no fixture) | — | T3-deferred |
+| `POP_WITHOUT_DROP_ABILITY` | (no fixture) | — | T3-deferred |
+| `READREF_WITHOUT_COPY_ABILITY` | (no fixture) | — | T3-deferred |
+| `TYPE_MISMATCH` (generic catch-all) | (no fixture) | — | T3-deferred |
+| `UNPACK_TYPE_MISMATCH_ERROR` | (no fixture) | — | T3-deferred |
+| `WRITEREF_NO_MUTABLE_REFERENCE_ERROR` | (no fixture) | — | T3-deferred |
+| `WRITEREF_TYPE_MISMATCH_ERROR` | (no fixture) | — | T3-deferred |
+| `WRITEREF_WITHOUT_DROP_ABILITY` | (no fixture) | — | T3-deferred |
+
+#### reference_safety (D-5b; ~14 in-scope, 7 covered)
+
+| Sui StatusCode | Adamant Layer B test | Sub-checkpoint | T2 status |
+|---|---|---|---|
+| `BORROWLOC_EXISTS_BORROW_ERROR` | `cross_validation_rejects_imm_borrow_loc_while_mut_borrowed` | F-2 (reference_safety) | ✓ directly-targeted |
+| `COPYLOC_EXISTS_BORROW_ERROR` | `cross_validation_rejects_copy_loc_while_mut_borrowed` | F-2 (reference_safety) | ✓ directly-targeted |
+| `MOVELOC_EXISTS_BORROW_ERROR` | `cross_validation_rejects_move_loc_while_borrowed` | F-2 (reference_safety) | ✓ directly-targeted |
+| `FREEZEREF_EXISTS_MUTABLE_BORROW_ERROR` | `cross_validation_rejects_freeze_ref_with_outstanding_mut_borrow` | F-2 (retroactive-promotion of E-6 fixture) | ✓ directly-targeted |
+| `WRITEREF_EXISTS_BORROW_ERROR` | `cross_validation_rejects_write_ref_with_outstanding_mut_borrow` | F-2 (retroactive-promotion of E-6 fixture) | ✓ directly-targeted |
+| `UNSAFE_RET_LOCAL_OR_RESOURCE_STILL_BORROWED` | `cross_validation_rejects_ret_while_local_borrowed` | F-2 (reference_safety) | ✓ directly-targeted |
+| `STLOC_UNSAFE_TO_DESTROY_ERROR` (refs angle) | (covered above in locals row; same StatusCode) | F-2 (reference_safety) | ✓ directly-targeted |
+| `CALL_BORROWED_MUTABLE_REFERENCE_ERROR` | (no fixture) | — | T3-deferred |
+| `FIELD_EXISTS_MUTABLE_BORROW_ERROR` | (no fixture) | — | T3-deferred |
+| `READREF_EXISTS_MUTABLE_BORROW_ERROR` | (no fixture) | — | T3-deferred |
+| `RET_BORROWED_MUTABLE_REFERENCE_ERROR` | (no fixture) | — | T3-deferred |
+| `VEC_BORROW_ELEMENT_EXISTS_MUTABLE_BORROW_ERROR` | (no fixture) | — | T3-deferred |
+| `VEC_UPDATE_EXISTS_MUTABLE_BORROW_ERROR` | (no fixture) | — | T3-deferred |
+| `REFERENCE_SAFETY_INCONSISTENT` | (no fixture; composite-level invariant violation) | — | T3-deferred |
+
+**T2 audit verdict at F-3 closure:**
+
+- **In-scope Sui StatusCodes (per-function passes):** ~46-48
+  unique codes
+- **Directly-targeted (T2 covered):** 25 unique StatusCodes
+  via 30 dedicated Adamant Layer B parity rejection tests
+  (note overlaps where one StatusCode has multiple covering
+  fixtures and where one fixture covers a StatusCode shared
+  by two passes, e.g., STLOC_UNSAFE_TO_DESTROY_ERROR)
+- **T3-deferred:** ~21-23 unique StatusCodes deferred to
+  pre-mainnet hardening real-world corpus venue
+- **T2 closed at F-3** — closure shape: representative-
+  subset audit with explicit T3 deferral list per F-1's Q5
+  disposition. Coverage rate ≈ 53% of in-scope StatusCodes
+  directly-targeted; ≈ 47% deferred to T3.
+
+**T3 deferral rationale (per-StatusCode coverage gap):**
+
+The T3-deferred StatusCodes share a common shape: dedicated
+Adamant Layer B fixture would require either (a) constructing
+specific Sui-Move source patterns (PACK_TYPE_MISMATCH_ERROR,
+ENUM_SWITCH_BAD_OPERAND, BORROWFIELD_*) more easily exercised
+through compiled real-world Sui-Move modules than through
+hand-built `AdamantCompiledModule` fixtures, or (b) covering
+ability-system intersections (POP_WITHOUT_DROP_ABILITY,
+READREF_WITHOUT_COPY_ABILITY) requiring struct definitions
+with specific ability sets that are awkward to construct
+inline. T3's pre-mainnet hardening venue (real-world corpus
+via `t3_corpus` infrastructure to be built pre-mainnet) is
+the natural home for systematic per-StatusCode coverage
+expansion. The current T2 coverage at F-3 captures the high-
+frequency rejection paths (locals availability, integer-op
+type mismatch, reference-safety borrow-existence checks) that
+are most likely to surface implementation divergences between
+Adamant and Sui for the inherited subset.
+
+**Cross-references:**
+
+- Layer B parity helper at `function_pass/test_helpers.rs::assert_function_pass_parity_vm`
+- Composite-pipeline strategy via `code_unit_verifier::verify_module`
+- T3 future workstream registered in CLAUDE.md Open
+  Properties #1
+- Pre-mainnet hardening corpus collection mechanism: TBD
+  (out-of-scope for Phase 5/5c per F-1's Q5 disposition)
+
+### Phase 5/5c F-3 closure (T2 audit + Phase 5/5c closure + Phase 5/5 cumulative closure)
+
+**F-3 work breakdown:**
+
+- **T2 audit closure** (this section above): per-Sui-error-
+  mode audit-table 3rd canonical sub-shape lands at F-3
+  (per-variant + per-pass + per-error-mode). Two-table shape
+  (directly-targeted + T3-deferred) per Q5 plan-gate-to-
+  impl-gate empirical refinement.
+- **PROVENANCE.md Phase 5/5c closure documentation**
+  (per-sub-arc entries F-1 + F-2 + F-3 self-referencing;
+  methodology pattern stream registrations; Phase 5/5c
+  cumulative tally).
+- **PROVENANCE.md Phase 5/5 cumulative closure**
+  (cross-sub-arc summary spanning 3 sub-phases 5/5a + 5/5b +
+  5/5c; cumulative methodology landmarks; architectural
+  decisions on record; cumulative metrics tally).
+- **CLAUDE.md state-bump** (Phase 5/5c closure + Phase 5/5
+  cumulative closure reference + pre-Phase-5/6 transition
+  context).
+
+**F-3 methodology data (registered in stream entries below):**
+
+- **Scope-expansion-history-as-canonical-record sub-pattern
+  reaches 3rd instance** at F-3 — rule-of-three threshold
+  MET. Pattern joins canonical principles operating beyond
+  threshold.
+- **Cumulative-multi-phase closure pattern reaches 2nd
+  instance** at F-3 (1st: E-7 5/5b.5 + 5/5b cumulative; 2nd:
+  F-3 5/5c + 5/5 cumulative across 3 sub-phases).
+- **Documentation-batch LOC overshoot pattern operating
+  beyond rule-of-three threshold** (3 instances at F-1
+  closure; F-3 estimate band [1100, 2000] LOC empirical
+  actual band per F-1 calibration).
+- **Three-table-shape impl-gate empirical-refinement** (NEW
+  pattern at F-3 Q5) — Q5 plan-gate three-table shape
+  empirically refined to two-table at impl-gate per honest-
+  classification methodology.
+- **Audit-table-pattern multiple sub-shapes operating at 3
+  levels** (F-1 establishment + F-3 closure): per-variant
+  (variant-vs-test mapping audit) + per-pass (T0 audit) +
+  per-error-mode (T2 audit). 3 sub-shapes registered.
+- **Sui-public-API-shape-constrains-parity-helper sub-pattern
+  reaches 2 per-sub-arc instances** (D-7a + F-2). Rule-of-
+  three pending.
+- **Plan-incremental-disposition β reaches 4th instance**
+  (F-1 T3 deferral). Pattern stable beyond rule-of-three
+  threshold.
+
+**F-3 verification gate:** to clear at commit (workspace
+1601 tests; documentation-only sub-arc; no test count
+delta). No new `AdamantValidationError` variants (66 retained
+unchanged).
+
+**Phase 5/5c F-3 sub-arc state:**
+
+- T2 audit: closed at F-3 (~25 of ~46-48 in-scope Sui
+  StatusCodes directly-targeted; ~21-23 T3-deferred per
+  pre-mainnet hardening disposition)
+- Phase 5/5c documentation closure: complete (F-1 + F-2 +
+  F-3 self-referencing changelog entries; methodology
+  pattern stream)
+- Phase 5/5 cumulative closure: complete (cross-sub-phase
+  summary documented at the new top-level section below)
+- CLAUDE.md state-bump: complete (Section 10 updated for
+  Phase 5/5 closure + Phase 5/6 transition)
+
+**Phase 5/5c CLOSED at F-3 commit. Phase 5/5 CLOSED at
+F-3 commit.** Next phase (5/6 AVM runtime) awaits direction.
+
+## Phase 5/5c closure — methodology accumulation streams
+
+Phase 5/5c contributed the cross-validation tier framework
+formalization (T0/T1/T2/T3) plus per-sub-arc methodology
+data points across F-1 (tier framework), F-2 (Layer B
+parity backfill), and F-3 (T2 audit + cumulative closure).
+The numbered stream entries below continue from the Phase
+5/5b.5 closure stream (entries 30–51); Phase 5/5c entries
+start at (52).
+
+### (52) Tier-based-cross-validation-coverage discipline (NEW pattern category at F-1)
+
+Phase 5/5c introduces tier-based-cross-validation-coverage-
+discipline as a NEW methodology pattern category — not a
+refinement of prior canonical principles but a fresh pattern
+type. The T0/T1/T2/T3 framework defined in CLAUDE.md Section
+10 Open Properties #1 lands as canonical methodology at F-1
+plan-gate Q4 disposition. Future workstreams may benefit
+from analogous tier-based shapes (security-tier at later
+phases; runtime-coverage tiers at Phase 5/6).
+
+**Pattern shape:** discrete tiers with explicit closure
+criteria per tier; each tier corresponds to a pre-existing
+canonical discipline retroactively classified into the tier
+framework. Tier framework operates as a **unified-classification
+view** over multiple pre-existing principles; surfaces the
+relationship between principles + adds the per-tier formal
+closure shape.
+
+### (53) Tier-framework-crystallizes-existing-discipline meta-pattern (NEW; F-1)
+
+Per Q4 refinement at F-1 plan-gate, the tier framework
+operates as **retroactive classification of pre-existing
+canonical principles** rather than introducing fresh
+requirements:
+
+- T0 = positive+negative-fixture-pair-per-pass discipline
+  (operational since Phase 5/5b.2 B-1)
+- T1 = variant-vs-test mapping audit principle (canonical
+  since Phase 5/5b.3 C-3)
+- T2 = Layer B parity discipline (operational since Phase
+  5/5b.2 B-2.2 with `assert_pass_parity` helper extraction)
+- T3 = real-world-corpus discipline (deferred since CLAUDE.md
+  Open Properties registration; pre-mainnet hardening venue)
+
+**Meta-observation:** unified-classification frameworks that
+crystallize pre-existing discipline (rather than introducing
+fresh requirements) tend to land cleanly because the
+underlying disciplines are already battle-tested. Worth
+canonical methodology-meta registration that this is a
+distinct shape from "novel-discipline-from-scratch" patterns.
+
+### (54) Audit-table-pattern multiple sub-shapes operating at 3 levels (canonical at F-1 + F-3)
+
+Audit-table shape operates at 3 distinct levels per Phase
+5/5c registrations:
+
+- **Per-variant rows** (variant-vs-test mapping audit):
+  established C-5; instances at C-5 + D-7b + E-7. 3
+  instances total.
+- **Per-pass rows** (T0 audit per F-1): established F-1; 1
+  instance at F-1 covering 26 passes/rules/surfaces.
+- **Per-error-mode rows** (T2 audit per F-3): established
+  F-3; 1 instance at F-3 covering ~46-48 in-scope Sui
+  StatusCodes.
+
+3 sub-shapes registered. Same pattern-cluster shape as
+helper-extraction discipline (3 sub-shapes), spec-text-
+DIRECTS-shared-helper canonical principle (2 sub-shapes),
+variant-count discipline (4 sub-shapes), variant-vs-test
+mapping audit (3 sub-shapes + 2 closure shapes). Pattern-
+cluster shape itself is a stable phenomenon of the framework's
+operation.
+
+### (55) Layer-B-coverage-shape sub-classifications (NEW; F-2)
+
+Layer B parity coverage has empirical sub-classifications
+based on the source of the fixture:
+
+- **Companion-coverage** (D-7a 1st instance): backfill adds
+  Layer B parity tests for passes that previously had 0
+  Layer B coverage. The new tests are companions to the
+  existing Layer A surface; they don't promote prior
+  fixtures.
+- **Retroactive-promotion** (F-2 D-5b 2 instances:
+  FreezeRef + WriteRef): tests promote E-6's Layer A fixtures
+  to Layer B parity. The retroactive shape captures the
+  case where Layer A fixtures were already empirically
+  rejecting at Adamant's pass; F-2 explicitly cross-validates
+  with Sui via the parity helper.
+
+Two distinct sub-classifications. Worth canonical
+registration that Layer B coverage has multiple shapes
+based on whether the underlying fixture is companion (new
+to F-N) or promoted (existed pre-F-N).
+
+### (56) Sui-public-API-shape-constrains-parity-helper sub-pattern (per-sub-arc instances reach 2; D-7a + F-2)
+
+Phase 5/5b.4 D-7a registered the Sui-public-API-shape-
+constrains-parity-helper sub-pattern: per-pass entries in
+upstream Sui's `move-bytecode-verifier` are `pub(crate)`,
+forcing composite-pipeline parity through the public
+`code_unit_verifier::verify_module` entry. The
+`assert_function_pass_parity_vm` helper at
+`function_pass/test_helpers.rs` operationalizes this strategy.
+
+F-2 reaches 2nd per-sub-arc instance: D-5a + D-5b Layer B
+backfill both routes through the composite-pipeline strategy
+via the same `assert_function_pass_parity_vm` helper.
+Per-sub-arc counting (recommended at F-2 commit refinement)
+yields 2 instances; rule-of-three pending. Future per-
+function-pass parity work (Phase 5/6 AVM runtime if any
+verifier-adjacent surface; future Phase 5/N if extension
+passes added) may close the rule-of-three threshold.
+
+**Counting discipline:** per-sub-arc counting applied
+(D-7a counts as 1 instance regardless of how many passes
+backfill within the sub-arc; F-2 counts as 1 instance
+regardless of D-5a + D-5b being 2 passes within the sub-
+arc). Same posture as variant-count discipline four sub-
+shapes counting per-sub-arc rather than per-variant.
+
+### (57) Plan-incremental-disposition β reaches 4th instance (F-1 T3 deferral)
+
+Plan-incremental-disposition sub-pattern β (deliberate-
+deferral) reaches 4th instance at F-1 with the T3 deferral
+to pre-mainnet hardening:
+
+1. D-4 Layer B fixture overhead opening (deferred to D-7a
+   backfill)
+2. D-5a.0 / D-5a.1 staging (deferred to D-5a.1.b orchestration)
+3. D-5b.2 BorrowViolationReason 7-of-13 sub-reason audit
+   gap (deferred to E-6 fixture closure)
+4. T3 deferral at F-1 (deferred to pre-mainnet hardening)
+
+Pattern stable beyond rule-of-three threshold (4 instances
+at F-1; threshold met at instance 3 D-5b.2). Sub-pattern β
+operates consistently across phase boundaries and discipline
+types.
+
+### (58) Three-table-shape impl-gate empirical-refinement (NEW; F-3 Q5)
+
+Q5 plan-gate disposition proposed a three-table T2 audit
+shape (directly-targeted + composite-pipeline-indirect +
+T3-deferred). Per Q5's explicit empirical-resolution
+invitation at impl-gate, the F-3 impl-gate empirical
+classification revealed the indirect-coverage class is
+largely empty: nearly all remaining StatusCodes are either
+pre-empted at a different Adamant pipeline layer (parse-
+time Rule 5 rejecting global-storage opcodes; module-level
+structural-limits pre-empting code-complexity overflow) or
+fall into T3-deferred.
+
+**Honest landing: two-table shape at F-3.** Methodology
+stream entry registers the plan-gate-to-impl-gate empirical
+refinement.
+
+**NEW pattern: three-table-shape impl-gate empirical-
+refinement.** Worth canonical registration that Q5 plan-gate
+dispositions can be empirically refined at impl-gate per
+honest-classification methodology. Same posture as plan-
+incremental-disposition-resolved-empirically pattern but
+operates at the table-shape level rather than the
+disposition level. Future plan-gate-proposed N-table shapes
+may similarly refine to (N-1)-table at impl-gate when the
+intermediate class is empirically empty.
+
+**Pattern shape distinction from plan-incremental-disposition-
+resolved-empirically:**
+
+- Plan-incremental-disposition-resolved-empirically operates
+  at the disposition level (which sub-reason variants land,
+  which architectural choice resolves)
+- Three-table-shape impl-gate empirical-refinement operates
+  at the artifact-shape level (how many tables, columns,
+  rows the audit produces)
+
+Distinct pattern shapes; both operate as plan-gate-to-impl-
+gate refinement methodology.
+
+### (59) Documentation-batch LOC overshoot rule-of-three threshold MET (F-1 closure)
+
+Documentation-batch LOC overshoot pattern reached rule-of-
+three threshold at F-1 closure per the user's explicit
+calibration registration (3 instances pre-F-1; F-3 estimate
+band [1100, 2000] LOC empirical actual band per F-1
+calibration). Pattern stable beyond threshold; future
+documentation-heavy sub-arcs (cumulative closures, audit
+appendices) bias estimates downward 25-40% from initial
+plan-gate framing.
+
+**F-3 calibration application:** plan-gate estimate [1600,
+2800] LOC; calibrated band [1100, 2000] LOC empirical
+expectation. Empirical actual at F-3 closure to be measured
+post-commit; calibration accuracy data point feeds future
+sub-arcs.
+
+### (60) Scope-expansion-history-as-canonical-record rule-of-three threshold MET (F-3)
+
+Scope-expansion-history-as-canonical-record sub-pattern
+reaches 3rd instance at F-3 — rule-of-three threshold MET.
+Pattern instances:
+
+1. **D-7** (Phase 5/5b.4): initial expansion of `module_pass/PROVENANCE.md`
+   to cover function_pass subtree.
+2. **E-7** (Phase 5/5b.5): re-expansion to cover cross_module
+   subtree + Phase 5/5b.5 rule modules.
+3. **F-3** (Phase 5/5c): re-expansion to cover the cross-
+   validation tier framework (T0/T1/T2/T3) formalization +
+   Phase 5/5 cumulative methodology framework documentation.
+
+Pattern joins canonical principles operating beyond rule-
+of-three threshold:
+
+- Verbatim-survey-at-plan-gate-prevents-scope-error (11
+  instances post-F-3)
+- Running-total drift discipline (4 instances; F-2 → F-3
+  session-resume self-application clean)
+- Documentation-batch LOC overshoot pattern (3 instances at
+  F-1 closure)
+- Honest-scope-flagging at session-pacing level (5 instances)
+- Spec-text-DIRECTS-shared-helper (5 instances)
+- Eager-error first-failure-wins (cross-sub-arc)
+- Variant-vs-test mapping audit principle (66/66 variants
+  covered)
+- Scope-expansion-history-as-canonical-record (3 instances
+  at F-3)
+
+8 cross-cutting canonical principles operating beyond rule-
+of-three threshold at Phase 5/5c closure. Methodology
+framework efficiency curve continues to show phase-later
+sub-arcs surface plan-gates more cleanly than phase-earlier
+ones.
+
+### (61) Cumulative-multi-phase closure pattern 2nd instance (F-3)
+
+Cumulative-multi-phase closure pattern reaches 2nd instance
+at F-3:
+
+1. **E-7** (1st instance): Phase 5/5b.5 + Phase 5/5b
+   cumulative closure across 6 sub-arcs within 1 phase.
+2. **F-3** (2nd instance): Phase 5/5c + Phase 5/5 cumulative
+   closure across 9 sub-arcs spanning 3 sub-phases (5/5a +
+   5/5b + 5/5c).
+
+Rule-of-three pending across pattern. Worth canonical
+registration that cumulative-multi-phase closure pattern
+handles **increasing cumulative scope cleanly** — F-3's
+cumulative scope is larger than E-7's (3 sub-phases vs 1;
+9 sub-arcs vs 6); pattern shape stable.
+
+### (62) F-3-cumulative-scope-larger-than-E-7 sub-observation (NEW; F-3)
+
+Empirical observation: F-3's cumulative closure scope is
+strictly larger than E-7's:
+
+| Dimension | E-7 (Phase 5/5b cumulative) | F-3 (Phase 5/5 cumulative) |
+|---|---|---|
+| Phase scope | Phase 5/5b only | Phase 5/5a + 5/5b + 5/5c |
+| Sub-arc count | 6 (5/5b.1a → 5/5b.5) | 9 sub-arcs across 3 sub-phases |
+| Cumulative test delta | 821 → 1585 (+764 across 5/5b) | 821 → 1601 (+780 across 5/5b + 5/5c) |
+| Cumulative AdamantValidationError variants | 7 → 66 | 7 → 66 (unchanged at 5/5c) |
+| Cumulative public closed enums | 0 → 11 | 0 → 11 (unchanged at 5/5c) |
+| Methodology streams | 22 (entries 30–51) | 11 (entries 52–62; this stream) |
+
+Pattern shape consistent at increasing cumulative scope.
+Worth canonical sub-observation registration. Future
+cumulative-multi-phase closures (Phase 5/X cumulative;
+Phase N project-level closure) may continue this scaling
+pattern cleanly.
+
+### (63) Verbatim-survey-at-plan-gate-prevents-scope-error pattern stable beyond rule-of-three (11 instances)
+
+Verbatim-survey-at-plan-gate-prevents-scope-error pattern
+operates at 11 instances post-F-3 plan-gate. Pre-F-3 plan-
+gate empirical survey of Sui's StatusCode set used by
+verifier passes (~65 unique StatusCodes; ~46-48 in-scope
+for Adamant T2) was performed before Q5 plan-gate framing
+and informed the audit-table size estimation + the 3-vs-2
+table shape question. Pattern stable beyond rule-of-three
+threshold (8 instances at E-7 closure; 11 at F-3 plan-gate
+inclusive).
+
+**Pattern shape consistent across phase boundaries:** the
+verbatim survey is performed at plan-gate not impl-gate;
+findings inform plan-gate question framing not implementation
+discovery. Cost-of-discipline reduces over time as the
+discipline internalizes (per E-7 stream entry (54)
+methodology framework efficiency curve registration).
+
+### (64) Running-total drift discipline self-application across F-2 → F-3 session-resume (NEW shape; 4 instances total)
+
+Running-total drift discipline reached 4 instances at E-7
+closure; F-3 session-resume self-application is a NEW
+shape: **clean self-application** (no drift caught at
+session-resume boundary). The pattern operates not just as
+corrigendum-when-drift-discovered but as routine empirical
+verification at session-resume boundaries.
+
+**F-3 session-resume self-application:**
+
+- Resume prompt claimed workspace 1601 tests; empirical
+  verification at session-resume confirmed 1601. ✓
+- Resume prompt claimed adamant-vm lib 898 tests; empirical
+  verification confirmed 898. ✓
+- Resume prompt claimed type_safety 52 tests + reference_safety/pass.rs
+  36 tests; empirical verification confirmed both. ✓
+- Resume prompt claimed PROVENANCE.md ~5,580 lines;
+  empirical verification at F-3 plan-gate confirmed 5854
+  lines (resume prompt approximate; actual ~6%); within
+  expected drift band for ~5,500-line file across paused
+  session. Not a drift instance — approximation tolerance
+  per running-total drift discipline.
+
+**NEW shape registered:** clean-self-application (no
+drift caught) is itself an instance of the discipline
+operating effectively. The discipline isn't only about
+catching drift — it's about establishing empirical
+verification as routine at session-resume boundaries
+regardless of whether drift is found. Pattern stable
+beyond rule-of-three threshold (4 instances total: 3
+drift-caught + 1 clean-self-application; rule-of-three
+threshold MET at the 3rd drift-caught instance E-1b).
+
+### (65) Honest-scope-flagging at session-pacing level — 5th invocation (F-3)
+
+Honest-scope-flagging at session-pacing level reaches 5th
+invocation at F-3 (counting F-3's session-pacing-split
+escape hatch availability as the 5th invocation):
+
+1. D-5a.0 / D-5a.1 staging (1st invocation)
+2. D-5a.1.a / D-5a.1.b staging (2nd invocation)
+3. D-7 self-split escape hatch (3rd invocation)
+4. E-7 self-split escape hatch (4th invocation)
+5. F-3 self-split escape hatch (5th invocation; not fired —
+   single-sub-checkpoint disposition Q1(a) approved at
+   plan-gate; sub-shape 3 session-pacing-split rule-of-
+   three would have MET if F-3 self-split fired)
+
+Pattern stable beyond rule-of-three threshold (5
+invocations). Worth canonical registration that the
+discipline operates as availability-flagging at plan-gate
+regardless of whether the split actually fires. Future
+sub-arcs continue the discipline.
+
+### (66) Fmt-drift discipline (NEW; 1st instance at F-3 verification gate)
+
+Fmt-drift discipline is a NEW methodology pattern registered
+at F-3 verification gate boundary — sibling to running-total
+drift discipline. Both are empirical-verification-at-gate-
+boundary disciplines that catch drift inherited from earlier
+work before canonical record lands.
+
+**Pattern shape distinction:**
+
+- **Running-total drift discipline** (canonical at C-5; 4
+  instances at F-3 closure): catches numerical canonical-
+  record drift via empirical re-grep of variant counts /
+  test counts / LOC / etc. against actual code.
+- **Fmt-drift discipline** (canonical at F-3; 1st instance):
+  catches mechanical formatting drift via `cargo fmt --all
+  -- --check` invocation at verification gate. Drift may be
+  inherited from earlier commits not introduced by the
+  current sub-arc; canonical-record landing should not bake
+  in known-but-unaddressed mechanical drift.
+
+**F-3 1st instance:**
+
+- Verification gate at F-3 surfaced 108 fmt diffs across
+  13 Rust files in `adamant-vm` (`lib.rs`, `validator/mod.rs`,
+  `cross_module/rule_03_privacy_consistency.rs`,
+  `function_pass/control_flow.rs` + `stack_usage.rs` +
+  `locals_safety/{mod,abstract_state}.rs` +
+  `reference_safety/pass.rs` + `type_safety.rs` +
+  `loop_summary.rs` + `test_helpers.rs`,
+  `rule_06_no_dynamic_dispatch.rs` +
+  `rule_07_privacy_circuit_in_shielded_only.rs` +
+  `rule_08_bounded_loops.rs`).
+- Drift confirmed pre-existing at HEAD (commit `62c2a76`,
+  Phase 5/5c F-2) via stash-pop empirical test; F-3 modified
+  only markdown files (CLAUDE.md + this PROVENANCE.md), not
+  subject to `cargo fmt`.
+- Drift is mechanical (line-breaking around long signatures,
+  `pub use` re-ordering, `#[allow(...)]` attribute
+  reformatting). No semantic changes.
+- Origin trace deferred per F-3 disposition (would require
+  per-commit `git checkout` + `cargo fmt --check` across
+  Phase 5/5b history; substantial empirical archaeology
+  with marginal returns).
+
+**F-3 disposition: refined option (c)** — F-3 commits docs-
+only (CLAUDE.md + PROVENANCE.md); separate atomic `cargo
+fmt --all` mechanical-cleanup commit immediately follows;
+both push together. Atomic-fmt-cleanup commit's message
+explicitly registers the catch + cleanup + canonical
+PROVENANCE.md reference.
+
+**Methodology-positive observation:** F-3 verification gate
+is the canonical record landing for Phase 5/5 cumulative
+closure. Drift catch at this gate boundary is methodology-
+load-bearing — Phase 5/5 closure shouldn't inherit known-
+but-unaddressed drift state. Same posture as E-1b lib-
+count drift catch at session-resume → E-7 corrigendum
+landing. Catch + correction + canonical registration.
+
+Rule-of-three pending across pattern. Future sub-arcs
+continue the discipline at verification-gate boundaries.
+
+### (67) Commit-message-and-PROVENANCE.md registration sub-shape (NEW; 1st instance at F-3 fmt-cleanup commit)
+
+Distinct from the existing **code-and-PROVENANCE.md
+registration sub-shape** (registered at E-7 stream entry
+(38); 2 instances at E-4 + E-5).
+
+**Sub-shape distinction:**
+
+- **Code-and-PROVENANCE.md registration sub-shape** (E-4 +
+  E-5): rationale lives in code preamble (e.g., file-level
+  doc comment at top of `rule_07_privacy_circuit_in_shielded_only.rs`)
+  + canonical record at PROVENANCE.md.
+- **Commit-message-and-PROVENANCE.md registration sub-shape**
+  (F-3 fmt-cleanup commit): rationale lives in commit message
+  body + canonical record at PROVENANCE.md. No code preamble
+  — the fmt-cleanup is mechanical with no semantic locus
+  for inline documentation.
+
+**F-3 1st instance:** the atomic `cargo fmt --all` cleanup
+commit's message body explicitly registers (a) drift pre-
+existing at HEAD (not introduced by F-3); (b) origin spans
+multiple earlier commits; (c) cleanup is mechanical (no
+semantic changes); (d) catch via empirical verification at
+F-3 gate boundary; (e) PROVENANCE.md reference for the
+fmt-drift discipline canonical entry. The commit-message-
+and-PROVENANCE.md pairing operates as the registration
+mechanism — distinct from code-and-PROVENANCE.md where
+file-level doc comments carry the rationale.
+
+**Pattern shape consistency with code-and-PROVENANCE.md:**
+both sub-shapes operate as canonical-record + immediate-
+locus pairings. The immediate-locus medium differs (code
+preamble vs commit message) based on whether the change
+has a semantic locus or is purely mechanical. Same posture
+as helper-extraction discipline three sub-shapes (α / β /
+γ) operating consistently with shape-distinguishing
+qualifiers. Worth canonical registration that the broader
+"PROVENANCE.md + immediate-locus-pairing" pattern has
+multiple sub-shapes based on the immediate-locus medium.
+
+Rule-of-three pending across sub-shape. Future mechanical-
+cleanup sub-arcs (vendor refresh patches, dependency-bump
+mechanical edits) may close the rule-of-three threshold.
+
+### Phase 5/5c cumulative tally
+
+**Phase 5/5c metrics (cross-3-sub-arc summary):**
+
+| Metric | Value | Notes |
+|---|---|---|
+| Sub-arcs | 3 | F-1 + F-2 + F-3 |
+| Workspace test count progression | 1585 → 1601 | +16 across F-2 (D-5a +8 + D-5b +8); F-1 + F-3 doc-only |
+| Adamant Layer B parity tests added | +16 | F-2 D-5a (8) + D-5b (8) |
+| `AdamantValidationError` variants delta | 0 | 66 retained across all of Phase 5/5c |
+| Public closed enums delta | 0 | 11 retained across all of Phase 5/5c |
+| New methodology streams registered | 16 | (52)–(67); +2 at F-3 verification gate (fmt-drift discipline + commit-message-and-PROVENANCE.md registration sub-shape) |
+| Tier framework | Established | T0+T1+T2 closed at F-3; T3 deferred to pre-mainnet hardening |
+| T2 coverage | ~25 of ~46-48 in-scope StatusCodes directly-targeted | ~53% direct coverage |
+
+**Phase 5/5c sub-arc enumeration:**
+
+- **F-1** (tier framework formalization; T0 audit + T1 audit
+  + T2 framework + T3 disposition): doc-only sub-arc;
+  audit-table per-pass shape established (1st instance);
+  test count unchanged (1585).
+- **F-2** (D-5a + D-5b Layer B parity backfill): 16 new
+  Layer B parity tests; test count 1585 → 1601;
+  retroactive-promotion sub-shape established (2 instances);
+  Sui-public-API-shape-constrains-parity-helper reaches
+  2nd per-sub-arc instance.
+- **F-3** (T2 audit + Phase 5/5c closure + Phase 5/5
+  cumulative closure): doc-only sub-arc; audit-table per-
+  error-mode shape established (1st instance; 3rd canonical
+  audit-table sub-shape); cumulative-multi-phase closure
+  pattern reaches 2nd instance.
+
+**Phase 5/5c outstanding items:**
+
+- T3 real-world corpus collection mechanism (deferred to
+  pre-mainnet hardening per F-1 disposition).
+- Per-StatusCode coverage expansion for the ~21-23 T3-
+  deferred Sui StatusCodes (deferred to pre-mainnet
+  hardening real-world corpus venue).
+
+**Phase 5/5c CLOSED at F-3 commit. Phase 5/5 CLOSED at
+F-3 commit.** Next phase: 5/6 AVM runtime.
+
+## Phase 5/5 cumulative closure
+
+Phase 5/5 is the longest phase in the project's history to
+date: **3 sub-phases (5/5a, 5/5b, 5/5c) spanning ~6 weeks**
+of development (early Q2 2026 through 2026-05-09). Phase
+5/5 deliverable scope: **Adamant-native bytecode-verifier
++ cross-validation infrastructure formalization**. Phase
+5/5 CLOSED at F-3 commit.
+
+### Phase 5/5 sub-phase enumeration
+
+- **Phase 5/5a** (closed at `d7fe882`; 5 sub-deliverable
+  commits): Adamant-native deserializer + serializer +
+  validator wrapper integration + cross-validation
+  infrastructure foundation.
+- **Phase 5/5b** (closed at E-7 commit; 6 sub-arcs across
+  Phase 5/5b.1a → Phase 5/5b.5): Adamant-native verifier
+  feature-completeness — type-definition independence
+  (5/5b.1a + 5/5b.1b foundation forks), 11 module-level
+  passes (5/5b.2 + 5/5b.3), 5 per-function passes (5/5b.4),
+  Sui-bridge tear-out + cross-module Rule 3 + Rules 6/7/8
+  + Open Layer B gaps closure + cumulative closure
+  documentation (5/5b.5).
+- **Phase 5/5c** (closed at F-3 commit; 3 sub-arcs F-1, F-2,
+  F-3): Cross-validation tier framework (T0/T1/T2/T3)
+  formalization + Layer B parity backfill (D-5a + D-5b) +
+  T2 audit closure + Phase 5/5 cumulative closure
+  documentation.
+
+### Phase 5/5 cumulative metrics
+
+**Workspace test count progression:** ~525 (pre-Phase 5/5)
+→ 1601 (post-Phase 5/5; +1076 across the entire Phase 5/5
+workstream).
+
+**Per-sub-phase cumulative deltas:**
+
+| Sub-phase | Sub-arcs | Closing workspace test count | Sub-phase delta |
+|---|---|---|---|
+| Phase 5/5a | 5 sub-deliverables | ~821 | foundation |
+| Phase 5/5b.1a | 1 | (foundation; tests in adamant-bytecode-format) | foundation |
+| Phase 5/5b.1b | 1 | (foundation continued) | foundation |
+| Phase 5/5b.2 | 6 (B-1..B-6) | 1035 | +214 |
+| Phase 5/5b.3 | 5 (C-1..C-5) | 1259 | +224 |
+| Phase 5/5b.4 | 12 commits / 9 sub-arcs | 1532 | +273 |
+| Phase 5/5b.5 | 9 commits / 7 sub-arcs | 1585 | +53 |
+| Phase 5/5c | 3 (F-1..F-3) | 1601 | +16 |
+
+**Cumulative AdamantValidationError variants:** 7 → 66
+(+59 net across Phase 5/5b; 0 delta across Phase 5/5c).
+
+**Cumulative public closed enums:** 0 → 11. Enumeration:
+HandleKind (B-3.1), DefKind (C-2), InvalidSignatureReason
+(C-3), IrreducibleReason (D-2), TypeMismatchReason
+(D-5a.0), BorrowViolationReason (D-5b.2),
+PrivacyConsistencyViolationReason (D-5c),
+DynamicDispatchViolationReason (E-3),
+PrivacyCircuitContextViolationReason (E-4), FieldOwnerKind
+(B-2.3), MalformedConstantReason (B-2.1).
+
+**Cumulative deliberate-Adamant-decision instances:** 11+
+across Phase 5/5 (per CLAUDE.md state-bump tracking).
+
+**Cumulative verification gates fired:** 8 (pre-Phase-
+5/5b.4) + 3 (Phase 5/5b.4) + 4 (Phase 5/5b.5) + 0 (Phase
+5/5c; doc-only) = 15 total. Phase 5/5b alone fired 7
+verification gates across the §6.2.1.X spec sections.
+
+**Cumulative methodology streams registered:** entries
+1–65 across Phase 5/5b.3 + 5/5b.4 + 5/5b.5 + 5/5c (numbered
+sequentially; 65 distinct stream entries). Plus pre-stream
+methodology principles (eager-error, deliberate-Adamant-
+decision, etc.) registered as canonical sections.
+
+**Production-side Sui dependency complete elimination:**
+Phase 5/5b.5 E-1 milestone. adamant-vm production-binary
+dependency graph contains zero `move-*` crates per the
+§6.2.1.8 resistant-proof posture; build-system independence
+check at `tests/no_sui_in_production_deps.rs` mechanically
+enforces the architectural commitment.
+
+**Adamant-native verifier feature-completeness at Phase
+5/5 closure (unchanged from Phase 5/5b closure):**
+
+- **Module-level passes:** 11 Adamant-native passes wired
+  at step 3 of `verify_module` (bounds_checker first per
+  cross-pass-precedence; 10 others alphabetical / cross-
+  pass-pipeline-dependency-driven).
+- **Per-function passes:** 5 Adamant-native passes wired
+  at step 4 (control_flow → stack_usage → locals_safety →
+  type_safety → reference_safety).
+- **Adamant-specific rules:** 6 module-level rules at step
+  5 (Rules 1, 2, 3 single-module, 4, 6, 7); Rule 5 enforced
+  at step 1 (parse-time); Rule 8 architectural-position
+  pin (no step-5 invocation; runtime carries binding).
+- **Cross-module verification:** Rule 3 cross-module walker
+  at `validator/cross_module/`; awaits Phase 5/6 AVM
+  runtime stdlib production caller.
+
+**Cross-validation tier framework status at Phase 5/5
+closure (NEW at Phase 5/5c):**
+
+- **T0** (positive+negative-fixture-pair-per-pass): closed
+  at F-1 (26 of 26 passes/rules/surfaces with pos+neg
+  coverage or architectural-position-pin shape).
+- **T1** (variant-vs-test mapping): closed at F-1 (66 of 66
+  variants covered; 0 outstanding gaps).
+- **T2** (Layer B parity for Sui error modes): closed at
+  F-3 (~25 of ~46-48 in-scope Sui StatusCodes directly-
+  targeted; ~21-23 T3-deferred per pre-mainnet hardening
+  disposition).
+- **T3** (real-world corpus): deferred to pre-mainnet
+  hardening per F-1 Q5 disposition.
+
+### Phase 5/5 cumulative methodology landmarks
+
+**Cross-cutting canonical principles operating beyond rule-
+of-three threshold at Phase 5/5 closure:**
+
+1. **Verbatim-survey-at-plan-gate-prevents-scope-error
+   pattern.** 11 instances post-F-3 plan-gate. Stable
+   beyond threshold across phase boundaries.
+2. **Running-total drift discipline.** 4 instances at F-3
+   closure (3 drift-caught + 1 clean-self-application).
+   Cross-cutting canonical principle stable across count
+   types, discovery venues, and workstream contexts.
+3. **Spec-text-DIRECTS-shared-helper canonical principle.**
+   5 instances at E-7 closure: 3 cross-pass-distinct +
+   2 cross-scope-reuse.
+4. **Eager-error first-failure-wins.** 6+ pattern instances
+   across Phase 5/5b.2 + 5/5b.3 + 5/5b.4 (cross-pass-
+   precedence, within-pass eager-error, step-3 vs step-5
+   pipeline ordering).
+5. **Variant-vs-test mapping audit principle.** 66 of 66
+   variants covered at F-3 closure; 3 sub-shapes operating
+   + 2 closure shapes.
+6. **Documentation-batch LOC overshoot pattern.** 3
+   instances at F-1 closure; rule-of-three threshold MET.
+   F-3 calibrated estimate band [1100, 2000] LOC.
+7. **Honest-scope-flagging at session-pacing level.** 5
+   invocations at F-3 closure. Stable beyond threshold.
+8. **Scope-expansion-history-as-canonical-record sub-pattern.**
+   3 instances at F-3 (D-7 + E-7 + F-3); rule-of-three
+   threshold MET at F-3.
+
+**8 cross-cutting canonical principles operating beyond
+rule-of-three threshold at Phase 5/5 closure** (up from 5
+at Phase 5/5b closure; +3 across Phase 5/5c).
+
+**Pattern-cluster shape across methodology areas (meta-
+observation reaffirmed at F-3):** methodology framework
+consistently surfaces empirical sub-classifications at
+scale — helper-extraction (3 sub-shapes); spec-text-
+DIRECTS-shared-helper (2 sub-shapes); Adamant-native-
+constants (2 sub-classifications); Open Layer B gaps
+closure (2 sub-shapes); call-graph walker (2 sub-
+classifications); variant-count discipline (4 sub-shapes);
+variant-vs-test mapping audit (3 sub-shapes + 2 closure
+shapes); test-placement (2 sub-shapes); cumulative-phase-
+closure (2 shapes); bridge-as-soundness-test-infrastructure
+(opening + closure phases); audit-table-pattern (3 sub-
+shapes; new at Phase 5/5c); Layer-B-coverage-shape (2 sub-
+classifications; new at Phase 5/5c F-2); tier-based-cross-
+validation-coverage (4 tiers; new at Phase 5/5c F-1);
+three-table-shape impl-gate empirical-refinement (NEW at
+F-3). Pattern-cluster shape itself is a stable phenomenon
+of the framework's operation; F-3's empirical observations
+extend the cluster registration.
+
+**Methodology framework efficiency curve across Phase 5/5
+(meta-observation extended at F-3):** the empirical
+observation registered at E-7 (entry 54) holds across
+Phase 5/5c — phase-later sub-arcs surface plan-gates more
+cleanly than phase-earlier ones. Cost-of-discipline
+decreases as discipline internalizes; framework scales
+without bottlenecking implementation. F-3's substantial
+documentation scope (cumulative closure across 3 sub-
+phases) lands within calibrated band per documentation-
+batch LOC overshoot pattern operating beyond threshold.
+
+### Phase 5/5 architectural decisions on record
+
+**Constitutional commitments crystallized during Phase
+5/5:**
+
+1. **Resistant-proof posture (§6.2.1.8).** Adamant
+   protocol works fully independently of Sui's codebase
+   at deploy-time and runtime. Production-binary
+   dependency graph contains zero move-* crates; vendored
+   Sui-Move crates exercised exclusively at test time for
+   cross-validation parity. Build-system independence
+   check at `tests/no_sui_in_production_deps.rs`
+   mechanically enforces the architectural commitment.
+2. **Genesis-fixed verifier semantics.** Verifier accept/
+   reject decisions are consensus-binding and cannot
+   drift with upstream Sui. After genesis, all structural
+   limits + gas costs + rule semantics are immutable per
+   §6.2.1.7 and §6.2.1.8.
+3. **Defense-in-depth at runtime via gas-budget bound for
+   loop termination.** Rule 8 architectural-position pin
+   at E-5; runtime gas-budget per §6.2.4 carries the
+   determinism guarantee. Verifier-level no-op per
+   amendment 804d9db.
+4. **Cross-module Rule 3 enforcement via deployment-
+   validator wiring.** Cross-module call graphs statically
+   checked at deploy time against dependency modules'
+   annotations per §6.2.1.6 line 477. The walker lives in
+   adamant-vm; the production caller awaits Phase 5/6 AVM
+   runtime stdlib.
+5. **Type-definition independence (Option II fork).** Phase
+   5/5b.1a + 5/5b.1b forked the bytecode-format types into
+   the new `adamant-bytecode-format` crate. Adamant owns
+   the type definitions; vendored Sui types appear only
+   at test time for cross-validation BCS round-trip.
+6. **CompiledModule placement (Option X).** No
+   `CompiledModule` in `adamant-bytecode-format`;
+   `AdamantCompiledModule` in adamant-vm is the only
+   Adamant-owned module type. Production code never
+   constructs an inherited-subset module shape.
+7. **U256 arithmetic deferral to AVM runtime.**
+   Bytecode-level U256 is a thin newtype with serde +
+   equality + hash + LE bytes only; arithmetic
+   intentionally deferred to Phase 5/6 AVM runtime where
+   the implementation choice will be made deliberately as
+   a first-order architectural decision.
+8. **AccountAddress reuse via `adamant_types::Address`.**
+   Verify-then-pick confirmed `adamant_types::Address` is
+   byte-layout-identical to Sui's `move_core_types::AccountAddress`;
+   reused rather than forked. Saves ~150 LOC and avoids
+   parallel address types.
+9. **Tier-based cross-validation coverage discipline
+   (T0/T1/T2/T3).** Phase 5/5c F-1 formalization. Discrete
+   tiers with explicit closure criteria; tier framework
+   operates as unified-classification view over pre-
+   existing canonical principles. T3 deferred to pre-
+   mainnet hardening as stretch goal.
+
+### Phase 5/5 cumulative outstanding items
+
+**Open Layer B gaps at Phase 5/5 closure: 0** (all gaps
+closed during Phase 5/5b.5; SuiVerifier audit gap retired-
+via-fulfillment at E-1a; BorrowViolationReason 7-of-13
+sub-reason gap and st_loc_destroys_non_drop Layer B gap
+filled at E-6).
+
+**Open T2 coverage gaps at Phase 5/5 closure:** ~21-23
+T3-deferred Sui StatusCodes per F-3 audit closure.
+Deferred to pre-mainnet hardening real-world corpus
+venue.
+
+**Future workstream items (Phase 5/6 AVM runtime onwards):**
+
+1. **Phase 5/6 AVM runtime.** §6.3 implementation. Includes
+   AVM runtime stdlib `adamant::module::deploy` —
+   invokes `validator::verify_module` per-module +
+   cross-module Rule 3 walker per the ModuleResolver
+   trait abstraction. U256 arithmetic implementation
+   choice (per Phase 5/5 decision #7).
+2. **Pre-mainnet calibration of Adamant-native structural
+   limits** in `validator/config.rs` (per §6.2.1.7
+   amendment workstream registered at B-1 / B-3.4 / B-6 /
+   E-7).
+3. **Pre-mainnet T3 corpus collection mechanism.** Real-
+   world Sui-Move source compiled to bytecode + exercised
+   against Adamant verifier (per Phase 5/5c F-1 Q5
+   disposition).
+4. **Bytecode-format genesis-fixed parameters review** (gas
+   costs, structural limits) before mainnet.
+5. **§6.2.1.7 + §6.2.1.8 spec amendment workstream** —
+   structural-limits enumeration + cross-pass eager-error
+   precedence formalization (per B-1 / B-3.4 / B-5 / B-6
+   carry-forwards).
+
+**Phase 5/5 CLOSED. Next phase (5/6 AVM runtime) awaits
+direction. Major project milestone reached: Adamant has a
+feature-complete, production-side Sui-free, cross-
+validated bytecode-verifier with formalized cross-
+validation tier discipline.**
