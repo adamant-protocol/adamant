@@ -5576,3 +5576,279 @@ filled at E-6).
 
 Phase 5/5b CLOSED. Next phase (5/5c or 5/6) awaits
 direction.
+
+## Phase 5/5c — Tier-based cross-validation coverage discipline (NEW pattern category at F-1)
+
+Phase 5/5c formalizes the **T0 + T1 + T2 + T3** tier
+framework defined in CLAUDE.md Section 10 Open Properties
+#1, registered as a NEW methodology pattern category at
+F-1 plan-gate Q4 disposition. Tier-based-cross-validation-
+coverage-discipline is methodologically novel — not a
+refinement of prior canonical principles but a new pattern
+category. Future workstreams (security tiers in Phase
+5/5b.6+ if the spec amendments warrant; runtime tiers at
+Phase 5/6) may benefit from analogous tier-based shapes.
+
+### Tier framework
+
+| Tier | Coverage criterion | Phase 5/5c disposition |
+|---|---|---|
+| **T0** | Every Adamant-native pass has at least 1 positive AND at least 1 negative Layer A fixture (audit-table evidence per pass) | F-1 audit closure (this section) |
+| **T1** | Every typed `AdamantValidationError` variant has at least 1 explicit negative test asserting on the variant shape | F-1 audit closure (re-registers existing variant-vs-test mapping audit as canonical T1 closure) |
+| **T2** | Every Sui error mode produces a fixture that triggers it in Adamant with same accept/reject decision (Layer B parity) | F-2 D-5a + D-5b Layer B parity backfill + F-3 T2 audit closure |
+| **T3** | Real-world corpus of compiled Sui-Move modules exercised against Adamant's verifier as integration cross-validation | **Deferred to pre-mainnet hardening** as stretch goal |
+
+### Tier-framework-crystallizes-existing-discipline meta-observation
+
+Per Q4 refinement at F-1 plan-gate, the tier framework
+operates as **retroactive classification of pre-existing
+canonical principles** rather than introducing fresh
+requirements:
+
+- **T0 = positive+negative-fixture-pair-per-pass discipline**
+  (operational since Phase 5/5b.2 B-1; implicit in every
+  per-pass test surface).
+- **T1 = variant-vs-test mapping audit principle**
+  (canonical at Phase 5/5b.3 C-3; retroactive audits at
+  C-5 + D-7b + E-7).
+- **T2 = Layer B parity discipline**
+  (operational since Phase 5/5b.2 B-2.2 with the
+  `assert_pass_parity` helper extraction; D-7a Layer B
+  backfill consolidated the function_pass shape).
+- **T3 = real-world-corpus discipline**
+  (deferred since CLAUDE.md Open Properties registration;
+  pre-mainnet hardening venue).
+
+Methodology consequence: tier framework operates as a
+unified-classification view over four pre-existing
+canonical principles. Re-registration as canonical at
+Phase 5/5c surfaces the relationship between the
+principles + adds the per-tier formal closure shape.
+
+Worth canonical methodology-meta registration: tier
+framework is itself a methodology pattern (NEW at F-1)
+that crystallizes pre-existing discipline rather than
+introducing fresh requirements. Future tier-based
+disciplines (e.g., security-tier at later phases) may
+inherit the retroactive-classification posture.
+
+### T0 audit closure (F-1)
+
+**Audit method:** for each Adamant-native pass + rule
+module, empirically count test functions; confirm
+presence of positive (accepting) and negative
+(rejecting) fixtures.
+
+**Audit results:** every Adamant-native pass with
+rejection conditions has both positive and negative
+Layer A coverage. The architectural-position pin module
+(`rule_08_bounded_loops`) has only positive coverage by
+design — Rule 8 has no rejection condition at the
+verifier layer per amendment 804d9db; the architectural-
+position-confirmation testing sub-pattern (E-5
+registration) is the canonical T0 shape for explicit-
+non-enforcement rules.
+
+#### Module-level passes (step 3; 11 passes)
+
+| Pass | Sub-checkpoint | Total Layer A tests | Has pos+neg | Status |
+|---|---|---|---|---|
+| `bounds_checker` | C-1 | 162 | ✓ | ✓ T0 |
+| `ability_field_requirements` | B-2.3 | 22 | ✓ | ✓ T0 |
+| `constants` | B-2.1 | 39 | ✓ | ✓ T0 |
+| `duplication_checker` | C-2 | 38 | ✓ | ✓ T0 |
+| `friends` | B-2.2 | 12 | ✓ | ✓ T0 |
+| `instantiation_loops` | B-3.3 | 18 | ✓ | ✓ T0 |
+| `instruction_consistency` | B-2.4 | 30 | ✓ | ✓ T0 |
+| `limits` | B-3.1 | 23 | ✓ | ✓ T0 |
+| `privacy_metadata_structure` | B-4.2 | 14 | ✓ | ✓ T0 |
+| `recursive_data_def` | B-3.2 | 17 | ✓ | ✓ T0 |
+| `signature_checker` | C-3 | 19 | ✓ | ✓ T0 |
+
+#### Per-function passes (step 4; 5 passes)
+
+| Pass | Sub-checkpoint | Total Layer A tests | Has pos+neg | Status |
+|---|---|---|---|---|
+| `control_flow` | D-2 | 33 | ✓ | ✓ T0 |
+| `stack_usage` | D-3 | 44 | ✓ | ✓ T0 |
+| `locals_safety` | D-4 | 33 (mod.rs) | ✓ | ✓ T0 |
+| `type_safety` | D-5a | 44 | ✓ | ✓ T0 |
+| `reference_safety` | D-5b | 28 (pass.rs) + 5 (abstract_state.rs) + 21 (borrow_graph.rs) | ✓ | ✓ T0 |
+
+#### Cross-module verifier (E-2)
+
+| Pass | Sub-checkpoint | Total Layer A tests | Has pos+neg | Status |
+|---|---|---|---|---|
+| `cross_module/rule_03_privacy_consistency` | E-2b | 11 (+ 7 trait/API tests at E-2a) | ✓ | ✓ T0 |
+
+#### Adamant-specific rules at step 5 (6 rules + Rule 5 at step 1 + Rule 8 architectural-position pin)
+
+| Rule | Sub-checkpoint | Total Layer A tests | Has pos+neg | Status |
+|---|---|---|---|---|
+| Rule 1 (`rule_01_mutability`) | Wave 3a | 4 | ✓ | ✓ T0 |
+| Rule 2 (`rule_02_privacy`) | B-4.1 | 14 | ✓ | ✓ T0 |
+| Rule 3 (`rule_03_privacy_consistency` single-module) | D-5c | 15 | ✓ | ✓ T0 |
+| Rule 4 (`rule_04_no_natives`) | Wave 3a | 2 | ✓ | ✓ T0 |
+| Rule 5 (parse-time inside `adamant_deserialize`) | Wave 3a | (covered at deserializer test surface) | ✓ | ✓ T0 |
+| Rule 6 (`rule_06_no_dynamic_dispatch`) | E-3 | 11 | ✓ | ✓ T0 |
+| Rule 7 (`rule_07_privacy_circuit_in_shielded_only`) | E-4 | 13 | ✓ | ✓ T0 |
+| Rule 8 (`rule_08_bounded_loops`) | E-5 | 1 | architectural-position pin only | ✓ T0 (pin shape) |
+
+#### Pipeline integration (validator/mod.rs)
+
+| Surface | Sub-checkpoint | Total tests | Has pos+neg | Status |
+|---|---|---|---|---|
+| `validator::verify_module` end-to-end | Wave 3a + B-5 + C-4 + D-6 | 34 | ✓ | ✓ T0 |
+
+**T0 audit verdict at F-1 closure: 26 of 26 passes /
+rules / surfaces have positive + negative Layer A
+coverage** (or architectural-position-pin shape for
+Rule 8 explicit-non-enforcement). **T0 closed at F-1.**
+
+### T1 audit closure (F-1)
+
+**Audit method:** re-register the existing variant-vs-
+test mapping audit (canonical at C-3, retroactive audits
+at C-5 + D-7b + E-7) as the canonical T1 closure. T1's
+coverage criterion is exactly the variant-vs-test
+mapping audit principle: every typed
+`AdamantValidationError` variant has at least 1 explicit
+negative test asserting on the variant shape.
+
+**Audit results (referenced from E-7 closure):**
+
+- C-5 retroactive audit: 50 of 50 variants covered (1
+  gap: `SuiVerifier`, deferred to natural resolution at
+  Phase 5/5b.5 bridge tear-out)
+- D-7b incremental audit: 14 new variants covered (cumulative
+  64 of 64; 1 gap unchanged from C-5)
+- E-7 incremental audit: 3 new variants covered + 1
+  removed-variant closure-of-record (cumulative 66 of
+  66; 0 outstanding gaps after SuiVerifier removed at
+  E-1a via gap-source-removal closure)
+
+**T1 audit verdict at F-1 closure: 66 of 66
+`AdamantValidationError` variants have explicit negative-
+test coverage. 0 outstanding audit gaps. T1 closed at
+F-1.**
+
+Cross-references: see "Retroactive variant-vs-test
+mapping audit (50 variants; C-5 closure)" + "Variant-vs-
+test mapping audit appendix (14 new variants; D-7b
+closure)" + "Variant-vs-test mapping audit appendix (3
+new variants + 1 removed-variant closure-of-record; E-7
+closure)" sections elsewhere in this file. T1 framework
+re-uses the existing audit infrastructure rather than
+duplicating.
+
+### T2 audit framework (F-1; full audit at F-3)
+
+T2's coverage criterion: every Sui error mode produces a
+fixture that triggers it in Adamant with same accept/
+reject decision (Layer B parity).
+
+**T2 framework at F-1:**
+
+- Per-pass Layer B helpers established at Phase 5/5b
+  (module_pass `assert_pass_parity` at B-2.2;
+  function_pass `test_helpers.rs` at D-7a).
+- Composite-pipeline parity strategy operational (D-3
+  stack_usage; D-4 locals_safety; D-7a backfill) per the
+  Sui-public-API-shape-constrains-parity-helper sub-
+  pattern (D-7b registration).
+- Per-pass parity strategy operational where Sui's per-
+  pass entry is `pub` (D-2 control_flow uses
+  `move_bytecode_verifier::control_flow::verify_function`
+  directly).
+
+**T2 implementation gaps registered at F-1 plan-gate:**
+
+- D-5a `type_safety` has no Layer B parity tests.
+- D-5b `reference_safety` has no Layer B parity tests.
+
+Both have Sui counterparts (`type_safety::verify` and
+`locals_safety::verify` are `pub(crate)` in upstream;
+composite-pipeline parity via `code_unit_verifier::verify_module`
+is the strategy per the Sui-public-API-shape-constrains-
+parity-helper sub-pattern). F-2 closes these gaps with
+full Layer B backfill matching D-7a's shape.
+
+**T2 closure: F-3 (post-F-2; the full T2 audit table
+covering every Sui error mode lands at F-3 alongside the
+Phase 5/5c closure batch).**
+
+### T3 disposition (F-1; deferred to pre-mainnet hardening)
+
+T3's coverage criterion: real-world corpus from compiled
+Sui-Move source exercised against Adamant's verifier as
+integration cross-validation.
+
+Per CLAUDE.md Open Properties #1 + Q5 disposition at
+F-1 plan-gate: **T3 deferred to pre-mainnet hardening as
+a stretch goal.** Phase 5/5c closes T0+T1+T2 cleanly; T3
+stays in pre-mainnet workstream. Rationale: foundation
+work (corpus collection mechanism, fixture import format)
+is premature given no current Sui-Move-source compilation
+pipeline exists in adamant-vm; pre-mainnet hardening is
+the natural venue.
+
+**Plan-incremental-disposition sub-pattern β (deliberate-
+deferral) reaches OPENING 4th instance** at F-1 with the
+T3 disposition. Pattern instances:
+
+1. D-4 Layer B fixture overhead opening (deferred to
+   D-7a backfill)
+2. D-5a.0 / D-5a.1 staging (deferred to D-5a.1.b
+   orchestration)
+3. D-5b.2 BorrowViolationReason 7-of-13 sub-reason audit
+   gap (deferred to E-6 fixture closure)
+4. T3 deferral at F-1 (deferred to pre-mainnet hardening)
+
+Pattern stable beyond rule-of-three threshold (4
+instances); operating consistently across phase
+boundaries.
+
+### Audit-table-pattern multiple sub-shapes
+
+Audit-table shape now operates at 3 levels per F-1
+disposition Q3:
+
+- **Variant-vs-test mapping audit** (per-variant rows;
+  established C-5 + D-7b + E-7; 3 instances)
+- **T0 audit** (per-pass positive + negative test rows;
+  Phase 5/5c F-1 1st instance)
+- **T2 audit** (per-Sui-error-mode rows; F-3 work)
+
+Three audit-table sub-shapes operating across cross-
+validation discipline. Worth canonical registration that
+audit-table-pattern has multiple sub-shapes per audit
+dimension (per-variant / per-pass / per-error-mode).
+
+Same posture as helper-extraction discipline three sub-
+shapes registration (α / β / γ) and variant-count
+discipline four sub-shapes (add / tear-out / no-op /
+coverage-expansion). Pattern-cluster shape stable across
+methodology areas.
+
+### Phase 5/5c F-1 closure
+
+F-1 lands T0 audit closure + T1 audit closure + T2
+framework establishment + T3 disposition. F-2 closes T2
+gaps via D-5a + D-5b Layer B parity backfill. F-3 is the
+T2 audit + Phase 5/5c closure batch + Phase 5/5
+cumulative closure.
+
+**Phase 5/5c F-1 sub-arc state:**
+
+- T0 audit: closed at F-1 (26 of 26 passes/rules/surfaces
+  with pos+neg coverage or architectural-position-pin
+  shape)
+- T1 audit: closed at F-1 (66 of 66 variants covered;
+  re-registers existing audit principle as canonical T1)
+- T2 framework: established at F-1; gaps registered for
+  F-2 backfill (D-5a + D-5b) + F-3 closure
+- T3: deferred to pre-mainnet hardening per Q5 disposition
+
+Phase 5/5c sub-arcs remaining: F-2 (D-5a + D-5b Layer B
+parity backfill); F-3 (T2 audit + Phase 5/5c closure +
+Phase 5/5 cumulative closure).
