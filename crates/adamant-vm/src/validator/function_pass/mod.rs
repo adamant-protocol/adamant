@@ -123,7 +123,19 @@
 //!   binding.
 //! - D-6. Pipeline integration into [`super::verify_module`]
 //!   step 4; bridge tear-out lands with 5/5b.5.
-//! - D-7. Closure batch + CLAUDE.md state-bump.
+//! - **D-7a.** Layer B cross-validation backfill for D-2 /
+//!   D-3 / D-4 (~26 parity tests covering `control_flow`,
+//!   `stack_usage`, `locals_safety` against vendored Sui).
+//!   Helper extracted at `function_pass/test_helpers.rs`
+//!   (extract-at-N=3, sub-shape β of helper-extraction
+//!   discipline; `module_pass`'s extract-at-N=2 is sub-
+//!   shape α at B-2.2).
+//! - **D-7b.** Closure batch landing PROVENANCE.md scope
+//!   expansion, 9 per-sub-arc changelog entries, Phase
+//!   5/5b.4 methodology accumulation streams, the D-3-to-
+//!   D-4 baseline corrigendum, the variant-vs-test mapping
+//!   audit appendix for the 14 new variants, and the
+//!   CLAUDE.md state-bump.
 //!
 //! [AVE]: super::AdamantValidationError
 //! [AVE-empty]: super::AdamantValidationError::EmptyFunctionBody
@@ -140,7 +152,20 @@
 //! [IR]: super::AdamantValidationError
 //! [limits]: super::config::AdamantStructuralLimits
 
-#![allow(dead_code)] // D-1..D-2 foundation; entry point wires in at D-6.
+// Module-level `allow(dead_code)` retained at D-7b closure:
+// the D-1a / D-1b / D-5b.1 framework ports (CFG,
+// AbstractInterpreter, AbstractStack, BorrowGraph) carry
+// upstream methods (e.g., `AbstractStack::len`,
+// `AbstractStack::pop_any_n`, `AdamantControlFlowGraph::is_loop_head`,
+// `back_edges`, `num_back_edges`, `reachable_from`) that
+// the Phase 5/5b.4 per-function passes don't currently
+// consume but that future Phase 5/5b.5 work (reference-
+// safety extensions, control-flow analysis at module-level
+// loops) is expected to need. Byte-faithful preservation of
+// upstream's framework-method surface keeps Adamant aligned
+// with the vendored Sui-Move snapshot's abstraction surface;
+// the allow is removed pass-by-pass when consumers land.
+#![allow(dead_code)]
 
 pub(super) mod absint;
 pub(super) mod abstract_stack;
@@ -166,17 +191,19 @@ use super::module_pass::ability_cache::AdamantAbilityCache;
 /// Run the Adamant-native per-function verifier passes against
 /// every function definition in `module`.
 ///
-/// **D-2.** Wires the control-flow validation pass into the
-/// per-function entry point. Native functions (those with
-/// `code: None`) are skipped here — whitepaper §6.2.1.6 Rule 4
-/// (no native functions) is enforced separately at D-5 per the
-/// D-1 plan-gate Q1 disposition.
+/// Wires the five per-function passes (control-flow validation
+/// → operand-stack discipline → locals safety → type safety →
+/// reference safety) plus Rule 3 (privacy-consistency call-
+/// graph walker) into the per-function entry point. Native
+/// functions (those with `code: None`) are skipped here —
+/// whitepaper §6.2.1.6 Rule 4 (no native functions) is
+/// enforced separately at step 5 in [`super::verify_module`]
+/// (`rule_04_no_natives::verify`) per the D-1 plan-gate Q1
+/// disposition.
 ///
-/// `_cfg` is intentionally discarded at D-2: D-3..D-5 will
-/// replace the discard with consumers (operand-stack discipline,
-/// type safety, locals safety, reference safety) operating on
-/// the CFG without rebuilding. D-6 wires this entry point into
-/// [`super::verify_module`] step 4.
+/// D-6 wires this entry point into [`super::verify_module`]
+/// step 4 between the module-level Adamant passes and the
+/// transitional Sui-verifier bridge.
 pub(super) fn verify_function_bodies(
     module: &AdamantCompiledModule,
     config: &AdamantStructuralLimits,
@@ -197,9 +224,11 @@ pub(super) fn verify_function_bodies(
         let Some(code_unit) = function_definition.code.as_ref() else {
             // Native function — no body to verify. Sui-base
             // subset permits native function declarations at
-            // the binary-format level; whitepaper §6.2.1.6 Rule
-            // 4 (no native functions) lands at D-5 per the D-1
-            // plan-gate Q1 disposition.
+            // the binary-format level; whitepaper §6.2.1.6
+            // Rule 4 (no native functions) is enforced at step
+            // 5 of [`super::verify_module`] via
+            // `rule_04_no_natives::verify`, separate from
+            // per-function-body verification.
             continue;
         };
         let cfg = control_flow::verify_function(
@@ -231,8 +260,6 @@ pub(super) fn verify_function_bodies(
             &code_unit.code,
             &cfg,
         )?;
-        // D-5c adds Rules 3, 4, 5 here. Full pipeline wires
-        // into `super::verify_module` step 4 at D-6.
     }
     Ok(())
 }
