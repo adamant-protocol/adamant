@@ -113,6 +113,16 @@ pub(super) struct AdamantStructuralLimits {
     /// `None` disables the check; `Some(N)` rejects bodies
     /// whose loop nesting collapses to depth > N.
     pub(super) max_loop_depth: Option<u16>,
+    /// Maximum total push count per basic block. Consumed by
+    /// the per-function operand-stack discipline check at
+    /// Phase 5/5b.4 D-3
+    /// (`function_pass::stack_usage::verify_block`). `None`
+    /// disables the check; `Some(N)` rejects blocks whose
+    /// accumulated push count exceeds N. Distinct from
+    /// `max_value_stack_size` (a runtime concern; lives in the
+    /// AVM runtime config in the Phase 5/6.3 sub-arc per
+    /// whitepaper §6.3).
+    pub(super) max_push_size: Option<u64>,
 }
 
 impl AdamantStructuralLimits {
@@ -198,6 +208,18 @@ impl AdamantStructuralLimits {
             // Pre-mainnet calibration tracked under §6.2.1.7
             // amendment workstream.
             max_loop_depth: Some(64),
+            // Bucket A (D-3 — adopt Sui's commented
+            // alternative verbatim). Sui ships None at
+            // `vendor/move-vm-config/src/verifier.rs:61` with
+            // a commented `Some(10000)` at lines 70-71.
+            // Adamant adopts the commented value: bounds
+            // runaway-growth within any single basic block at
+            // deploy time. Documented in
+            // module_pass/PROVENANCE.md "Genesis structural-
+            // limits values" — D-3 entry. Pre-mainnet
+            // calibration tracked under §6.2.1.7 amendment
+            // workstream.
+            max_push_size: Some(10000),
         }
     }
 }

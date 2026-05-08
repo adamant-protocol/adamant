@@ -968,6 +968,49 @@ pub enum AdamantValidationError {
         /// Sub-reason discriminator.
         reason: IrreducibleReason,
     },
+    /// A basic block's accumulated push count exceeded
+    /// [`AdamantStructuralLimits::max_push_size`][max].
+    /// Bounds runaway-growth at deploy time.
+    ///
+    /// Whitepaper §6.2.1.8 step 4 (per-function passes:
+    /// operand-stack discipline). Phase 5/5b.4 D-3.
+    ///
+    /// [max]: super::config::AdamantStructuralLimits
+    StackPushOverflow {
+        /// Function-definition index whose body overflowed.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Block-entry offset where the overflow was detected
+        /// (mirrors upstream's `at_code_offset(_, block_start)`
+        /// placement).
+        code_offset: CodeOffset,
+    },
+    /// An instruction within a basic block would pop more
+    /// values than the block's running stack delta supports —
+    /// the abstract operand stack would go negative.
+    ///
+    /// Whitepaper §6.2.1.8 step 4. Phase 5/5b.4 D-3.
+    StackUnderflow {
+        /// Function-definition index whose body underflowed.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Block-entry offset of the offending block (mirrors
+        /// upstream's at-block-start placement).
+        code_offset: CodeOffset,
+    },
+    /// A basic block ends with a non-zero stack delta. For
+    /// non-`Ret`-terminated blocks, the delta must be zero. For
+    /// `Ret`-terminated blocks, the pre-`Ret` depth must equal
+    /// the function's return arity (`Ret` pops the return
+    /// values, leaving a net delta of zero); a mismatch here
+    /// also surfaces as this variant.
+    ///
+    /// Whitepaper §6.2.1.8 step 4. Phase 5/5b.4 D-3.
+    UnbalancedStackAtBlockEnd {
+        /// Function-definition index whose body has an
+        /// unbalanced block.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Block-entry offset of the offending block.
+        code_offset: CodeOffset,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 3, 6, 7 land in subsequent
@@ -1595,6 +1638,36 @@ impl core::fmt::Display for AdamantValidationError {
                 f,
                 "function definition {} offset {code_offset}: {reason} \
                  (whitepaper §6.2.1.8 step 4, `function_pass::control_flow`)",
+                fn_def_idx.0
+            ),
+            Self::StackPushOverflow {
+                fn_def_idx,
+                code_offset,
+            } => write!(
+                f,
+                "function definition {} offset {code_offset}: basic-block push count \
+                 exceeds max_push_size (whitepaper §6.2.1.8 step 4, \
+                 `function_pass::stack_usage`)",
+                fn_def_idx.0
+            ),
+            Self::StackUnderflow {
+                fn_def_idx,
+                code_offset,
+            } => write!(
+                f,
+                "function definition {} offset {code_offset}: instruction would \
+                 underflow the operand stack within a basic block (whitepaper \
+                 §6.2.1.8 step 4, `function_pass::stack_usage`)",
+                fn_def_idx.0
+            ),
+            Self::UnbalancedStackAtBlockEnd {
+                fn_def_idx,
+                code_offset,
+            } => write!(
+                f,
+                "function definition {} offset {code_offset}: basic block ends with \
+                 non-zero stack delta (or Ret-terminated block does not match return \
+                 arity) (whitepaper §6.2.1.8 step 4, `function_pass::stack_usage`)",
                 fn_def_idx.0
             ),
         }

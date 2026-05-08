@@ -40,7 +40,7 @@
 //!   Hard-wires [`AdamantValidationError`][AVE] as the
 //!   framework's error type per Q2 plan-gate disposition (4th
 //!   deliberate-Adamant-decision instance).
-//! - **D-2 (this commit).** Control-flow validation pass
+//! - **D-2.** Control-flow validation pass
 //!   ([`control_flow`] + [`loop_summary`]); first consumer of
 //!   [`cfg::AdamantControlFlowGraph`]. Declares + produces +
 //!   tests three CFG-related typed-error variants together
@@ -55,9 +55,27 @@
 //!   Adamant extensions are non-branching, so a function
 //!   ending in any `Adamant(_)` arm is rejected as missing a
 //!   terminator (which is correct).
-//! - D-3, D-4, D-5. Stack/type/locals/reference-safety + Rule 3
-//!   (call-graph) + Rules 4, 5 reaffirmation per Q1 disposition.
-//!   D-3 is first consumer of [`absint::AbstractInterpreter`].
+//! - **D-3 (this commit).** Operand-stack discipline pass
+//!   ([`stack_usage`]); second consumer of
+//!   [`cfg::AdamantControlFlowGraph`] (does NOT consume
+//!   [`absint::AbstractInterpreter`] — D-4 locals safety is
+//!   the first AI consumer). Declares + produces + tests
+//!   three stack-discipline variants
+//!   ([`AVE::StackPushOverflow`][AVE-push],
+//!   [`AVE::StackUnderflow`][AVE-under],
+//!   [`AVE::UnbalancedStackAtBlockEnd`][AVE-unbal]). Adds
+//!   `max_push_size: Some(10000)` to
+//!   [`AdamantStructuralLimits`][limits] (Bucket A — adopt
+//!   Sui's commented alternative). Confirms Adamant-extension
+//!   treatment sub-shape 2 (per-extension stack-effect
+//!   needed); the 10th verification gate fired in corrective
+//!   mode at D-3 plan-gate, partitioning the 17 extensions
+//!   into 4 categories (Category A static / B parametric-FH /
+//!   C deferred-to-§7 / D deferred-to-§8.5).
+//! - D-4, D-5. Locals safety + acquires-list + type safety +
+//!   reference safety + Rule 3 (call-graph) + Rules 4, 5
+//!   reaffirmation per the D-1 plan-gate Q1 disposition. D-4
+//!   is the first consumer of [`absint::AbstractInterpreter`].
 //! - D-6. Pipeline integration into [`super::verify_module`]
 //!   step 4; bridge tear-out lands with 5/5b.5.
 //! - D-7. Closure batch + CLAUDE.md state-bump.
@@ -66,6 +84,9 @@
 //! [AVE-empty]: super::AdamantValidationError::EmptyFunctionBody
 //! [AVE-fall]: super::AdamantValidationError::MissingFallthroughTerminator
 //! [AVE-irr]: super::AdamantValidationError::IrreducibleControlFlow
+//! [AVE-push]: super::AdamantValidationError::StackPushOverflow
+//! [AVE-under]: super::AdamantValidationError::StackUnderflow
+//! [AVE-unbal]: super::AdamantValidationError::UnbalancedStackAtBlockEnd
 //! [IR]: super::AdamantValidationError
 //! [limits]: super::config::AdamantStructuralLimits
 
@@ -75,6 +96,7 @@ pub(super) mod absint;
 pub(super) mod cfg;
 pub(super) mod control_flow;
 pub(super) mod loop_summary;
+pub(super) mod stack_usage;
 
 use adamant_bytecode_format::FunctionDefinitionIndex;
 
@@ -116,14 +138,21 @@ pub(super) fn verify_function_bodies(
             // plan-gate Q1 disposition.
             continue;
         };
-        let _cfg = control_flow::verify_function(
+        let cfg = control_flow::verify_function(
             config,
             fn_def_idx,
             &code_unit.code,
             &code_unit.jump_tables,
         )?;
-        // D-3..D-5 consume `_cfg` here; orchestration wired at
-        // D-6.
+        stack_usage::StackUsageVerifier::verify(
+            config,
+            module,
+            fn_def_idx,
+            &code_unit.code,
+            &cfg,
+        )?;
+        // D-4..D-5 consume `cfg` here for locals + type +
+        // reference safety; orchestration wired at D-6.
     }
     Ok(())
 }
@@ -140,7 +169,9 @@ mod tests {
         AdamantCodeUnit, AdamantCompiledModule, AdamantFunctionDefinition,
     };
     use crate::bytecode::BytecodeInstruction;
-    use adamant_bytecode_format::Bytecode;
+    use adamant_bytecode_format::{
+        Bytecode, FunctionHandle, IdentifierIndex, ModuleHandleIndex, Signature, SignatureIndex,
+    };
 
     fn ret_inst() -> BytecodeInstruction {
         BytecodeInstruction::Inherited(Bytecode::Ret)
@@ -150,14 +181,34 @@ mod tests {
         BytecodeInstruction::Inherited(Bytecode::Pop)
     }
 
+    /// Builds a module with a 0-param / 0-return signature pool
+    /// entry shared by every function-handle, plus one
+    /// function-handle and function-def per body. D-3's
+    /// `stack_usage` pass needs the handle's signature
+    /// resolution, so the test helper builds a complete enough
+    /// module shape to exercise both D-2 and D-3 in
+    /// `verify_function_bodies`.
     fn module_with_function_bodies(bodies: Vec<Vec<BytecodeInstruction>>) -> AdamantCompiledModule {
         let mut m = AdamantCompiledModule::default();
-        for body in bodies {
+        // Signature pool: SignatureIndex(0) is empty, used for
+        // both parameters and returns of every test function.
+        m.signatures.push(Signature(vec![]));
+        for (idx, body) in bodies.into_iter().enumerate() {
+            m.function_handles.push(FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(0),
+                parameters: SignatureIndex(0),
+                return_: SignatureIndex(0),
+                type_parameters: vec![],
+            });
             let code_unit = AdamantCodeUnit {
                 code: body,
                 ..AdamantCodeUnit::default()
             };
             m.function_defs.push(AdamantFunctionDefinition {
+                function: adamant_bytecode_format::FunctionHandleIndex(
+                    u16::try_from(idx).expect("test fixture function count fits u16"),
+                ),
                 code: Some(code_unit),
                 ..AdamantFunctionDefinition::default()
             });

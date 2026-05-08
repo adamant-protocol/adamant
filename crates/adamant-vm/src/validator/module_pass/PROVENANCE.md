@@ -1275,19 +1275,43 @@ plan-incremental-disposition-resolved-empirically at the
 spec-amendment level, not a D-2 sub-checkpoint correction.
 Consumed by `function_pass::control_flow::verify_reducibility`.
 
+### `max_push_size = Some(10000)` (Bucket A, D-3)
+
+Bucket A — adopt Sui's commented alternative verbatim. Sui
+ships `max_push_size: None` in `VerifierConfig::default()`
+(`vendor/move-vm-config/src/verifier.rs:61`) with a commented
+alternative `Some(10000)` at lines 70-71 ("Max size set to
+10000 to restrict number of pushes in one function"). Adamant
+adopts the commented value with no deviation:
+
+- Bounds runaway-growth within any single basic block at
+  deploy time. 10000 pushes per block far exceeds any
+  legitimate code shape; bounds verifier-side analysis cost
+  on a worst-case input.
+- Distinct from `max_value_stack_size` (a runtime concern per
+  this PROVENANCE.md's "Out-of-scope fields" carve-out; lives
+  in the AVM runtime config in the Phase 5/6.3 sub-arc per
+  whitepaper §6.3).
+- Pre-mainnet calibration tracked under §6.2.1.7 spec
+  amendment workstream alongside the other Bucket A/B/C
+  values.
+
+Consumed by `function_pass::stack_usage::verify_block`.
+
 ## Out-of-scope fields (registered for future sub-arcs)
 
 `AdamantStructuralLimits` covers **module-level deploy-time
 bounds**. The following Sui `VerifierConfig` fields are
 deliberately not included; each lives at a different layer:
 
-- `max_basic_blocks`, `max_push_size`,
-  `max_back_edges_per_function`, `max_back_edges_per_module` —
-  per-function-pass concerns (CFG width, push-count bounds);
-  extend `AdamantStructuralLimits` in Phase 5/5b.4 alongside
-  the per-function passes that consume them. (`max_loop_depth`
-  was previously in this list and landed at D-2 alongside the
-  control-flow validation pass — see the entry above.)
+- `max_basic_blocks`, `max_back_edges_per_function`,
+  `max_back_edges_per_module` — per-function-pass concerns
+  (CFG width); extend `AdamantStructuralLimits` in Phase 5/5b.4
+  alongside the per-function passes that consume them.
+  (`max_loop_depth` was previously in this list and landed at
+  D-2 alongside the control-flow validation pass; `max_push_size`
+  was previously in this list and landed at D-3 alongside the
+  operand-stack discipline pass — see the entries above.)
 - `max_value_stack_size` — runtime concern (operand stack
   bound during execution); lives in AVM runtime config in the
   Phase 5/6.3 sub-arc per whitepaper §6.3.

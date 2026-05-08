@@ -817,6 +817,7 @@ mod tests {
             max_identifier_len: None,
             disallow_self_identifier: false,
             max_loop_depth: None,
+            max_push_size: None,
         };
         assert!(verify(&m, &limits).is_ok());
     }
