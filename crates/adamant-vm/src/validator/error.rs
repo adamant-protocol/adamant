@@ -1077,6 +1077,22 @@ pub enum AdamantValidationError {
         /// Bytecode offset of the offending `Ret`.
         code_offset: CodeOffset,
     },
+    /// Per-instruction type-safety check rejected an
+    /// operand-type mismatch. Carries a [`TypeMismatchReason`]
+    /// closed-enum sub-reason for diagnostic precision while
+    /// keeping the top-level variant count bounded.
+    ///
+    /// Whitepaper §6.2.1.8 step 4 (per-function passes:
+    /// type safety). Phase 5/5b.4 D-5a.
+    TypeMismatch {
+        /// Function-definition index whose body fired the
+        /// rejection.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Bytecode offset of the offending instruction.
+        code_offset: CodeOffset,
+        /// Sub-reason discriminator.
+        reason: TypeMismatchReason,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 3, 6, 7 land in subsequent
@@ -1238,6 +1254,97 @@ impl core::fmt::Display for IrreducibleReason {
             Self::LoopMaxDepthReached => {
                 write!(f, "loop nesting depth exceeded the configured maximum")
             }
+        }
+    }
+}
+
+/// Sub-reason discriminator for an
+/// [`AdamantValidationError::TypeMismatch`] rejection.
+///
+/// Mirrors upstream `move-bytecode-verifier::type_safety`'s
+/// distinct `StatusCode` values for type-mismatch shapes as a
+/// closed-enum sub-reason rather than flat top-level variants.
+/// Same shape pattern as [`InvalidSignatureReason`] (C-3),
+/// [`MalformedConstantReason`] (B-2.1), [`IrreducibleReason`]
+/// (D-2). 7th public closed enum at the validator surface
+/// (7th deliberate-Adamant-decision instance).
+///
+/// Phase 5/5b.4 D-5a (`function_pass::type_safety`).
+///
+/// Per Q2(b) at D-5a plan-gate, 8 sub-reasons land at this
+/// commit; additional 4–6 surface empirically at impl-gate
+/// (deliberate-deferral-with-impl-gate-expansion sub-pattern;
+/// 1st instance at D-5a closure).
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum TypeMismatchReason {
+    /// Operand on the abstract typed-stack does not match the
+    /// type the consuming instruction expects (e.g., `Add`
+    /// requires two integers; `ReadRef` requires a reference).
+    OperandTypeMismatch,
+    /// `Call` / `CallGeneric` argument types do not match the
+    /// addressed `FunctionHandle`'s parameter signature.
+    WrongFunctionSignature,
+    /// `Pack` / `Unpack` argument types do not match the
+    /// addressed struct definition's field types.
+    WrongPackUnpackType,
+    /// `Eq` / `Neq` comparison applied to types lacking the
+    /// `drop` ability (equality requires copyable + droppable
+    /// operands per Move's ability calculus).
+    EqualityComparisonInvalid,
+    /// `ReadRef` / `WriteRef` reference type does not match
+    /// the expected referent type.
+    ReferenceTypeNotMatched,
+    /// `MutBorrowField` / `ImmBorrowField` reference operand
+    /// type does not match the field's owning struct type.
+    BorrowFieldTypeMismatch,
+    /// `CastUN` source operand is not a smaller integer type
+    /// (per Move's cast semantics: u8 → u16/u32/.../u256;
+    /// u16 → u32/...; etc.).
+    CastTargetTypeInvalid,
+    /// Binary operation (`Add`, `Sub`, `Mul`, etc.) applied
+    /// to operands of different integer types or non-integer
+    /// types.
+    BinaryOpTypeMismatch,
+    /// Vector operation (`VecPack`, `VecUnpack`, `VecLen`,
+    /// `VecImmBorrow`, `VecMutBorrow`, `VecPushBack`,
+    /// `VecPopBack`, `VecSwap`) operand type does not match
+    /// the declared element type.
+    VecOpTypeMismatch,
+    /// `FreezeRef` requires a mutable reference; immutable
+    /// reference operand is invalid.
+    FreezeRefRequiresMutableReference,
+    /// `WriteRef` target reference is immutable; only mutable
+    /// references support writes.
+    WriteRefRequiresMutableReference,
+    /// `VariantSwitch` operand is not an immutable reference,
+    /// or its inner type does not match the jump table's
+    /// declared head enum.
+    VariantSwitchTypeMismatch,
+    /// `Ret` operand-stack contents do not match the
+    /// function's declared return signature.
+    RetTypeMismatch,
+    /// `StLoc` / `MoveLoc` / `CopyLoc` value type does not
+    /// match the local's declared type at the same index.
+    LocalTypeMismatch,
+}
+
+impl core::fmt::Display for TypeMismatchReason {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::OperandTypeMismatch => write!(f, "operand type does not match instruction's expectation"),
+            Self::WrongFunctionSignature => write!(f, "Call/CallGeneric arguments do not match function-handle signature"),
+            Self::WrongPackUnpackType => write!(f, "Pack/Unpack field types do not match struct definition"),
+            Self::EqualityComparisonInvalid => write!(f, "Eq/Neq applied to types without drop ability"),
+            Self::ReferenceTypeNotMatched => write!(f, "ReadRef/WriteRef reference type does not match expected referent"),
+            Self::BorrowFieldTypeMismatch => write!(f, "MutBorrowField/ImmBorrowField reference does not point to the field's owning struct"),
+            Self::CastTargetTypeInvalid => write!(f, "cast source operand is not a valid integer type"),
+            Self::BinaryOpTypeMismatch => write!(f, "binary operation on operands of mismatched types"),
+            Self::VecOpTypeMismatch => write!(f, "vector operation operand type does not match element type"),
+            Self::FreezeRefRequiresMutableReference => write!(f, "FreezeRef requires a mutable reference"),
+            Self::WriteRefRequiresMutableReference => write!(f, "WriteRef target reference is immutable"),
+            Self::VariantSwitchTypeMismatch => write!(f, "VariantSwitch operand is not an immutable reference to the expected enum"),
+            Self::RetTypeMismatch => write!(f, "Ret operand types do not match function's declared return signature"),
+            Self::LocalTypeMismatch => write!(f, "local-variable operation type does not match the local's declared type"),
         }
     }
 }
@@ -1784,6 +1891,16 @@ impl core::fmt::Display for AdamantValidationError {
                 "function definition {} offset {code_offset}: Ret with at least one \
                  local still available whose type lacks the `drop` ability \
                  (whitepaper §6.2.1.8 step 4, `function_pass::locals_safety`)",
+                fn_def_idx.0
+            ),
+            Self::TypeMismatch {
+                fn_def_idx,
+                code_offset,
+                reason,
+            } => write!(
+                f,
+                "function definition {} offset {code_offset}: {reason} \
+                 (whitepaper §6.2.1.8 step 4, `function_pass::type_safety`)",
                 fn_def_idx.0
             ),
         }

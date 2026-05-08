@@ -114,6 +114,7 @@
 
 #![allow(dead_code)] // D-1..D-2 foundation; entry point wires in at D-6.
 
+pub(super) mod abstract_stack;
 pub(super) mod absint;
 pub(super) mod cfg;
 pub(super) mod control_flow;
