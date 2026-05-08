@@ -12,44 +12,6 @@ publish.workspace = true
 adamant-bytecode-format = { workspace = true }
 adamant-crypto = { path = "../adamant-crypto" }
 adamant-types = { path = "../adamant-types" }
-# Vendored Sui-Move bytecode crate per whitepaper §6.2.1.1.
-# After Phase 5/5b.1b's type-fork, adamant-vm's production
-# paths consume Adamant-owned types from adamant-bytecode-format
-# end-to-end; this dep is retained for the transitional
-# validator wrapper bridge in `validator/mod.rs` (Sui-side
-# deserializer + Sui-verifier path) and for the `to_sui_module`
-# BCS round-trip conversion target used at test time only for
-# cross-validation per §6.2.1.8.
-#
-# `features = ["wasm"]` enables Sui's gated Serialize/Deserialize
-# derives on bytecode-format types, required for the BCS round-
-# trip in `module::to_sui_module` (test-time path) and for the
-# cross-validation tests in `adamant-bytecode-format`. The
-# feature does not affect production code paths in adamant-vm
-# (production code never serialises Sui types). Both this dep
-# and the `wasm` feature are removed in Phase 5/5b.5 along with
-# the validator wrapper bridge.
-move-binary-format = { workspace = true, features = ["wasm"] }
-# move-core-types provides U256 used by the bytecode wire format
-# (`Bytecode::LdU256` operand). Re-exported transitively via
-# move-binary-format but referenced directly here for the
-# little-endian U256 encoding per §6.2.1.5 amendment 83bb1e9.
-# Also provides the `Metadata` type (`metadata::Metadata`) the
-# §6.2.1.6 validator rules consult, and `AccountAddress` used at
-# the module-handle / address-pool layer.
-move-core-types = { workspace = true }
-# Vendored Sui-Move bytecode verifier (Batch 2) per whitepaper
-# §6.2.1.6; the inherited verifier passes (type safety, reference
-# safety, linearity, etc.) run before Adamant-specific rules in
-# `validator::verify_module`. Transitional bridge — Phase 5/5b.4
-# and 5/5b.5 replace this with Adamant-native per-function passes.
-move-bytecode-verifier = { workspace = true }
-# Provides `VerifierConfig` consumed by the inherited verifier;
-# `AdamantVerifierConfig` wraps it with `deprecate_global_storage_ops`
-# locked to `true` as defense-in-depth (§6.2.1.6 Rule 5's primary
-# enforcement point is in `adamant_deserialize`'s strict mode
-# post-Phase 5/5a).
-move-vm-config = { workspace = true }
 # Graph algorithms for the recursive-data-definition cycle
 # detector (Phase 5/5b.2 B-3.2 `module_pass::recursive_data_def`)
 # and the generic-instantiation-loop detector (B-3.3
@@ -59,8 +21,8 @@ move-vm-config = { workspace = true }
 # `rust-version = "1.64"`; Adamant's `rust-toolchain.toml`
 # pins channel `1.95.0`. License Apache-2.0 / MIT dual,
 # compatible with Adamant's Apache 2.0. Production-dep audit
-# template established here for future graph/algorithm
-# crates — registered for B-3.4 PROVENANCE.md batch.
+# template established at B-3.2 in
+# `validator/module_pass/PROVENANCE.md`.
 petgraph = { workspace = true }
 serde = { workspace = true }
 serde-big-array = { workspace = true }
@@ -69,15 +31,34 @@ bcs = { workspace = true }
 [dev-dependencies]
 hex = { workspace = true }
 hex-literal = { workspace = true }
-# Required by Layer B cross-validation tests for the
-# `module_pass::ability_field_requirements` pass (B-2.3).
-# Sui's `ability_field_requirements::verify_module` takes a
-# `Meter` parameter; tests pass `DummyMeter` from this crate.
-# Test-only; never reaches the production binary's dependency
-# graph (consistent with the resistant-proof posture per
-# §6.2.1.8: `move-*` crates are test-only or build-tooling
-# only). Removed alongside the validator wrapper bridge in
-# Phase 5/5b.5.
+# Vendored Sui-Move crates moved from [dependencies] to
+# [dev-dependencies] at Phase 5/5b.5 E-1b alongside the Sui-
+# verifier bridge tear-out per whitepaper §6.2.1.8's resistant-
+# proof posture. None of these crates appears in the production
+# binary's dependency graph; the build-system independence
+# check at `tests/no_sui_in_production_deps.rs` enforces this
+# mechanically via cargo-metadata's resolved-tree walk.
+#
+# Test-only roles:
+# - move-binary-format (with wasm): provides Sui's CompiledModule
+#   for the test-only `to_sui_module` BCS round-trip path and
+#   for Layer B cross-validation parity tests. The wasm feature
+#   stays on the dev-dep entry because cross-validation needs
+#   serde derives on Sui's bytecode-format types.
+# - move-core-types: provides AccountAddress + Identifier +
+#   Metadata for the test-only Sui shape construction.
+# - move-bytecode-verifier: provides Sui's verifier passes
+#   (control_flow + code_unit_verifier::verify_module +
+#   AbilityCache) consumed by the Layer B parity tests.
+# - move-vm-config: provides VerifierConfig + the upstream
+#   DEFAULT_* structural-limits constants for the upstream-
+#   parity pin in `validator/config.rs`.
+# - move-bytecode-verifier-meter: provides DummyMeter for
+#   Layer B parity tests; here since Phase 5/5b.2 B-2.3.
+move-binary-format = { workspace = true, features = ["wasm"] }
+move-core-types = { workspace = true }
+move-bytecode-verifier = { workspace = true }
+move-vm-config = { workspace = true }
 move-bytecode-verifier-meter = { workspace = true }
 proptest = { workspace = true }
 

@@ -18,6 +18,30 @@
 // Sui-side `BinaryConfig` / `VerifierConfig` imports removed at
 // Phase 5/5b.5 E-1a alongside the bridge tear-out.
 
+// Adamant-native structural-limits constants. These mirror Sui-
+// Move's `move_vm_config::verifier::DEFAULT_*` constants at the
+// vendored snapshot's fork time and are duplicated here so the
+// production-binary's dependency graph carries no reference to
+// `move_vm_config` per the §6.2.1.8 resistant-proof posture.
+// Upstream-parity is asserted at test time by the
+// `adamant_structural_limits_constants_match_sui_upstream` test
+// below; if upstream changes any value in a future tag, the
+// test fails as a development-time signal per the vendor-
+// refresh checklist in `module_pass/PROVENANCE.md`.
+
+/// Maximum number of variants in an enum definition. Mirrors
+/// Sui's `move_vm_config::verifier::DEFAULT_MAX_VARIANTS = 127`.
+pub(super) const DEFAULT_MAX_VARIANTS: u64 = 127;
+
+/// Maximum byte length of a `Constant`'s `data` field. Mirrors
+/// Sui's `move_vm_config::verifier::DEFAULT_MAX_CONSTANT_VECTOR_LEN
+/// = 1024 * 1024 = 1 MiB`.
+pub(super) const DEFAULT_MAX_CONSTANT_VECTOR_LEN: u64 = 1024 * 1024;
+
+/// Maximum byte length of an identifier. Mirrors Sui's
+/// `move_vm_config::verifier::DEFAULT_MAX_IDENTIFIER_LENGTH = 128`.
+pub(super) const DEFAULT_MAX_IDENTIFIER_LENGTH: u64 = 128;
+
 /// Adamant-native structural-limits configuration.
 ///
 /// Consumed by the Phase 5/5b.2 module-level passes (B-3's
@@ -158,12 +182,12 @@ impl AdamantStructuralLimits {
             // structs per module = ~160 KB worst case).
             // Documented in module_pass/PROVENANCE.md.
             max_fields_in_struct: Some(50),
-            // Bucket B (mirror Sui's literal default).
-            max_variants_in_enum: Some(move_vm_config::verifier::DEFAULT_MAX_VARIANTS),
-            max_constant_vector_len: Some(
-                move_vm_config::verifier::DEFAULT_MAX_CONSTANT_VECTOR_LEN,
-            ),
-            max_identifier_len: Some(move_vm_config::verifier::DEFAULT_MAX_IDENTIFIER_LENGTH),
+            // Bucket B (mirror Sui's literal default; constants
+            // duplicated as Adamant-native per the resistant-
+            // proof posture; upstream-parity pin at test time).
+            max_variants_in_enum: Some(DEFAULT_MAX_VARIANTS),
+            max_constant_vector_len: Some(DEFAULT_MAX_CONSTANT_VECTOR_LEN),
+            max_identifier_len: Some(DEFAULT_MAX_IDENTIFIER_LENGTH),
             // Bucket B (defense-in-depth flip from Sui's
             // false). The `<SELF>` literal is a Move-internal
             // sentinel that should never appear in deployed
@@ -257,7 +281,10 @@ impl Default for AdamantVerifierConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::AdamantVerifierConfig;
+    use super::{
+        AdamantVerifierConfig, DEFAULT_MAX_CONSTANT_VECTOR_LEN, DEFAULT_MAX_IDENTIFIER_LENGTH,
+        DEFAULT_MAX_VARIANTS,
+    };
 
     #[test]
     fn genesis_structural_limits_match_approved_values() {
@@ -286,23 +313,51 @@ mod tests {
         // ships Some(50) for extension-friendly headroom.
         assert_eq!(limits.max_fields_in_struct, Some(50));
 
-        // Bucket B — Sui's literal default.
+        // Bucket B — Sui's literal default (Adamant-native
+        // constants duplicated; upstream-parity pinned by the
+        // separate `adamant_structural_limits_constants_match_sui_upstream`
+        // test below).
         assert_eq!(
             limits.max_constant_vector_len,
-            Some(move_vm_config::verifier::DEFAULT_MAX_CONSTANT_VECTOR_LEN)
+            Some(DEFAULT_MAX_CONSTANT_VECTOR_LEN)
         );
         assert_eq!(
             limits.max_identifier_len,
-            Some(move_vm_config::verifier::DEFAULT_MAX_IDENTIFIER_LENGTH)
+            Some(DEFAULT_MAX_IDENTIFIER_LENGTH)
         );
-        assert_eq!(
-            limits.max_variants_in_enum,
-            Some(move_vm_config::verifier::DEFAULT_MAX_VARIANTS)
-        );
+        assert_eq!(limits.max_variants_in_enum, Some(DEFAULT_MAX_VARIANTS));
         // Bucket B — defense-in-depth flip from Sui's false.
         // `<SELF>` is a Move-internal sentinel; rejecting at
         // verifier time costs nothing and closes a class of
         // injection attempts.
         assert!(limits.disallow_self_identifier);
+    }
+
+    /// Cross-validation pin: Adamant's duplicated structural-
+    /// limits constants must equal Sui's upstream
+    /// `move_vm_config::verifier::DEFAULT_*` constants at the
+    /// vendored snapshot. If upstream changes any value in a
+    /// future tag, this test fails as a development-time signal
+    /// per the vendor-refresh checklist in
+    /// `module_pass/PROVENANCE.md`. Tests live in test code
+    /// where `move_vm_config` is available as a dev-dependency;
+    /// production code uses the Adamant-native constants.
+    #[test]
+    fn adamant_structural_limits_constants_match_sui_upstream() {
+        assert_eq!(
+            DEFAULT_MAX_VARIANTS,
+            move_vm_config::verifier::DEFAULT_MAX_VARIANTS,
+            "Adamant DEFAULT_MAX_VARIANTS must match Sui upstream"
+        );
+        assert_eq!(
+            DEFAULT_MAX_CONSTANT_VECTOR_LEN,
+            move_vm_config::verifier::DEFAULT_MAX_CONSTANT_VECTOR_LEN,
+            "Adamant DEFAULT_MAX_CONSTANT_VECTOR_LEN must match Sui upstream"
+        );
+        assert_eq!(
+            DEFAULT_MAX_IDENTIFIER_LENGTH,
+            move_vm_config::verifier::DEFAULT_MAX_IDENTIFIER_LENGTH,
+            "Adamant DEFAULT_MAX_IDENTIFIER_LENGTH must match Sui upstream"
+        );
     }
 }
