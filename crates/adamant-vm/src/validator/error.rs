@@ -1011,6 +1011,72 @@ pub enum AdamantValidationError {
         /// Block-entry offset of the offending block.
         code_offset: CodeOffset,
     },
+    /// `StLoc(idx)` would destroy a value at `idx` whose type
+    /// lacks the `drop` ability. Local was `Available` or
+    /// `MaybeAvailable` and the `StLoc` would overwrite the
+    /// prior value.
+    ///
+    /// Whitepaper §6.2.1.8 step 4 (per-function passes:
+    /// locals safety). Phase 5/5b.4 D-4.
+    StLocDestroysNonDrop {
+        /// Function-definition index whose body fired the
+        /// rejection.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Bytecode offset of the offending `StLoc`.
+        code_offset: CodeOffset,
+    },
+    /// `MoveLoc(idx)` was applied to a local that may not be
+    /// available on every CFG path reaching this offset.
+    /// Locals safety rejects to preserve the move-once
+    /// linearity invariant.
+    ///
+    /// Whitepaper §6.2.1.8 step 4. Phase 5/5b.4 D-4.
+    MoveLocUnavailable {
+        /// Function-definition index whose body fired the
+        /// rejection.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Bytecode offset of the offending `MoveLoc`.
+        code_offset: CodeOffset,
+    },
+    /// `CopyLoc(idx)` was applied to a local that may not be
+    /// available on every CFG path. Even though copy doesn't
+    /// transfer ownership, an `Unavailable` local has no
+    /// value to copy.
+    ///
+    /// Whitepaper §6.2.1.8 step 4. Phase 5/5b.4 D-4.
+    CopyLocUnavailable {
+        /// Function-definition index whose body fired the
+        /// rejection.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Bytecode offset of the offending `CopyLoc`.
+        code_offset: CodeOffset,
+    },
+    /// `MutBorrowLoc(idx)` or `ImmBorrowLoc(idx)` was applied
+    /// to a local that may not be available. Borrowing
+    /// requires the referent to exist.
+    ///
+    /// Whitepaper §6.2.1.8 step 4. Phase 5/5b.4 D-4.
+    BorrowLocUnavailable {
+        /// Function-definition index whose body fired the
+        /// rejection.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Bytecode offset of the offending borrow
+        /// instruction.
+        code_offset: CodeOffset,
+    },
+    /// `Ret` was reached with at least one local still
+    /// `Available` or `MaybeAvailable` whose type lacks the
+    /// `drop` ability. Implicit destruction of non-drop
+    /// values is rejected.
+    ///
+    /// Whitepaper §6.2.1.8 step 4. Phase 5/5b.4 D-4.
+    RetWithUndroppedLocals {
+        /// Function-definition index whose body fired the
+        /// rejection.
+        fn_def_idx: FunctionDefinitionIndex,
+        /// Bytecode offset of the offending `Ret`.
+        code_offset: CodeOffset,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
     // variant. Variants for Rules 3, 6, 7 land in subsequent
@@ -1668,6 +1734,56 @@ impl core::fmt::Display for AdamantValidationError {
                 "function definition {} offset {code_offset}: basic block ends with \
                  non-zero stack delta (or Ret-terminated block does not match return \
                  arity) (whitepaper §6.2.1.8 step 4, `function_pass::stack_usage`)",
+                fn_def_idx.0
+            ),
+            Self::StLocDestroysNonDrop {
+                fn_def_idx,
+                code_offset,
+            } => write!(
+                f,
+                "function definition {} offset {code_offset}: StLoc would destroy a \
+                 value whose type lacks the `drop` ability (whitepaper §6.2.1.8 \
+                 step 4, `function_pass::locals_safety`)",
+                fn_def_idx.0
+            ),
+            Self::MoveLocUnavailable {
+                fn_def_idx,
+                code_offset,
+            } => write!(
+                f,
+                "function definition {} offset {code_offset}: MoveLoc on a local \
+                 that may not be available on every CFG path (whitepaper §6.2.1.8 \
+                 step 4, `function_pass::locals_safety`)",
+                fn_def_idx.0
+            ),
+            Self::CopyLocUnavailable {
+                fn_def_idx,
+                code_offset,
+            } => write!(
+                f,
+                "function definition {} offset {code_offset}: CopyLoc on a local \
+                 that may not be available on every CFG path (whitepaper §6.2.1.8 \
+                 step 4, `function_pass::locals_safety`)",
+                fn_def_idx.0
+            ),
+            Self::BorrowLocUnavailable {
+                fn_def_idx,
+                code_offset,
+            } => write!(
+                f,
+                "function definition {} offset {code_offset}: MutBorrowLoc or \
+                 ImmBorrowLoc on a local that may not be available on every CFG \
+                 path (whitepaper §6.2.1.8 step 4, `function_pass::locals_safety`)",
+                fn_def_idx.0
+            ),
+            Self::RetWithUndroppedLocals {
+                fn_def_idx,
+                code_offset,
+            } => write!(
+                f,
+                "function definition {} offset {code_offset}: Ret with at least one \
+                 local still available whose type lacks the `drop` ability \
+                 (whitepaper §6.2.1.8 step 4, `function_pass::locals_safety`)",
                 fn_def_idx.0
             ),
         }

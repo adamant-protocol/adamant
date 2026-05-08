@@ -42,8 +42,12 @@ use adamant_bytecode_format::{
 use crate::module::AdamantCompiledModule;
 
 /// Errors returned by [`AdamantAbilityCache::abilities`].
+///
+/// Visibility promoted to `pub(in crate::validator)` at D-4
+/// alongside [`AdamantAbilityCache`] for the same reason — see
+/// the cache type's doc-comment.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(super) enum AbilityCacheError {
+pub(in crate::validator) enum AbilityCacheError {
     /// The type parameter index referenced by a
     /// [`SignatureToken::TypeParameter`] is out of range for the
     /// ambient `type_parameter_abilities` slice. Structurally
@@ -72,7 +76,18 @@ pub(super) enum AbilityCacheError {
 /// table layout; the algorithm reduces N type-arg evaluations
 /// for the same shape from O(N) repeated work to O(1) lookup
 /// after the first computation.
-pub(super) struct AdamantAbilityCache<'env> {
+///
+/// Visibility was promoted from `pub(super)` (B-2.3 module-
+/// pass-internal) to `pub(in crate::validator)` at D-4 so
+/// `function_pass::locals_safety` can consume the cache for
+/// inline per-function ability resolution per Q3(a) at the D-4
+/// plan-gate. Each consuming pass instantiates a fresh cache
+/// scoped to its own work — B-2.3 established per-pass-instance
+/// lifecycle (cache reused across struct/enum traversals
+/// within one pass invocation); D-4 establishes a stricter
+/// per-function lifecycle (cache discarded after a single
+/// `LocalsAbstractState::new` call).
+pub(in crate::validator) struct AdamantAbilityCache<'env> {
     module: &'env AdamantCompiledModule,
     vector_results: BTreeMap<AbilitySet, AbilitySet>,
     datatype_results: BTreeMap<DatatypeHandleIndex, BTreeMap<Vec<AbilitySet>, AbilitySet>>,
@@ -80,7 +95,7 @@ pub(super) struct AdamantAbilityCache<'env> {
 
 impl<'env> AdamantAbilityCache<'env> {
     /// Build a fresh cache bound to `module`.
-    pub(super) fn new(module: &'env AdamantCompiledModule) -> Self {
+    pub(in crate::validator) fn new(module: &'env AdamantCompiledModule) -> Self {
         Self {
             module,
             vector_results: BTreeMap::new(),
@@ -94,7 +109,7 @@ impl<'env> AdamantAbilityCache<'env> {
     /// `type_parameter_abilities[i]` is the ability set bound to
     /// type parameter `i` in the enclosing context (struct,
     /// enum, or function generic header).
-    pub(super) fn abilities(
+    pub(in crate::validator) fn abilities(
         &mut self,
         type_parameter_abilities: &[AbilitySet],
         ty: &SignatureToken,

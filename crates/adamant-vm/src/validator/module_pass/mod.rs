@@ -42,7 +42,13 @@
 //! before the transitional Sui-verifier bridge; B-6 closes
 //! out with workspace test-pass + CLAUDE.md state-bump.
 
-mod ability_cache;
+// Visibility promoted from `mod` (private) to `pub(super)` at
+// D-4 so `function_pass::locals_safety` can consume
+// `AdamantAbilityCache` for inline per-function ability
+// resolution (Q3a). The cache type itself uses
+// `pub(in crate::validator)` so it's reachable via
+// `crate::validator::module_pass::ability_cache::*`.
+pub(super) mod ability_cache;
 pub(super) mod ability_field_requirements;
 pub(super) mod bounds_checker;
 pub(super) mod constants;

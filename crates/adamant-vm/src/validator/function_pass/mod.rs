@@ -55,7 +55,7 @@
 //!   Adamant extensions are non-branching, so a function
 //!   ending in any `Adamant(_)` arm is rejected as missing a
 //!   terminator (which is correct).
-//! - **D-3 (this commit).** Operand-stack discipline pass
+//! - **D-3.** Operand-stack discipline pass
 //!   ([`stack_usage`]); second consumer of
 //!   [`cfg::AdamantControlFlowGraph`] (does NOT consume
 //!   [`absint::AbstractInterpreter`] — D-4 locals safety is
@@ -72,10 +72,27 @@
 //!   mode at D-3 plan-gate, partitioning the 17 extensions
 //!   into 4 categories (Category A static / B parametric-FH /
 //!   C deferred-to-§7 / D deferred-to-§8.5).
-//! - D-4, D-5. Locals safety + acquires-list + type safety +
-//!   reference safety + Rule 3 (call-graph) + Rules 4, 5
-//!   reaffirmation per the D-1 plan-gate Q1 disposition. D-4
-//!   is the first consumer of [`absint::AbstractInterpreter`].
+//! - **D-4 (this commit).** Locals safety pass
+//!   ([`locals_safety`]) + acquires-list structural-
+//!   impossibility check; **first consumer of
+//!   [`absint::AbstractInterpreter`]**. Declares + produces +
+//!   tests five locals-safety variants
+//!   ([`AVE::StLocDestroysNonDrop`][AVE-stloc],
+//!   [`AVE::MoveLocUnavailable`][AVE-mv],
+//!   [`AVE::CopyLocUnavailable`][AVE-cp],
+//!   [`AVE::BorrowLocUnavailable`][AVE-borrow],
+//!   [`AVE::RetWithUndroppedLocals`][AVE-ret]). Confirms
+//!   Adamant-extension treatment sub-shape 3 — extensions
+//!   don't read/write/borrow locals; rule-of-three for sub-
+//!   shape 3 specifically met at D-4 closure (D-1a/D-2/D-4).
+//!   Acquires structural-impossibility (`unreachable!`-three-
+//!   anchor) is the 2nd instance of structural-impossibility-
+//!   checks sub-shape 2 (1st was B-2.4 deprecated arms).
+//!   `AdamantAbilityCache` visibility promoted from
+//!   `pub(super)` to `pub(in crate::validator)` for inline
+//!   per-function ability resolution per Q3(a) (6th
+//!   deliberate-Adamant-decision instance).
+//! - D-5. Type safety + reference safety + Rule 3 (call-graph) + Rules 4, 5 reaffirmation per the D-1 plan-gate Q1 disposition. Fires the 11th verification gate via §6.2.1.6 spec binding.
 //! - D-6. Pipeline integration into [`super::verify_module`]
 //!   step 4; bridge tear-out lands with 5/5b.5.
 //! - D-7. Closure batch + CLAUDE.md state-bump.
@@ -87,6 +104,11 @@
 //! [AVE-push]: super::AdamantValidationError::StackPushOverflow
 //! [AVE-under]: super::AdamantValidationError::StackUnderflow
 //! [AVE-unbal]: super::AdamantValidationError::UnbalancedStackAtBlockEnd
+//! [AVE-stloc]: super::AdamantValidationError::StLocDestroysNonDrop
+//! [AVE-mv]: super::AdamantValidationError::MoveLocUnavailable
+//! [AVE-cp]: super::AdamantValidationError::CopyLocUnavailable
+//! [AVE-borrow]: super::AdamantValidationError::BorrowLocUnavailable
+//! [AVE-ret]: super::AdamantValidationError::RetWithUndroppedLocals
 //! [IR]: super::AdamantValidationError
 //! [limits]: super::config::AdamantStructuralLimits
 
@@ -95,6 +117,7 @@
 pub(super) mod absint;
 pub(super) mod cfg;
 pub(super) mod control_flow;
+pub(super) mod locals_safety;
 pub(super) mod loop_summary;
 pub(super) mod stack_usage;
 
@@ -151,8 +174,15 @@ pub(super) fn verify_function_bodies(
             &code_unit.code,
             &cfg,
         )?;
-        // D-4..D-5 consume `cfg` here for locals + type +
-        // reference safety; orchestration wired at D-6.
+        locals_safety::verify_function(
+            module,
+            fn_def_idx,
+            function_definition,
+            &code_unit.code,
+            &cfg,
+        )?;
+        // D-5 consumes `cfg` here for type + reference safety;
+        // orchestration wired at D-6.
     }
     Ok(())
 }
