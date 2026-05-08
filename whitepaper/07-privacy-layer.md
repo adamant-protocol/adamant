@@ -102,46 +102,57 @@ Stealth addresses solve this by deriving a fresh, unlinkable address for every t
 
 ### 7.2.2 Construction
 
-The protocol uses a Diffie-Hellman-based stealth address scheme adapted from the Monero and Zcash designs.
+The protocol uses an **ML-KEM-based stealth address scheme**, providing post-quantum-secure key agreement (Principle VIII, section 2.8). Earlier drafts of this whitepaper specified a Diffie-Hellman scheme on BLS12-381 (analogous to Zcash Sapling/Orchard); that scheme is replaced here because Diffie-Hellman key agreement on BLS12-381 is not post-quantum-secure, and historical privacy is a permanent property that must survive future quantum cryptanalysis.
 
 A recipient's long-term identity comprises:
 
-- **Spending key** `sk_s`: scalar in the BLS12-381 scalar field
-- **Viewing key** `sk_v`: scalar in the BLS12-381 scalar field
-- **Spending public key** `pk_s = sk_s · G` where G is the curve generator
-- **Viewing public key** `pk_v = sk_v · G`
+- **Spending key** `sk_s`: scalar in the BLS12-381 scalar field (used for nullifier derivation and spending authorization, classical layer; see section 7.2.5 for hybrid-mode considerations)
+- **Viewing keypair** `(sk_v_kem, pk_v_kem)`: an ML-KEM-768 keypair (public key 1184 bytes, secret key 2400 bytes)
+- **Spending public key** `pk_s = sk_s · G` where G is the BLS12-381 curve generator
 
-The recipient's "address" published off-chain (in payment URIs, QR codes, etc.) is `(pk_s, pk_v)`.
+The recipient's "address" published off-chain (in payment URIs, QR codes, etc.) is `(pk_s, pk_v_kem)`. ML-KEM public keys are larger than ECDH public keys, so addresses are larger; address-encoding formats accommodate this (Bech32m at appropriate length, QR codes scaled correspondingly).
 
 To send a note to this recipient, a sender:
 
-1. Generates a fresh random scalar `r`
-2. Computes the stealth public key: `R = r · G` (this becomes part of the note's on-chain data)
-3. Computes the shared secret: `s = HashToScalar(r · pk_v || domain_tag)`
+1. Performs ML-KEM-768 encapsulation against `pk_v_kem`, producing `(ct, ss)` where `ct` is a 1088-byte ciphertext and `ss` is a 32-byte shared secret
+2. Stores `ct` as part of the note's on-chain data (analogous to the `R` element in classical schemes)
+3. Computes the shared scalar: `s = HashToScalar(ss || domain_tag)` where `HashToScalar` produces a BLS12-381 scalar field element
 4. Computes the one-time stealth address: `P = pk_s + s · G`
 5. Constructs the note with `recipient = P`
 
-The shared secret `s` derivation uses `pk_v` (the viewing key) so that the recipient can compute `s` using `sk_v` (since `r · pk_v = r · sk_v · G = sk_v · R`).
+The recipient's wallet, upon scanning the chain, performs for each note:
 
-The recipient's wallet, upon scanning the chain, computes for each note:
-
-1. `s' = HashToScalar(sk_v · R || domain_tag)`
-2. `P' = pk_s + s' · G`
-3. If `P' == note.recipient`, the note is for this recipient
+1. ML-KEM-768 decapsulation: `ss' = Decap(sk_v_kem, ct)`
+2. `s' = HashToScalar(ss' || domain_tag)`
+3. `P' = pk_s + s' · G`
+4. If `P' == note.recipient`, the note is for this recipient
 
 If the note is theirs, the recipient derives the corresponding spending key as `sk' = sk_s + s'` and uses it to construct the nullifier when spending.
 
+**Why ML-KEM and not BLS12-381 ECDH.** ECDH on BLS12-381 (or any elliptic curve over a finite field) is broken by Shor's algorithm; a future quantum adversary observing historical chain state can recover `r · pk_v` from `(r · G, pk_v)` by computing the discrete logarithm. ML-KEM is lattice-based and presumed post-quantum-secure; encapsulation outputs cannot be retroactively broken by quantum attack. The cost of this protection is the per-note ciphertext size (1088 bytes vs ~32 bytes for ECDH); this is amortised across the note's lifetime and is acceptable given the permanence of the privacy guarantee.
+
+**Bytecode-level construction.** Section 6.2.1.4's `MlKemEncapsulate` and `MlKemDecapsulate` instructions perform the ML-KEM operations inside Adamant Move shielded circuits. The compiler emits these instructions automatically when `#[shielded]` functions construct or process notes; contract authors do not invoke them directly.
+
 ### 7.2.3 Properties
 
-- **Unlinkability.** Two stealth addresses for the same recipient look entirely uncorrelated to anyone without the viewing key. Computing the link requires either `sk_v` or solving the discrete logarithm problem on BLS12-381.
+- **Unlinkability.** Two stealth addresses for the same recipient look entirely uncorrelated to anyone without the viewing keypair. Computing the link requires either `sk_v_kem` or breaking ML-KEM, which is presumed hard against both classical and quantum adversaries.
 - **No interaction.** The sender does not communicate with the recipient; the stealth address is derived purely from public information.
-- **Selective disclosure compatible.** Disclosing the viewing key reveals all notes for the recipient but does not reveal the spending key, so view-key holders can audit but not spend.
+- **Selective disclosure compatible.** Disclosing the viewing keypair reveals all notes for the recipient but does not reveal the spending key, so view-key holders can audit but not spend.
+- **Post-quantum secure.** Future quantum cryptanalysis cannot retroactively deanonymise transactions that used ML-KEM-derived stealth addresses. This is the substantive improvement over the classical scheme this construction replaces.
 
 ### 7.2.4 View tag optimisation
 
 A naive scan of the chain requires the recipient to compute `s'` and `P'` for every note ever created — an operation that becomes prohibitive as the chain grows. The protocol addresses this with a **view tag**: an 8-bit value attached to each note, computed from the shared secret. A wallet scanning notes can quickly reject notes whose view tag does not match the expected value, computing the full check only for the ~1/256 notes that pass the tag filter.
 
-This optimisation is borrowed from Monero's view tag design (introduced 2022). It reduces wallet scan cost by roughly 256× at the cost of a minor reduction in privacy: an attacker observing the view tags of a known recipient can identify roughly 1/256 of notes as candidates for that recipient. This is a substantially weaker signal than full address linkage and is widely accepted as a reasonable trade-off.
+The view tag is computed as `view_tag = SHA3_256(ss || tag_domain)[0]` where `ss` is the ML-KEM shared secret. Wallets first compute the view tag from the candidate decapsulation, compare it to the on-chain tag, and proceed to the full address derivation only on match.
+
+This optimisation is borrowed from Monero's view tag design (introduced 2022), adapted to the ML-KEM construction. It reduces wallet scan cost by roughly 256× at the cost of a minor reduction in privacy: an attacker observing the view tags of a known recipient can identify roughly 1/256 of notes as candidates for that recipient. This is a substantially weaker signal than full address linkage and is widely accepted as a reasonable trade-off.
+
+### 7.2.5 Spending key in hybrid signature mode
+
+The spending key `sk_s` controls authorisation to spend notes received at stealth addresses. Per Principle VIII (hybrid signatures), users may configure spending authorization via either Ed25519 (default for routine spending) or ML-DSA (opt-in for elevated threat models). The wallet derives both from the same master seed via HKDF-SHA3 with distinct domain separators.
+
+The protocol's nullifier derivation (section 7.1.2) is independent of the spending signature scheme: nullifiers commit to the note position and the spending key, not to the signature. A user who later opts up from Ed25519 to ML-DSA spending does not invalidate previously-derived nullifiers; the spending key material is the same, only the signature scheme over the spend transaction changes.
 
 ## 7.3 Shielded execution circuits
 
@@ -382,35 +393,45 @@ This subsection documents what the privacy layer protects against and what it do
 
 - **Operational security failures.** A user reusing the same payment addresses, leaking metadata through transaction timing, or interacting predictably with services that expose their identity reduces their practical anonymity.
 
-- **Quantum cryptanalysis (long-term).** The privacy primitives (BLS12-381, Halo 2) are not post-quantum. A future quantum adversary could retroactively break the privacy of historical shielded transactions. This is a known limitation; the protocol's signature scheme is post-quantum (ML-DSA), but the privacy primitives are not yet, because production-ready post-quantum proving systems do not exist as of this draft. Section 11 specifies the migration path.
+- **Quantum cryptanalysis (long-term).** The Halo 2 proving system is not post-quantum: it relies on discrete-log assumptions that Shor's algorithm breaks. A future quantum adversary could retroactively break the soundness of historical Halo 2 proofs, which means a quantum adversary could in principle produce false witnesses for historical state transitions — but they cannot retroactively *change* committed history because the commitments themselves are SHA-3-based and post-quantum-secure. The implications and limits are addressed in subsection 7.9.3.
+
+  Stealth address derivation and encrypted memo delivery use ML-KEM-768 (section 3.7) and are post-quantum-secure. This is a substantive change from earlier drafts of this whitepaper, which specified BLS12-381 ECDH for these surfaces; that scheme would not have survived quantum cryptanalysis. With the ML-KEM construction, historical privacy of shielded transactions is preserved against future quantum adversaries.
+
+  The chain's signature layer is hybrid post-quantum (Principle VIII): identity layer (addresses, validator registrations, contract deployments) is post-quantum-secure via ML-DSA; ordinary transaction signatures use Ed25519 by default with ML-DSA available per-transaction.
 
 - **Side-channel attacks on prover hardware.** When proofs are generated on devices vulnerable to side channels (timing attacks, power analysis, electromagnetic leakage), an adversary with physical access could potentially extract witness data. This is a hardware concern, not a protocol concern.
 
-### 7.9.3 Quantum vulnerability of historical privacy
+### 7.9.3 Quantum vulnerability of historical proof soundness
 
-The protocol acknowledges that a future sufficiently large quantum computer could retroactively break BLS12-381-based discrete-log assumptions and retroactively break Halo 2's privacy guarantees. Transactions made today might, in 2050, be retrospectively decryptable.
+The protocol acknowledges that a future sufficiently large quantum computer could retroactively break Halo 2's discrete-log-based soundness assumptions. A quantum adversary could in principle produce a Halo 2 proof that verifies for a false statement, which would compromise the soundness of historical shielded-transaction proofs.
 
-This is a real and acknowledged limitation. The protocol's responses:
+Importantly, this is a different concern from the quantum vulnerability addressed by ML-KEM (section 3.7). Two surfaces should be distinguished:
 
-1. **Forward security via key rotation.** A user who rotates their viewing keys regularly limits the scope of historical decryption to the period under each key.
+1. **Key agreement** (stealth addresses, encrypted memos) is post-quantum-secure via ML-KEM. Historical privacy — who sent what to whom — survives the quantum threshold because the encapsulation cannot be retroactively broken.
 
-2. **Forward security of nullifiers.** Even if historical privacy is compromised, nullifiers prevent any reanalysis from triggering double-spends or other consensus violations. The chain's integrity is not at risk; only its historical privacy.
+2. **Proof soundness** (Halo 2 attestations of correct state transition) is not post-quantum. A quantum adversary could in principle produce false proofs for historical transactions; combined with control of a sufficient validator set, this could be used to retroactively claim that invalid state transitions had been validly proven.
+
+The chain's responses to the proof-soundness concern:
+
+1. **Forward-only impact.** Quantum forgery of historical proofs requires also rewriting the chain's recursive proof history forward from the point of forgery. The recursive proof's commitments (via SHA-3 and KZG) are post-quantum-binding; an adversary cannot insert a forged proof into committed history without breaking the cryptographic anchors that bind history to the genesis state.
+
+2. **Forward security of nullifiers.** Even if historical proof soundness is compromised, nullifiers prevent any reanalysis from triggering double-spends or other consensus violations on the running chain. The chain's integrity going forward is not at risk; only retrospective claims about historical statement validity.
 
 3. **Migration to post-quantum proving.** When post-quantum zk proving systems mature into production-ready form (likely some years after the chain's launch), the protocol can be migrated. New shielded transactions would use the new system. Section 11 specifies the migration mechanism.
 
-The honest assessment: a user requiring privacy that survives the next 25–50 years against nation-state-level adversaries with future quantum computers should not rely on Adamant's privacy layer alone. They should also use operational security measures (separate identities, careful counterparty selection, geographically diverse infrastructure) and consider the eventual post-quantum migration.
+The honest assessment: a user requiring privacy *and* dispute-resolution-grade proof soundness that survives the next 25–50 years against nation-state-level adversaries with future quantum computers should not rely on Adamant's privacy layer alone. They should also use operational security measures (separate identities, careful counterparty selection, geographically diverse infrastructure) and consider the eventual post-quantum migration.
 
-For the typical use cases — privacy of financial activity against contemporary adversaries, including most regulatory and commercial threat actors — the protocol's privacy is sound and substantial.
+For the typical use cases — privacy of financial activity against contemporary adversaries, including most regulatory and commercial threat actors — the protocol's privacy is sound and substantial. Historical privacy (who-sent-to-whom) is post-quantum-secure via ML-KEM; only proof-soundness retrospective attack remains as a limitation, and even that is bounded by the post-quantum-binding commitments that anchor chain history.
 
 ## 7.10 Summary
 
 The privacy layer is constructed from peer-reviewed primitives composed in well-understood patterns:
 
 - **Notes and nullifiers** following Zcash Orchard's design, extended for multi-asset support
-- **Stealth addresses** following the Diffie-Hellman construction shared with Monero and Zcash, with view-tag optimisation
+- **Stealth addresses** using ML-KEM-768 (FIPS 203) post-quantum key encapsulation, replacing the classical BLS12-381 ECDH that earlier drafts of this whitepaper specified — historical privacy is now post-quantum-secure
 - **Halo 2 proofs** for shielded execution validity, leveraging Zcash's production implementation
 - **View keys and sub-view-keys** for selective disclosure, structured for granular user control
-- **Encrypted memos** for sender-to-recipient context
+- **Encrypted memos** using ML-KEM-768 for sender-to-recipient context, post-quantum-secure
 - **Prover markets** for optional outsourcing of proof generation
 
-The contribution is the integration: a system where these primitives compose cleanly with the object model, the smart-contract language, and the consensus mechanism (specified in section 8 next), to deliver a chain that is genuinely private by default and genuinely usable.
+The contribution is the integration: a system where these primitives compose cleanly with the object model, the smart-contract language, and the consensus mechanism (specified in section 8 next), to deliver a chain that is genuinely private by default, post-quantum-secure at the privacy-relevant key-agreement surfaces, and genuinely usable.

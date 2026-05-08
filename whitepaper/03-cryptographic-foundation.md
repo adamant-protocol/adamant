@@ -34,11 +34,13 @@ The protocol uses five categories of cryptographic primitives, summarised here a
 |----------|-----------|-------------------|-----|
 | Hash function | SHA3-256, SHAKE-256 | FIPS 202 | All chain hashing, transaction identifiers, Merkle trees |
 | Hash to curve | BLAKE3 (auxiliary), Poseidon (zk circuits) | BLAKE3 spec; Grassi et al. 2020 | Auxiliary hashing, zk-friendly hashing inside circuits |
-| Classical signature | Ed25519 | RFC 8032 | User signatures, validator signatures (classical layer) |
-| Post-quantum signature | ML-DSA (CRYSTALS-Dilithium) | FIPS 204 | User signatures, validator signatures (PQ layer) |
+| Classical signature | Ed25519 | RFC 8032 | Ordinary user transactions, validator consensus messages |
+| Post-quantum signature | ML-DSA (CRYSTALS-Dilithium) | FIPS 204 | Identity-binding operations (validator registration, contract deployment, address derivation, opt-in high-value transactions) |
+| Post-quantum KEM | ML-KEM-768 (CRYSTALS-Kyber) | FIPS 203 | Stealth address derivation, encrypted memo delivery, post-quantum key agreement |
 | Aggregate signature | BLS12-381 (BLS signatures) | IRTF CFRG draft, BLS12-381 curve | Validator vote aggregation |
 | Symmetric encryption | ChaCha20-Poly1305 | RFC 8439 | Transport encryption, mempool envelope |
-| Threshold encryption | Boneh-Lynn-Shacham threshold scheme on BLS12-381 | Boneh, Boyen, Shacham 2004; subsequent work | Encrypted mempool |
+| Threshold encryption | Boneh-Lynn-Shacham threshold scheme on BLS12-381 | Boneh, Boyen, Shacham 2004; subsequent work | Encrypted mempool (threshold regime, N≥15) |
+| Time-lock encryption (VDF) | Wesolowski VDF on RSA / class groups | Wesolowski 2019 | Encrypted mempool (time-lock regime, N<15) |
 | Zero-knowledge proofs | Halo 2 (PLONKish, no trusted setup) | Bowe, Grigg, Hopwood 2019 | Shielded execution, recursive verification |
 | Vector commitments | KZG commitments on BLS12-381 | Kate, Zaverucha, Goldberg 2010 | State commitments, proof aggregation |
 
@@ -72,7 +74,7 @@ The construction has the following properties:
 - **Production-validated.** The doubled-tag-prefix construction has been deployed at production scale in Bitcoin since 2021 and is the de facto standard for hash-based domain separation in modern cryptographic protocols.
 - **Negligible runtime cost.** The cached `SHA3-256(tag)` is computed once per registered tag and reused. Each domain-separated hash costs one additional 64-byte absorb relative to a tag-less hash — invisible at any throughput the protocol targets.
 
-All tags are specified in the centralised registry maintained by the reference implementation (`crates/adamant-crypto/src/domain.rs`). Tags have the format `b"ADAMANT-v1-<context>"` where `<context>` identifies the specific use. Adding, removing, or renaming a tag is a consensus rule change and follows the procedure in section 3.10.
+All tags are specified in the centralised registry maintained by the reference implementation (`crates/adamant-crypto/src/domain.rs`). Tags have the format `b"ADAMANT-v1-<context>"` where `<context>` identifies the specific use. Adding, removing, or renaming a tag is a consensus rule change and follows the procedure in section 3.12.
 
 **Worked example:**
 
@@ -251,7 +253,7 @@ The choice of GT-value serialisation follows the standard compressed encoding fo
 
 ### 3.6.2 Distributed key generation
 
-At each epoch boundary, validators run a Pedersen-style DKG to establish the new master public key and individual key shares. The DKG protocol itself is specified in section 8 alongside consensus. The specification of DKG primitives (commitment, verification) is built on KZG commitments (section 3.7.2) over BLS12-381. Phase 1 of the reference implementation provides a trusted-dealer Shamir splitter for testing the cryptographic primitive in isolation; this splitter is explicitly marked as test-only and is replaced by the production DKG when consensus is implemented.
+At each epoch boundary, validators run a Pedersen-style DKG to establish the new master public key and individual key shares. The DKG protocol itself is specified in section 8 alongside consensus. The specification of DKG primitives (commitment, verification) is built on KZG commitments (section 3.9.2) over BLS12-381. Phase 1 of the reference implementation provides a trusted-dealer Shamir splitter for testing the cryptographic primitive in isolation; this splitter is explicitly marked as test-only and is replaced by the production DKG when consensus is implemented.
 
 ### 3.6.3 Quantum vulnerability
 
@@ -261,11 +263,90 @@ Threshold encryption based on BLS12-381 is vulnerable to a quantum adversary, in
 
 If, at some future point, post-quantum threshold encryption schemes mature into production-ready form, they may be adopted via specification revision under the procedure in section 12. The protocol does not attempt to anticipate which scheme that will be.
 
-## 3.7 Zero-knowledge proofs
+## 3.7 Post-quantum key encapsulation: ML-KEM
+
+The protocol uses **ML-KEM-768** (FIPS 203, the standardisation of CRYSTALS-Kyber) as the post-quantum key encapsulation mechanism (KEM). ML-KEM provides the protocol's post-quantum-secure key-agreement primitive — used wherever the protocol needs a sender to establish a shared secret with a recipient without prior communication, in a way that remains secure against future quantum adversaries.
+
+### 3.7.1 Why a KEM, not a signature scheme
+
+Earlier drafts of this whitepaper specified ML-DSA for the privacy layer's key-agreement surface (stealth address derivation, encrypted memo delivery). This was a primitive misidentification: ML-DSA is a signature scheme and does not support key agreement. Signature schemes prove message authorship; KEMs establish shared secrets. The post-quantum analog of the elliptic-curve Diffie-Hellman key agreement that backed earlier privacy designs is not ML-DSA but ML-KEM. Both are 2024 NIST-standardised lattice-based primitives, both have substantial implementation history, and using both is consistent with Principle VI (standard primitives, novel synthesis).
+
+### 3.7.2 Construction
+
+ML-KEM-768 is parameterised at NIST security level 3 (~AES-192 equivalent), matching the security level of ML-DSA-65 used for the protocol's post-quantum signatures. The KEM operations are:
+
+- **Key generation.** Produces a public key (1184 bytes) and secret key (2400 bytes).
+- **Encapsulation.** Given a public key, produces a ciphertext (1088 bytes) and a 32-byte shared secret. The ciphertext is sent to the recipient; the shared secret is used by the sender to derive symmetric keys.
+- **Decapsulation.** Given a secret key and a ciphertext, recovers the shared secret. The recipient performs decapsulation using their private key.
+
+The shared secret derived through encapsulation is computationally indistinguishable from random against any adversary not holding the secret key, including quantum adversaries operating against historical chain state.
+
+### 3.7.3 Use sites
+
+ML-KEM is used in the following protocol surfaces:
+
+- **Stealth address derivation (subsection 7.2).** The recipient publishes an ML-KEM public key; senders encapsulate to it to derive the per-note shared secret used to compute the stealth address.
+- **Encrypted memo delivery (subsection 7.6).** The same KEM construction encrypts memo content from sender to recipient.
+- **Any future key-exchange surface.** Post-genesis privacy-relevant key exchange mechanisms must use ML-KEM or another peer-reviewed post-quantum KEM to satisfy Principle VIII.
+
+The KEM does **not** replace ML-DSA. ML-DSA remains the protocol's identity-binding signature scheme (subsection 3.4.2). ML-KEM is added alongside it; together they cover the post-quantum-secure surfaces required by Principle VIII.
+
+### 3.7.4 Bandwidth cost
+
+ML-KEM ciphertexts are ~1.1KB per encapsulation. Stealth-address-derivation ciphertexts are stored on-chain as part of the note-publishing transaction. At the protocol's design-target throughput, this is per-note overhead, not per-transaction overhead — most transactions involve few notes. The total bandwidth and storage cost is tractable (subsection 7.2's analysis quantifies it). The per-note ciphertext size is the engineering cost of post-quantum-secure historical privacy; the protocol accepts this cost for the permanence of the privacy guarantee.
+
+### 3.7.5 Implementation
+
+The reference implementation uses the `ml-kem` crate from the `RustCrypto` project (or equivalent audited library) at the FIPS 203 parameter set. Constant-time implementation is required; the library's published timing characteristics are reviewed during cryptographic audit (subsection 3.11).
+
+### 3.7.6 Quantum vulnerability
+
+ML-KEM's security rests on the Module Learning With Errors (MLWE) problem, conjectured to be hard against both classical and quantum adversaries. No quantum algorithm is known that solves MLWE substantially faster than classical algorithms; the conjecture is the basis of NIST's selection of CRYSTALS-Kyber as the standardised KEM. The protocol therefore treats ML-KEM as plausibly post-quantum-secure for the operational lifetime of the chain. As with ML-DSA, future cryptanalysis may erode the security margin; specification revision under section 3.12 addresses this if needed.
+
+## 3.8 Time-lock encryption (Wesolowski VDF)
+
+Threshold encryption (subsection 3.6) requires a coordinated active set running distributed key generation. At the constitutional active-set floor of 7 (subsection 8.1.3) and during periods between activation and the threshold-encryption viability boundary (N=15), the chain cannot run threshold encryption with parameters that provide meaningful protection — at N=4 the threshold scheme is trivially breakable by 2-validator collusion; at N=7 it offers limited margin. To preserve mempool encryption (Principle II) during the low-N period, the protocol uses **time-lock encryption** based on a **publicly-verifiable Verifiable Delay Function (VDF)**.
+
+A VDF is a function whose evaluation requires a specified amount of sequential computation (and cannot be parallelised) but whose output can be verified cheaply. Time-lock encryption uses a VDF to create a ciphertext that decrypts only after a specified delay, regardless of who attempts decryption. This works at any active-set size, including N=1 — there is no DKG, no threshold, no key-agreement step among validators.
+
+### 3.8.1 The Wesolowski construction
+
+The protocol uses the Wesolowski VDF (Wesolowski 2019) over class groups of imaginary quadratic order (or, optionally, over RSA groups; the choice is implementation-defined and does not affect protocol correctness). Class groups are preferred because they require no trusted setup — there is no group element whose secret factorisation could compromise the construction.
+
+The construction is summarised:
+
+- **Setup.** A class group of unknown order is fixed at protocol initialisation. The group's parameters are derived deterministically from the genesis state (subsection 11.2.8) using a hash-to-class-group construction. There is no secret involved.
+- **Encryption.** A user encrypts a transaction by sampling a random group element `g` and computing `h = g^(2^T)` for the time-lock parameter T. The transaction's symmetric encryption key is derived from `h`. The user publishes `g`, the symmetric ciphertext, and a Wesolowski proof of knowledge of `h` (this last is required only to prevent malformed envelopes, not for security against time-locked decryption).
+- **Decryption.** A validator (specifically, the round anchor for the round in which the transaction is included; subsection 8.4.4) computes `h = g^(2^T)` by performing T sequential squarings, then derives the symmetric key and decrypts. The computation is by construction sequential — no parallel speedup exists.
+- **Verification.** Any party can verify that the published `h` is correct given `g` and T by checking the Wesolowski proof. The proof is a single class-group element and verifies in constant time.
+
+### 3.8.2 Parameter selection
+
+The time-lock parameter T determines the decryption delay. T is calibrated so that a single squaring takes approximately the targeted per-transaction delay divided by the wall-clock decryption budget. For the protocol's design target of 10–15 seconds of decryption delay on consensus-grade hardware (sufficient to prevent immediate decryption by external observers but short enough that user inclusion latency remains tolerable):
+
+- A modern consensus-grade desktop performs approximately 200,000–500,000 class-group squarings per second
+- T = 2,000,000–7,500,000 produces 10–15 seconds of decryption time
+- The exact value is calibrated empirically before genesis and committed as a chain-state parameter at activation
+
+The class-group discriminant size is selected to provide approximately 128 bits of security against the best-known classical attacks. Class groups of discriminant size 2048 bits are sufficient. Larger discriminants slow squaring proportionally and may be preferred for higher security levels at the cost of slower decryption.
+
+### 3.8.3 Public verifiability requirement
+
+The protocol specifies a **publicly-verifiable** VDF (Wesolowski's construction satisfies this; Pietrzak's construction, also publicly-verifiable, would be an acceptable alternative; black-box VDFs that produce only the output without a verification proof are explicitly excluded). Public verifiability is required because subsection 8.4.4's anchor-rotation and decryption-publication-binding mitigations depend on observers being able to verify that the round anchor finished the VDF computation at the correct time and published the correct result. Without public verifiability, those mitigations cannot detect anchors that publish forged decryption claims, and the time-lock regime's MEV protection collapses.
+
+### 3.8.4 Quantum vulnerability
+
+Wesolowski's VDF security depends on the unknown-order assumption in class groups, which is conjectured to hold against quantum adversaries (Shor's algorithm does not directly apply because class groups are not cyclic of known order). The construction is therefore *plausibly* post-quantum but not formally proven to be. For the mempool-encryption use case this is acceptable because mempool envelopes are short-lived (decrypted within the same epoch they are submitted); a quantum adversary in 2040 cannot retroactively decrypt mempool transactions from 2030 in any meaningful sense, since those transactions are already finalised in chain state.
+
+### 3.8.5 Transition to threshold encryption
+
+When the active set crosses the viability boundary N≥15 (subsection 8.4.2), the chain transitions from time-lock encryption to threshold encryption automatically. The transition is one-way per epoch: the chain operates one regime per epoch, never both simultaneously, with hysteresis (switch to threshold at N≥15; switch back at N<10) preventing flapping at the boundary. Pending time-lock-encrypted transactions submitted before the transition complete decryption normally; new transactions submitted after the transition use the threshold key.
+
+## 3.9 Zero-knowledge proofs
 
 The protocol's privacy layer (section 7) and recursive verification (section 8) use zero-knowledge succinct non-interactive arguments of knowledge (zk-SNARKs). Two specific systems are used: **Halo 2** for general-purpose proving with no trusted setup, and **KZG commitments** as a building block for vector commitments and for state commitments inside the consensus layer.
 
-### 3.7.1 General-purpose proving: Halo 2
+### 3.9.1 General-purpose proving: Halo 2
 
 Halo 2 is a zk-SNARK proving system using the PLONK arithmetisation (Plonkish) over the Pasta curves (Pallas and Vesta), with a polynomial commitment scheme based on the inner product argument (IPA). It does not require a trusted setup ceremony.
 
@@ -277,7 +358,7 @@ Halo 2 is a zk-SNARK proving system using the PLONK arithmetisation (Plonkish) o
 
 **Library.** The reference implementation uses the Halo 2 implementation maintained by the Zcash project (not the original Electric Coin Company implementation, which was deprecated; the maintained fork lives under `halo2`). This implementation is in production in Zcash's Orchard pool and is the most heavily-deployed Halo 2 implementation in existence.
 
-### 3.7.2 Vector and polynomial commitments: KZG
+### 3.9.2 Vector and polynomial commitments: KZG
 
 KZG commitments (Kate, Zaverucha, Goldberg 2010) are used inside the consensus layer for state commitments and for certain operations within the encrypted mempool. KZG commitments require a trusted setup: a set of values `[g, g^τ, g^{τ^2}, …, g^{τ^n}]` for a secret `τ` that must be irrecoverably destroyed.
 
@@ -289,7 +370,7 @@ KZG commitments (Kate, Zaverucha, Goldberg 2010) are used inside the consensus l
 
 **Library.** The reference implementation uses the KZG implementation from the `arkworks` ecosystem.
 
-## 3.8 Randomness
+## 3.10 Randomness
 
 The protocol requires randomness in several contexts, each with different properties.
 
@@ -301,7 +382,7 @@ The protocol requires randomness in several contexts, each with different proper
 
 **Threshold-encrypted nonces.** The encrypted mempool requires per-transaction nonces that are unpredictable to adversaries. These are derived deterministically from the user's signing key and a transaction-specific identifier, ensuring that each nonce is unique without requiring access to a runtime randomness source.
 
-## 3.9 Library and implementation discipline
+## 3.11 Library and implementation discipline
 
 The reference implementation `MUST` adhere to the following discipline regarding cryptographic libraries:
 
@@ -315,7 +396,7 @@ The reference implementation `MUST` adhere to the following discipline regarding
 
 5. **Upstream contribution.** Where the reference implementation requires improvements to upstream cryptographic libraries (performance, additional functionality, bug fixes), contributions `MUST` be offered upstream rather than maintained as forks.
 
-## 3.10 Migration and revision
+## 3.12 Migration and revision
 
 The cryptographic primitives specified in this section are part of the protocol's consensus rules. Their modification falls under Principle I (credible neutrality): no on-chain mechanism can alter them. Migration to new primitives requires the publication of a new client implementation that node operators individually adopt, in the same manner as any other consensus rule change.
 
@@ -327,7 +408,7 @@ The cryptographic primitives specified in this section are part of the protocol'
 
 The protocol does not attempt to specify in advance the exact form these migrations will take. The principle is that migrations occur via the same mechanism as any consensus change: through the ordinary process of client release and individual operator opt-in, on a timescale long enough that no party can force a migration on the rest of the network.
 
-## 3.11 What this section does not specify
+## 3.13 What this section does not specify
 
 For clarity, the following are deliberately not specified in this section and are deferred to later sections:
 

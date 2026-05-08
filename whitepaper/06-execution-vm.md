@@ -410,13 +410,15 @@ The AVM's instruction set is **Sui-Move's bytecode instruction set** (the `Bytec
 - `GenerateProof(CircuitId)` — emit a Halo 2 proof witness for the current shielded execution context. Operand is an index into the module's circuit-reference pool. Pops the circuit's input arity (one stack value per declared circuit input, in declaration order) from the stack; pushes a single `Witness` value (per section 6.0.7). The circuit's input arity and per-input types are determined by the circuit signature resolved through the operand's `CircuitId`; the resolution and the input-type list are specified by section 7. At the bytecode layer, the stack effect is parametric in the circuit's signature, similar to how `Call`'s stack effect is parametric in its `FunctionHandle`'s signature.
 - `VerifyProof(CircuitId)` — verify a Halo 2 proof. Pops a `Witness` value followed by the circuit's public-input arity (one stack value per declared public input, in declaration order, top-of-stack last); pushes a `bool`. As with `GenerateProof`, the public-input arity and types are determined by the circuit signature resolved through the operand's `CircuitId` per section 7.
 - `ReleaseSubViewKey` — produce a sub-view-key per section 4.4 and section 7. Pops the parent view key; pushes the derived sub-key.
-- `KzgCommit` — produce a KZG commitment over a vector of field elements per section 3.7.2. Pops the vector; pushes a 48-byte commitment.
+- `KzgCommit` — produce a KZG commitment over a vector of field elements per section 3.9.2. Pops the vector; pushes a 48-byte commitment.
 - `KzgVerify` — verify a KZG opening proof. Pops the commitment, the opening, and the claimed value; pushes a `bool`.
 - `RecursiveVerify` — verify a recursive Halo 2 proof per section 8's recursive verification. Pops the proof value followed by the recursive circuit's public-input arity (one stack value per declared public input, in declaration order, top-of-stack last); pushes a `bool`. The recursive circuit's public-input arity is determined by the circuit signature specified in section 8.5; the stack effect is parametric in that signature in the same shape as `VerifyProof`.
 - `Sha3_256` — SHA3-256 hash of a byte vector (per section 3.3.1). Pops a `vector<u8>`; pushes `[u8; 32]`.
 - `Blake3` — BLAKE3 hash of a byte vector (per section 3.3.2). Pops a `vector<u8>`; pushes `[u8; 32]`.
 - `Ed25519Verify` — verify an Ed25519 signature (per section 3.4.1). Pops public key, message, signature; pushes `bool`.
 - `MlDsaVerify65` and `MlDsaVerify87` — verify ML-DSA signatures (per section 3.4.2).
+- `MlKemEncapsulate` — perform ML-KEM-768 encapsulation (per section 3.7). Pops an ML-KEM public key (1184 bytes); pushes a `(ciphertext, shared_secret)` tuple as `[u8; 1088]` followed by `[u8; 32]`. Used by privacy-layer circuits (section 7) for stealth address derivation and encrypted memo construction.
+- `MlKemDecapsulate` — perform ML-KEM-768 decapsulation (per section 3.7). Pops an ML-KEM secret key and a 1088-byte ciphertext; pushes the recovered 32-byte shared secret. Used by recipient-side privacy circuits.
 - `BlsVerify` — verify a BLS12-381 signature (per section 3.4.3).
 - `ChargeGas(GasDimension)` — charge a specified amount across one of the six gas dimensions (per section 6.0.7's `GasBudget` and section 6.3.1). Pops the amount as `u64`.
 - `RemainingGas(GasDimension)` — push the remaining budget for a specified dimension as `u64`. Used by stdlib functions that adapt behaviour based on remaining budget.
@@ -438,12 +440,12 @@ Adamant inherits this encoding unchanged for the Sui-Move base set. Adamant-spec
 
 The bytecode stream itself is not BCS-encoded — it is Move's native binary format, opaque to BCS at the protocol layer. BCS canonicality (section 5.1.8) applies to the protocol's consensus types (Transaction, Object, etc.); the bytecode stored inside a Module object is consensus-critical only insofar as the *bytes* are stored and hashed faithfully, not insofar as those bytes follow BCS rules.
 
-**Per-extension operand encodings.** The 17 Adamant-specific extensions per section 6.2.1.4 use the following operand layouts within the framing above:
+**Per-extension operand encodings.** The 19 Adamant-specific extensions per section 6.2.1.4 use the following operand layouts within the framing above:
 
 - `InvokeShielded(FunctionHandleIndex)` and `InvokeTransparent(FunctionHandleIndex)` — operand encoded as ULEB128, matching Sui-Move's `FunctionHandleIndex` encoding for inherited `Call` and `CallGeneric`.
 - `GenerateProof(CircuitId)` and `VerifyProof(CircuitId)` — operand encoded as ULEB128. `CircuitId` is treated as an index per section 6.2.1.4's "an index into the module's circuit-reference pool" framing, matching Sui-Move's encoding pattern for other indices (function-handle, constant-pool, struct-handle, etc.).
 - `ChargeGas(GasDimension)` and `RemainingGas(GasDimension)` — operand encoded as a single byte variant tag in declaration order: `Computation = 0x00`, `Storage = 0x01`, `Rent = 0x02`, `Bandwidth = 0x03`, `ProofVerification = 0x04`, `ProofGeneration = 0x05`. This matches the variant-tag pattern established in section 6.0.7's `Value` enum encoding.
-- The 11 zero-operand extensions (`ReleaseSubViewKey`, `KzgCommit`, `KzgVerify`, `RecursiveVerify`, `Sha3_256`, `Blake3`, `Ed25519Verify`, `MlDsaVerify65`, `MlDsaVerify87`, `BlsVerify`, `OutOfGas`) carry no operand bytes after the opcode byte.
+- The 13 zero-operand extensions (`ReleaseSubViewKey`, `KzgCommit`, `KzgVerify`, `RecursiveVerify`, `Sha3_256`, `Blake3`, `Ed25519Verify`, `MlDsaVerify65`, `MlDsaVerify87`, `MlKemEncapsulate`, `MlKemDecapsulate`, `BlsVerify`, `OutOfGas`) carry no operand bytes after the opcode byte.
 
 These encodings are genesis-fixed; changing any of them is a hard fork.
 

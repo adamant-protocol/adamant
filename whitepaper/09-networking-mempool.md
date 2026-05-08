@@ -231,7 +231,7 @@ The protocol's networking design enables a permissionless market for light-clien
 
 ### 9.10.1 Motivation
 
-Per subsection 9.1, light clients maintain only the recursive proof and Merkle paths to specific state of interest. This is the cryptographically lightest mode of participation in the chain — verification time is approximately 50-200 milliseconds on a modern smartphone (subsection 8.5.4), and storage requirements are minimal.
+Per subsection 9.1, light clients maintain only the recursive proof and Merkle paths to specific state of interest. This is the cryptographically lightest mode of participation in the chain — verification time is approximately 50-200 milliseconds on a modern smartphone (subsection 8.5.5), and storage requirements are minimal.
 
 A light client must, however, obtain its data from somewhere. Two paths exist:
 
@@ -251,9 +251,9 @@ A **service node** is a node that:
 - Optionally registers its availability and pricing in a discovery topic
 - Earns fees from the parties that pay for its services (specified in subsection 9.10.5)
 
-Service nodes are not validators. They do not participate in consensus, do not generate proofs, do not have stake at risk, and do not earn from issuance. Their role is purely informational: serving public, cryptographically-verifiable data to clients that prefer not to maintain the data themselves.
+Service nodes are not validators, provers, or witnesses. They do not participate in consensus, do not generate recursive proofs (provers do that, subsection 8.5.3), do not produce attestations or perform fraud detection (witnesses do that, subsection 8.7.2), do not have stake at risk, and do not earn from issuance. Their role is purely informational: serving public, cryptographically-verifiable data to clients that prefer not to maintain the data themselves. The protocol's full participation model has four bounded-power tiers — validators, provers, witnesses, service nodes — each with a distinct role profile and compensation pattern; service nodes are the lightest tier in operational terms (no stake, no slashing, no protocol-level compensation flow), serving infrastructure rather than security.
 
-A node may simultaneously be a validator and a service node; the roles are independent and operate on independent infrastructure. A node may also be a service node only, with no validator responsibilities. Phone-based service nodes are the design's primary intended audience, though the role is open to any hardware capable of maintaining the required state.
+A node may simultaneously occupy multiple roles; the roles are independent and operate on independent infrastructure. The most common combinations are likely to be validator+service-node (a validator that also serves light-client queries) and witness+service-node (a phone-class operator providing both attestation and infrastructure). Prover hardware (GPU-class) is typically distinct from service-node hardware (state-storage-class) and the roles are unlikely to combine economically. Phone-based service nodes are the design's primary intended audience for the service-node tier, though the role is open to any hardware capable of maintaining the required state.
 
 ### 9.10.3 Standardised query format
 

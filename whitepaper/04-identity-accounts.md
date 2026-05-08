@@ -48,9 +48,9 @@ The validation logic is arbitrary smart-contract code, subject only to the resou
 
 ### 4.3.1 Single-signature validation
 
-The simplest pattern: the account holds a single Ed25519 or ML-DSA public key, and a transaction is valid if and only if it carries a signature from the corresponding secret key over the transaction's canonical encoding.
+The simplest pattern: the account holds a single public key — Ed25519 or ML-DSA — and a transaction is valid if and only if it carries a signature from the corresponding secret key over the transaction's canonical encoding.
 
-This pattern is the default for new user accounts created by reference wallets. It approximates the user experience of legacy externally-owned accounts on other chains while remaining smart-account-native.
+This pattern is the default for new user accounts created by reference wallets. Per Principle VIII (subsection 2.8), Ed25519 is the wallet default for ordinary transaction signing because of its substantially smaller signature size (64 bytes vs ~3.3KB for ML-DSA-65), with wallets opting users up to ML-DSA per-transaction above a configurable value threshold and offering ML-DSA-only single-signature accounts for users whose threat model warrants it. The chain accepts any single-signature account regardless of which scheme the user chose. It approximates the user experience of legacy externally-owned accounts on other chains while remaining smart-account-native.
 
 ### 4.3.2 Dual-signature validation (classical + post-quantum)
 

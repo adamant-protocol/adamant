@@ -185,7 +185,7 @@ Protocol-managed bookkeeping fields, not under the user's control:
 - `last_modified_height`: the consensus height of the most recent state transition
 - `creator`: the account that created the object
 - `storage_rent_paid_through`: the consensus height through which storage rent has been paid (section 5.6)
-- `proof_commitment`: cryptographic commitment to the object's history, used by the privacy layer (section 7) and recursive verification (section 8). The commitment is a KZG commitment on BLS12-381 (section 3.7.2), serialised as a compressed G₁ element (48 bytes).
+- `proof_commitment`: cryptographic commitment to the object's history, used by the privacy layer (section 7) and recursive verification (section 8). The commitment is a KZG commitment on BLS12-381 (section 3.9.2), serialised as a compressed G₁ element (48 bytes).
 
 Users do not write to metadata fields directly; they are updated by the protocol as a side-effect of valid state transitions.
 
@@ -235,7 +235,7 @@ This change has two consequences:
 - **State updates are local.** A transaction touching N objects updates N commitments, not the entire global state. Throughput scales with object-level parallelism.
 - **Recursive proofs are compositional.** Section 8's recursive verification works by aggregating per-object validity proofs, rather than proving validity of monolithic state transitions. This is what enables phone-verifiable verification.
 
-The per-object commitment is computed using KZG vector commitments over BLS12-381 (specified in section 3.7.2). The aggregation across objects uses Halo 2 recursive proofs (section 3.7.1).
+The per-object commitment is computed using KZG vector commitments over BLS12-381 (specified in section 3.9.2). The aggregation across objects uses Halo 2 recursive proofs (section 3.9.1).
 
 ## 5.3 The mutability declaration is enforced by consensus
 

@@ -6,17 +6,21 @@ This section closes the whitepaper. It is shorter than the technical sections by
 
 This whitepaper specifies, in detail sufficient to implement, a Layer 1 blockchain protocol with the following properties:
 
-- **Credible neutrality.** No foundation, no admin keys, no on-chain governance, no premine, no upgrade authority. The chain has no master.
+- **Credible neutrality.** No foundation, no admin keys, no on-chain governance, no premine, no upgrade authority. The chain has no master. Low-coordination launch via genesis activation gate (7 validators simultaneously online); the chain self-activates with no recruited cohort and no human-in-the-loop activation.
 
-- **Privacy by default.** All transactions are shielded by default through Halo 2 zero-knowledge proofs. Users retain selective disclosure via view keys.
+- **Privacy by default.** All transactions are shielded by default through Halo 2 zero-knowledge proofs. Users retain selective disclosure via view keys. Stealth address derivation and encrypted memo delivery use ML-KEM-768, making historical privacy post-quantum-secure.
 
-- **High throughput.** DAG-based consensus targeting 200,000+ transactions per second on a single shard, with sub-second finality.
+- **High throughput.** DAG-based consensus targeting 50,000+ transactions per second at design-target validator count on residential-fiber hardware (subject to empirical validation before genesis), with sub-second finality at design-target N.
 
-- **Phone-verifiable.** Recursive zero-knowledge proofs compress chain history into a constant-size proof verifiable on consumer hardware.
+- **Phone-verifiable.** Recursive zero-knowledge proofs compress chain history into a constant-size proof verifiable on consumer hardware. Proofs are produced by a permissionless prover market at steady state, with validators retaining a fallback role at degraded cadence to preserve phone-verifiability regardless of prover-market health.
 
-- **Encrypted mempool.** Threshold encryption integrated into consensus, eliminating the structural conditions that enable front-running and validator-level censorship.
+- **Two-regime encrypted mempool.** Threshold encryption integrated into consensus at design-target validator count; time-lock encryption (Wesolowski VDF) operative during the low-N period before threshold-encryption viability. Both regimes preserve transaction confidentiality from external observers; MEV protection is structural in the threshold regime and bounded-but-non-zero in the time-lock regime via deterministic anchor rotation and decryption-publication binding.
 
-- **Post-quantum signatures from genesis.** ML-DSA-65 alongside Ed25519, configurable per account.
+- **Hybrid post-quantum signatures.** ML-DSA (FIPS 204) for identity-binding operations; Ed25519 for ordinary transactions and validator messages by default; per-transaction opt-in to ML-DSA. ML-KEM-768 (FIPS 203) for post-quantum-secure key agreement underlying privacy primitives. Trade-off honestly disclosed: ordinary transaction signatures are quantum-forgeable; identity, structural state, and historical privacy are not.
+
+- **Dynamic active validator set.** Constitutional floor of 7 validators; soft ceiling near 60–80; on-chain security tier disclosure (Tier I / II / III) so wallets and applications can adapt to current chain scale.
+
+- **Four-tier participation model.** Validators (consensus + decryption + fallback proofs); provers (steady-state recursive proof generation in a permissionless market); witnesses (attestation, data availability sampling, proof verification, fraud detection on phone-class hardware); service nodes (light-client infrastructure). Each tier has bounded power.
 
 - **Mutability as a first-class property.** Every contract declares its mutability rules at creation; declarations are protocol-enforced and visible to users before interaction.
 
@@ -26,7 +30,7 @@ This whitepaper specifies, in detail sufficient to implement, a Layer 1 blockcha
 
 - **Adamant Move smart contracts.** Linear-typed, resource-safe, formally verifiable smart-contract language.
 
-- **Multi-dimensional gas.** Six independent fee dimensions, EIP-1559-style price discovery, fee burn.
+- **Multi-dimensional gas.** Six independent fee dimensions including a separate proof-generation dimension funding the prover bounty pool, EIP-1559-style price discovery, fee burn.
 
 - **Fair launch.** Six-month proof-of-burn distribution mechanism. No premine, no investor allocation, no founder allocation.
 
@@ -61,7 +65,7 @@ Several problems are acknowledged as open and will be addressed during implement
 
 **Optimal gas calibration.** The gas costs of individual instructions must be calibrated against actual hardware benchmarks before being committed at genesis. The numbers in this whitepaper are placeholders; final values require empirical measurement on the reference implementation.
 
-**Distributed proof generation pragmatics.** Section 8.5.3 specifies that recursive proof generation is distributed across validators. The exact protocol — how validators coordinate, how partial proofs aggregate, how failures are handled — needs implementation experience to refine.
+**Prover market dynamics and bounty calibration.** Section 8.5.3 specifies a permissionless prover market with per-proof bounties and an automatic adjustment algorithm modelled on EIP-1559. The exact bounty calibration, the timing of validator-fallback engagement, and the conditions under which the market may underperform need implementation experience to refine. Section 8.5.4's fallback ensures phone-verifiability is preserved regardless, but the market's behaviour at scale is empirical territory.
 
 **DKG protocol details.** Section 8.4.3 specifies that validators run a Pedersen-style DKG at each epoch boundary. Concrete protocol details (specific message formats, timeout handling, late-joining rules) are deferred to the implementation.
 
@@ -87,11 +91,11 @@ Several problems are acknowledged as open and will be addressed during implement
 
 Some limitations are not "open problems" but acknowledged constraints:
 
-- The privacy primitives are not post-quantum. Long-term private transactions are vulnerable to retrospective decryption by future quantum adversaries (section 7.9.3). The signature layer is post-quantum; the privacy layer's eventual migration is anticipated but cannot be specified in advance.
+- The protocol's post-quantum security is partial rather than universal. The identity layer (addresses, validator registrations, contract deployments) is post-quantum-secure via ML-DSA. The privacy layer's key-agreement surface (stealth addresses, encrypted memos) is post-quantum-secure via ML-KEM-768 — historical privacy of who-sent-to-whom survives the quantum threshold. However, the proof system underlying shielded execution (Halo 2 over the Pasta curves) is not post-quantum-secure: a future quantum adversary could in principle forge proofs that should not have verified, retrospectively undermining proof soundness for historical transactions (subsection 7.9.3). Ordinary user-transaction signatures use Ed25519 by default for performance reasons; these are quantum-forgeable, affecting transaction-history forensics but not chain integrity or privacy. Migration to a fully post-quantum proof system is anticipated but cannot be specified in advance — no production-ready post-quantum SNARK with comparable performance characteristics exists at the time of this draft.
 
 - The chain has no governance mechanism for emergency intervention. A bug discovered post-launch cannot be patched without a hard fork. This is a deliberate consequence of credible neutrality (Principle I) and is accepted as a cost.
 
-- Single-shard throughput is bounded by the consensus mechanism. Beyond the 200,000 TPS target, scaling requires sharding or other techniques not specified in v1.0. The protocol accepts that it will not, in v1.0, displace high-frequency-trading-grade infrastructure.
+- Single-shard throughput is bounded by the consensus mechanism. The protocol's design target is 50,000 TPS at the design-target validator count on residential-fiber hardware (subsection 1.2). Beyond this target, scaling requires sharding or other techniques not specified in v1.0. The protocol accepts that it will not, in v1.0, displace high-frequency-trading-grade infrastructure.
 
 - The chain does not natively support complex compliance frameworks (KYC, AML enforcement). These are deliberately excluded by Principle II and Principle VII. Users and applications requiring such frameworks must implement them at the application layer or use other chains.
 

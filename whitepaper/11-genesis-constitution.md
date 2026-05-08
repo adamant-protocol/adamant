@@ -35,7 +35,7 @@ This is the meaning of "constitutional immutability": not that the protocol cann
 
 The following are set at genesis and constitute the protocol's permanent character:
 
-### 11.2.1 The seven design principles
+### 11.2.1 The eight design principles
 
 The principles in section 2, in priority order:
 
@@ -46,6 +46,7 @@ The principles in section 2, in priority order:
 5. Mutability as a property of objects
 6. Standard primitives, novel synthesis
 7. Permissionless participation
+8. Post-quantum security at identity and privacy layers
 
 These principles are the protocol's identity. A future version of this protocol that violated any of these principles would, by definition, be a different protocol — not a revised Adamant.
 
@@ -56,10 +57,12 @@ The cryptographic primitives specified in section 3, including:
 - SHA3-256 and SHAKE-256 as primary hash functions
 - BLAKE3 as auxiliary hash
 - Poseidon as zk-friendly hash
-- Ed25519 and ML-DSA-65 as signature schemes
+- Ed25519 and ML-DSA-65 as signature schemes (hybrid posture per Principle VIII: Ed25519 for ordinary transactions and validator consensus messages; ML-DSA for identity-binding operations including validator registrations, contract deployments, and address derivation)
+- ML-KEM-768 (FIPS 203) as the post-quantum key encapsulation mechanism for stealth address derivation, encrypted memo delivery, and any other privacy-relevant key-agreement surface
 - BLS12-381 with G1 signatures and G2 public keys for aggregation
 - ChaCha20-Poly1305 for symmetric encryption
-- BLS-based threshold encryption for the encrypted mempool
+- BLS-based threshold encryption for the encrypted mempool (operative at N≥15)
+- Wesolowski VDF on class groups for time-lock encryption (operative at N<15)
 - Halo 2 (Pasta curves) for general-purpose proving
 - KZG commitments on BLS12-381 for vector commitments
 
@@ -101,10 +104,18 @@ The consensus mechanism specified in section 8:
 
 - DAG structure with 250ms target round duration
 - 36-second epochs (144 rounds per epoch)
-- Active set size of 200 validators
-- 2/3+1 quorum threshold
+- Dynamic active set: constitutional floor of 7 validators, soft ceiling near 60–80 validators (calibrated to the throughput target on residential-fiber hardware)
+- 2/3+1 quorum threshold within the active set
+- Genesis activation gate: chain self-activates when 7 validators are simultaneously registered, stake-eligible, and online; no coordination event, no recruited cohort, no human-in-the-loop activation
+- Halt-on-disagreement: at the floor, the chain pauses rather than forks if quorum cannot be reached; safety is preserved at the cost of liveness during severe-unavailability periods
+- On-chain security tier disclosure: Tier I (N=7–14), Tier II (N=15–29), Tier III (N=30+), queryable as constant-time chain-state property
 - The slashing rates and offences
-- The DKG protocol for threshold encryption
+- Two-regime mempool encryption: time-lock encryption (Wesolowski VDF, subsection 3.8) operative at N<15; threshold encryption with DKG operative at N≥15; automatic transition with hysteresis (switch to threshold at N≥15, switch back at N<10); both regimes preserve transaction confidentiality, with quantitative MEV-protection difference acknowledged in subsection 8.4.4
+- Round-anchor rotation and decryption-publication binding as the load-bearing mitigations for the time-lock regime's MEV surface
+- Role split between consensus and proof generation: validators do consensus, mempool decryption, and fallback proof generation; provers (subsection 8.5.3) do steady-state proof generation in a permissionless market; the role split is constitutional, the bounty calibration is implementation-detail
+- Validator-fallback proof generation at degraded cadence (subsection 8.5.4) preserving Principle III (phone-verifiability) regardless of prover-market health
+- Witness tier (subsection 8.7.2) providing phone-runnable participation across four roles (cryptographic attestation, data availability sampling, recursive proof verification, fraud and reordering detection); permissionless registration with small Sybil-resistance stake; honest constitutional acknowledgment that witness utility is co-determined with the integrity of the tiers witnesses verify
+- Four-tier participation model with bounded power across all tiers (validators, provers, witnesses, service nodes); no single tier alone controls the chain
 
 ### 11.2.7 Economic model
 
@@ -114,14 +125,17 @@ The economic model specified in section 10:
 - The two acquisition paths (burn-to-mint and validator block rewards)
 - The per-address claim cap schedule for the burn path
 - The phase-transition rules (pool exhaustion or 5-year time cap; unclaimed tokens destroyed)
-- The post-launch issuance schedule (4% Y1-5, 3% Y6-10, 2% Y11-20, 1% perpetual)
+- The post-launch issuance schedule (4% Y1-5, 3% Y6-10, 2% Y11-20, 1% perpetual), with issuance distributed across validators (primary recipient) and witnesses (small slice, subsection 10.6); no issuance to provers or service nodes (their compensation is fee-funded or ecosystem-funded)
 - The EIP-1559-style base fee mechanism
-- The fee burn mechanism
-- The 28-day unbonding period
+- The fee burn mechanism for base fees on most dimensions
+- The proof-generation fee dimension funding the prover bounty pool (subsection 10.4.6) rather than burning or being paid to validators
+- The verification fee dimension partially funding the witness compensation pool (subsection 10.6.1)
+- The 28-day validator unbonding period; the 7-day witness unbonding period
+- Witness slashing for false attestations (subsection 10.6.3) is automatic and on-chain, mirroring validator slashing in mechanical character
 
 The launch phase is a one-time event ending in pool exhaustion or the 5-year time cap; the post-launch operational regime governs the chain in perpetuity thereafter.
 
-The protocol additionally enables, but does not fund or specify in detail, a permissionless service-node infrastructure market (subsection 9.10) and a validator-funded infrastructure mechanism (subsection 10.5.5). The protocol-level commitments fixed at genesis include the standardised query format, the registration mechanism, the smart-contract patterns supporting payment, and the principle that issuance flows only to validators (subsection 10.3.2). The downstream market — its participants, fee schedules, reputation systems, and operational shape — is not constitutionally fixed and may evolve organically without requiring hard-fork coordination. Validators choosing to fund infrastructure do so from their own commission revenue, not from any protocol allocation; the protocol's role is enablement, not allocation.
+The protocol additionally enables, but does not fund from a dedicated issuance allocation, a permissionless service-node infrastructure market (subsection 9.10) and a validator-funded infrastructure mechanism (subsection 10.5.5). The protocol-level commitments fixed at genesis include the standardised query format, the registration mechanism, the smart-contract patterns supporting payment, and the structure of issuance flow (validators and witnesses receive slices; provers and service nodes are fee/ecosystem-funded). The downstream service-node market — its participants, fee schedules, reputation systems, and operational shape — is not constitutionally fixed and may evolve organically without requiring hard-fork coordination. Validators choosing to fund infrastructure do so from their own commission revenue, not from any protocol allocation; the protocol's role is enablement, not allocation.
 
 ### 11.2.8 Genesis state
 
