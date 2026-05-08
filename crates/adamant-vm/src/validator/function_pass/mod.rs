@@ -92,7 +92,35 @@
 //!   `pub(super)` to `pub(in crate::validator)` for inline
 //!   per-function ability resolution per Q3(a) (6th
 //!   deliberate-Adamant-decision instance).
-//! - D-5. Type safety + reference safety + Rule 3 (call-graph) + Rules 4, 5 reaffirmation per the D-1 plan-gate Q1 disposition. Fires the 11th verification gate via §6.2.1.6 spec binding.
+//! - **D-5a.0.** Type-safety foundation: `AbstractStack` port +
+//!   `AdamantValidationError::TypeMismatch` with closed-enum
+//!   `TypeMismatchReason` (14 sub-reasons declared pre-emptively).
+//! - **D-5a.1.a.** Type-safety pass core + first half inherited
+//!   arms (load/move/copy/store/binop/eq/cast/branch/ret/abort/
+//!   pop) + sub-shape 4 of structural-impossibility-checks
+//!   (NEW; `expect()`-three-anchor on `AbsStackError` single-
+//!   pop/push paths) + 6 of 14 variant-vs-test mapping audit
+//!   closures.
+//!   `type_safety::verify_function` not yet chained into the
+//!   per-function batch (deferred to D-5a.1.b per impl-gate
+//!   honest-scope-flagging).
+//! - **D-5a.1.b (this commit).** Type-safety pass remaining
+//!   arms (refs/calls/pack-unpack/vector/variant) + 17 Adamant-
+//!   extension type rules (Categories A/B/C/D per §6.2.1.4
+//!   lines 408-423) + remaining 8 of 14 variant-vs-test
+//!   mapping audit closures + orchestration chain wired in
+//!   here (closes the deferral from D-5a.1.a — honest-scope-
+//!   flagging opening + closure phases; NEW sub-pattern).
+//!   Per-pass-instance ability cache hoisted outside the
+//!   function loop (Q2(a) at D-5 plan-gate). NEW spec-text-to-
+//!   shared-helper canonical principle 1st instance:
+//!   `InvokeShielded` / `InvokeTransparent` reuse the `call`
+//!   helper per §6.2.1.4 line 408 verbatim.
+//! - D-5b. Reference safety + move-borrow-graph port (likely
+//!   internal split via empirical-complexity sub-shape 3).
+//! - D-5c. Rules 3 (call-graph privacy consistency), 4, 5;
+//!   fires the 11th verification gate via §6.2.1.6 spec
+//!   binding.
 //! - D-6. Pipeline integration into [`super::verify_module`]
 //!   step 4; bridge tear-out lands with 5/5b.5.
 //! - D-7. Closure batch + CLAUDE.md state-bump.
@@ -114,8 +142,8 @@
 
 #![allow(dead_code)] // D-1..D-2 foundation; entry point wires in at D-6.
 
-pub(super) mod abstract_stack;
 pub(super) mod absint;
+pub(super) mod abstract_stack;
 pub(super) mod cfg;
 pub(super) mod control_flow;
 pub(super) mod locals_safety;
@@ -129,6 +157,7 @@ use crate::module::AdamantCompiledModule;
 
 use super::config::AdamantStructuralLimits;
 use super::error::AdamantValidationError;
+use super::module_pass::ability_cache::AdamantAbilityCache;
 
 /// Run the Adamant-native per-function verifier passes against
 /// every function definition in `module`.
@@ -148,13 +177,19 @@ pub(super) fn verify_function_bodies(
     module: &AdamantCompiledModule,
     config: &AdamantStructuralLimits,
 ) -> Result<(), AdamantValidationError> {
+    // Per-pass-instance ability-cache lifecycle for type_safety
+    // (Q2(a) at D-5 plan-gate; mirrors B-2.3's per-pass-instance
+    // shape). Hoisted outside the function loop so lookups for
+    // the same signature token in different functions hit the
+    // cache. locals_safety uses a stricter per-function-instance
+    // lifecycle (Q3(a) at D-4 plan-gate; 6th deliberate-Adamant-
+    // decision); it constructs its own cache inline.
+    let mut type_safety_cache = AdamantAbilityCache::new(module);
     for (idx, function_definition) in module.function_defs.iter().enumerate() {
-        let fn_def_idx = FunctionDefinitionIndex::new(
-            u16::try_from(idx).expect(
-                "function-def count fits u16; binary format precludes overflow \
+        let fn_def_idx = FunctionDefinitionIndex::new(u16::try_from(idx).expect(
+            "function-def count fits u16; binary format precludes overflow \
                  (TABLE_INDEX_MAX = u16::MAX)",
-            ),
-        );
+        ));
         let Some(code_unit) = function_definition.code.as_ref() else {
             // Native function — no body to verify. Sui-base
             // subset permits native function declarations at
@@ -169,13 +204,7 @@ pub(super) fn verify_function_bodies(
             &code_unit.code,
             &code_unit.jump_tables,
         )?;
-        stack_usage::StackUsageVerifier::verify(
-            config,
-            module,
-            fn_def_idx,
-            &code_unit.code,
-            &cfg,
-        )?;
+        stack_usage::StackUsageVerifier::verify(config, module, fn_def_idx, &code_unit.code, &cfg)?;
         locals_safety::verify_function(
             module,
             fn_def_idx,
@@ -183,8 +212,16 @@ pub(super) fn verify_function_bodies(
             &code_unit.code,
             &cfg,
         )?;
-        // D-5 consumes `cfg` here for type + reference safety;
-        // orchestration wired at D-6.
+        type_safety::verify_function(
+            module,
+            fn_def_idx,
+            function_definition,
+            &code_unit.code,
+            &cfg,
+            &mut type_safety_cache,
+        )?;
+        // D-5b will add reference_safety here; full pipeline
+        // wires into `super::verify_module` step 4 at D-6.
     }
     Ok(())
 }
@@ -197,10 +234,8 @@ mod tests {
     //! first-failure-wins eager semantics.
 
     use super::*;
-    use crate::module::{
-        AdamantCodeUnit, AdamantCompiledModule, AdamantFunctionDefinition,
-    };
     use crate::bytecode::BytecodeInstruction;
+    use crate::module::{AdamantCodeUnit, AdamantCompiledModule, AdamantFunctionDefinition};
     use adamant_bytecode_format::{
         Bytecode, FunctionHandle, IdentifierIndex, ModuleHandleIndex, Signature, SignatureIndex,
     };
@@ -286,8 +321,8 @@ mod tests {
     #[test]
     fn verify_function_bodies_first_failure_wins() {
         let m = module_with_function_bodies(vec![
-            vec![pop_inst()],   // function 0: falls off end
-            vec![ret_inst()],   // function 1: well-formed
+            vec![pop_inst()], // function 0: falls off end
+            vec![ret_inst()], // function 1: well-formed
         ]);
         let limits = AdamantStructuralLimits::genesis();
         match verify_function_bodies(&m, &limits) {
