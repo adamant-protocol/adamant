@@ -1463,7 +1463,9 @@ mod tests {
         // &mut on stack aliasing param 0; FreezeRef pops one,
         // but the other &mut is outstanding.
         let m = module_with_function(
-            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![SignatureToken::MutableReference(Box::new(
+                SignatureToken::U64,
+            ))],
             vec![],
             vec![],
             vec![
@@ -1489,7 +1491,9 @@ mod tests {
     #[test]
     fn read_ref_with_outstanding_mut_borrow_rejected() {
         let m = module_with_function(
-            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![SignatureToken::MutableReference(Box::new(
+                SignatureToken::U64,
+            ))],
             vec![],
             vec![],
             vec![
@@ -1521,7 +1525,9 @@ mod tests {
     #[test]
     fn write_ref_with_outstanding_mut_borrow_rejected() {
         let m = module_with_function(
-            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![SignatureToken::MutableReference(Box::new(
+                SignatureToken::U64,
+            ))],
             vec![],
             vec![],
             vec![
@@ -1547,7 +1553,9 @@ mod tests {
     #[test]
     fn call_transfers_borrowed_mutable_rejected() {
         let mut m = module_with_function(
-            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![SignatureToken::MutableReference(Box::new(
+                SignatureToken::U64,
+            ))],
             vec![],
             vec![],
             vec![ret_inst()],
@@ -1555,7 +1563,9 @@ mod tests {
         // External 'g' takes &mut u64 and returns ().
         let g_handle = add_function_handle(
             &mut m,
-            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![SignatureToken::MutableReference(Box::new(
+                SignatureToken::U64,
+            ))],
             vec![],
         );
         m.function_defs[0].code = Some(AdamantCodeUnit {
@@ -1583,21 +1593,22 @@ mod tests {
     /// borrow.
     #[test]
     fn vec_element_borrow_with_outstanding_mut_borrow_rejected() {
-        let vec_t = SignatureToken::MutableReference(Box::new(SignatureToken::Vector(
-            Box::new(SignatureToken::U64),
-        )));
+        let vec_t = SignatureToken::MutableReference(Box::new(SignatureToken::Vector(Box::new(
+            SignatureToken::U64,
+        ))));
         // Inner-element type for VecMutBorrow operand: SI(2).
         let mut m = module_with_function(vec![vec_t], vec![], vec![], vec![ret_inst()]);
         let elem_sig_idx = u16::try_from(m.signatures.len()).unwrap();
-        m.signatures
-            .push(Signature(vec![SignatureToken::U64]));
+        m.signatures.push(Signature(vec![SignatureToken::U64]));
         m.function_defs[0].code = Some(AdamantCodeUnit {
             locals: SignatureIndex(1),
             code: vec![
                 cp_loc(0),
                 cp_loc(0),
                 ld_u64(0),
-                BytecodeInstruction::Inherited(Bytecode::VecMutBorrow(SignatureIndex(elem_sig_idx))),
+                BytecodeInstruction::Inherited(Bytecode::VecMutBorrow(SignatureIndex(
+                    elem_sig_idx,
+                ))),
                 pop_inst(),
                 pop_inst(),
                 ret_inst(),
@@ -1618,13 +1629,12 @@ mod tests {
     /// borrow.
     #[test]
     fn vec_update_with_outstanding_mut_borrow_rejected() {
-        let vec_t = SignatureToken::MutableReference(Box::new(SignatureToken::Vector(
-            Box::new(SignatureToken::U64),
-        )));
+        let vec_t = SignatureToken::MutableReference(Box::new(SignatureToken::Vector(Box::new(
+            SignatureToken::U64,
+        ))));
         let mut m = module_with_function(vec![vec_t], vec![], vec![], vec![ret_inst()]);
         let elem_sig_idx = u16::try_from(m.signatures.len()).unwrap();
-        m.signatures
-            .push(Signature(vec![SignatureToken::U64]));
+        m.signatures.push(Signature(vec![SignatureToken::U64]));
         m.function_defs[0].code = Some(AdamantCodeUnit {
             locals: SignatureIndex(1),
             code: vec![
@@ -1653,7 +1663,9 @@ mod tests {
     #[test]
     fn ret_borrowed_mutable_reference_rejected() {
         let m = module_with_function(
-            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![SignatureToken::MutableReference(Box::new(
+                SignatureToken::U64,
+            ))],
             vec![],
             vec![
                 SignatureToken::MutableReference(Box::new(SignatureToken::U64)),
@@ -1759,7 +1771,13 @@ mod tests {
             vec![SignatureToken::U64],
             vec![],
             vec![],
-            vec![imm_borrow_loc(0), mv_loc(0), pop_inst(), pop_inst(), ret_inst()],
+            vec![
+                imm_borrow_loc(0),
+                mv_loc(0),
+                pop_inst(),
+                pop_inst(),
+                ret_inst(),
+            ],
         );
         cross_validate_reference_safety_pipeline(&m);
     }
@@ -1810,7 +1828,9 @@ mod tests {
         let m = module_with_function(
             vec![SignatureToken::U64],
             vec![],
-            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![SignatureToken::MutableReference(Box::new(
+                SignatureToken::U64,
+            ))],
             vec![mut_borrow_loc(0), ret_inst()],
         );
         cross_validate_reference_safety_pipeline(&m);
@@ -1824,7 +1844,9 @@ mod tests {
     #[test]
     fn cross_validation_rejects_freeze_ref_with_outstanding_mut_borrow() {
         let m = module_with_function(
-            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![SignatureToken::MutableReference(Box::new(
+                SignatureToken::U64,
+            ))],
             vec![],
             vec![],
             vec![
@@ -1847,7 +1869,9 @@ mod tests {
     #[test]
     fn cross_validation_rejects_write_ref_with_outstanding_mut_borrow() {
         let m = module_with_function(
-            vec![SignatureToken::MutableReference(Box::new(SignatureToken::U64))],
+            vec![SignatureToken::MutableReference(Box::new(
+                SignatureToken::U64,
+            ))],
             vec![],
             vec![],
             vec![

@@ -165,7 +165,8 @@ impl<'a> StackUsageVerifier<'a> {
             module.function_defs.len(),
         );
         let function_handle_idx = module.function_defs[fn_def_idx.0 as usize].function;
-        let return_count = signature_len(module, return_signature_index(module, function_handle_idx));
+        let return_count =
+            signature_len(module, return_signature_index(module, function_handle_idx));
 
         let verifier = Self {
             module,
@@ -395,9 +396,7 @@ impl<'a> StackUsageVerifier<'a> {
 
             // Variant pack: parametric in variant's field count.
             Bytecode::PackVariant(vidx) => (self.variant_field_count(*vidx), 1),
-            Bytecode::PackVariantGeneric(vidx) => {
-                (self.variant_inst_field_count(*vidx), 1)
-            }
+            Bytecode::PackVariantGeneric(vidx) => (self.variant_inst_field_count(*vidx), 1),
 
             // Variant unpack (and ref variants): one pop,
             // parametric pushes.
@@ -587,11 +586,11 @@ mod tests {
     //! inherited-bytecode shape pins, and eager-error semantics.
 
     use super::*;
+    use crate::bytecode::{AdamantBytecode, BytecodeInstruction, GasDimension};
+    use crate::module::{AdamantCodeUnit, AdamantCompiledModule, AdamantFunctionDefinition};
     use adamant_bytecode_format::{
         Bytecode, FunctionHandle, IdentifierIndex, ModuleHandleIndex, Signature, Visibility,
     };
-    use crate::bytecode::{AdamantBytecode, BytecodeInstruction, GasDimension};
-    use crate::module::{AdamantCodeUnit, AdamantCompiledModule, AdamantFunctionDefinition};
 
     // --- builders ---
 
@@ -640,8 +639,10 @@ mod tests {
         });
         // empty + parameter + return signatures.
         m.signatures.push(Signature(vec![])); // SignatureIndex(0): empty (locals)
-        m.signatures.push(Signature(vec![SignatureToken::U64; param_count])); // 1: params
-        m.signatures.push(Signature(vec![SignatureToken::U64; return_count])); // 2: returns
+        m.signatures
+            .push(Signature(vec![SignatureToken::U64; param_count])); // 1: params
+        m.signatures
+            .push(Signature(vec![SignatureToken::U64; return_count])); // 2: returns
         m.function_handles.push(FunctionHandle {
             module: ModuleHandleIndex(0),
             name: IdentifierIndex(0),
@@ -669,7 +670,10 @@ mod tests {
         config: &AdamantStructuralLimits,
     ) -> Result<(), AdamantValidationError> {
         let function_definition = &m.function_defs[0];
-        let code_unit = function_definition.code.as_ref().expect("test fixture has body");
+        let code_unit = function_definition
+            .code
+            .as_ref()
+            .expect("test fixture has body");
         let cfg = AdamantControlFlowGraph::new(&code_unit.code, &code_unit.jump_tables);
         StackUsageVerifier::verify(
             config,
@@ -698,120 +702,169 @@ mod tests {
     fn release_sub_view_key_pops_one_pushes_one() {
         // body: LdU64 + ReleaseSubViewKey (1 pop, 1 push) + Pop +
         // Ret with return arity 0. Net delta in block: 0.
-        let m = module_with_body(0, 0, vec![
-            ld_u64(0),
-            extension(AdamantBytecode::ReleaseSubViewKey),
-            pop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(0),
+                extension(AdamantBytecode::ReleaseSubViewKey),
+                pop(),
+                ret(),
+            ],
+        );
         run(&m, &AdamantStructuralLimits::genesis()).expect("balance OK");
     }
 
     #[test]
     fn kzg_commit_pops_one_pushes_one() {
-        let m = module_with_body(0, 0, vec![
-            ld_u64(0),
-            extension(AdamantBytecode::KzgCommit),
-            pop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(0),
+                extension(AdamantBytecode::KzgCommit),
+                pop(),
+                ret(),
+            ],
+        );
         run(&m, &AdamantStructuralLimits::genesis()).expect("balance OK");
     }
 
     #[test]
     fn kzg_verify_pops_three_pushes_one() {
-        let m = module_with_body(0, 0, vec![
-            ld_u64(0), ld_u64(0), ld_u64(0),
-            extension(AdamantBytecode::KzgVerify),
-            pop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(0),
+                ld_u64(0),
+                ld_u64(0),
+                extension(AdamantBytecode::KzgVerify),
+                pop(),
+                ret(),
+            ],
+        );
         run(&m, &AdamantStructuralLimits::genesis()).expect("balance OK");
     }
 
     #[test]
     fn sha3_256_pops_one_pushes_one() {
-        let m = module_with_body(0, 0, vec![
-            ld_u64(0),
-            extension(AdamantBytecode::Sha3_256),
-            pop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(0),
+                extension(AdamantBytecode::Sha3_256),
+                pop(),
+                ret(),
+            ],
+        );
         run(&m, &AdamantStructuralLimits::genesis()).expect("balance OK");
     }
 
     #[test]
     fn blake3_pops_one_pushes_one() {
-        let m = module_with_body(0, 0, vec![
-            ld_u64(0),
-            extension(AdamantBytecode::Blake3),
-            pop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![ld_u64(0), extension(AdamantBytecode::Blake3), pop(), ret()],
+        );
         run(&m, &AdamantStructuralLimits::genesis()).expect("balance OK");
     }
 
     #[test]
     fn ed25519_verify_pops_three_pushes_one() {
-        let m = module_with_body(0, 0, vec![
-            ld_u64(0), ld_u64(0), ld_u64(0),
-            extension(AdamantBytecode::Ed25519Verify),
-            pop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(0),
+                ld_u64(0),
+                ld_u64(0),
+                extension(AdamantBytecode::Ed25519Verify),
+                pop(),
+                ret(),
+            ],
+        );
         run(&m, &AdamantStructuralLimits::genesis()).expect("balance OK");
     }
 
     #[test]
     fn ml_dsa_verify_65_pops_three_pushes_one() {
-        let m = module_with_body(0, 0, vec![
-            ld_u64(0), ld_u64(0), ld_u64(0),
-            extension(AdamantBytecode::MlDsaVerify65),
-            pop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(0),
+                ld_u64(0),
+                ld_u64(0),
+                extension(AdamantBytecode::MlDsaVerify65),
+                pop(),
+                ret(),
+            ],
+        );
         run(&m, &AdamantStructuralLimits::genesis()).expect("balance OK");
     }
 
     #[test]
     fn ml_dsa_verify_87_pops_three_pushes_one() {
-        let m = module_with_body(0, 0, vec![
-            ld_u64(0), ld_u64(0), ld_u64(0),
-            extension(AdamantBytecode::MlDsaVerify87),
-            pop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(0),
+                ld_u64(0),
+                ld_u64(0),
+                extension(AdamantBytecode::MlDsaVerify87),
+                pop(),
+                ret(),
+            ],
+        );
         run(&m, &AdamantStructuralLimits::genesis()).expect("balance OK");
     }
 
     #[test]
     fn bls_verify_pops_three_pushes_one() {
-        let m = module_with_body(0, 0, vec![
-            ld_u64(0), ld_u64(0), ld_u64(0),
-            extension(AdamantBytecode::BlsVerify),
-            pop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(0),
+                ld_u64(0),
+                ld_u64(0),
+                extension(AdamantBytecode::BlsVerify),
+                pop(),
+                ret(),
+            ],
+        );
         run(&m, &AdamantStructuralLimits::genesis()).expect("balance OK");
     }
 
     #[test]
     fn charge_gas_pops_one_pushes_zero() {
-        let m = module_with_body(0, 0, vec![
-            ld_u64(100),
-            extension(AdamantBytecode::ChargeGas(GasDimension::Computation)),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(100),
+                extension(AdamantBytecode::ChargeGas(GasDimension::Computation)),
+                ret(),
+            ],
+        );
         run(&m, &AdamantStructuralLimits::genesis()).expect("balance OK");
     }
 
     #[test]
     fn remaining_gas_pops_zero_pushes_one() {
-        let m = module_with_body(0, 0, vec![
-            extension(AdamantBytecode::RemainingGas(GasDimension::Computation)),
-            pop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                extension(AdamantBytecode::RemainingGas(GasDimension::Computation)),
+                pop(),
+                ret(),
+            ],
+        );
         run(&m, &AdamantStructuralLimits::genesis()).expect("balance OK");
     }
 
@@ -830,10 +883,7 @@ mod tests {
     /// canonical registration at D-7.
     #[test]
     fn out_of_gas_pops_zero_pushes_zero() {
-        let m = module_with_body(0, 0, vec![
-            extension(AdamantBytecode::OutOfGas),
-            ret(),
-        ]);
+        let m = module_with_body(0, 0, vec![extension(AdamantBytecode::OutOfGas), ret()]);
         run(&m, &AdamantStructuralLimits::genesis()).expect("verifier-treatment is (0, 0)");
     }
 
@@ -850,14 +900,20 @@ mod tests {
         // is at index 0 with the test function's signature; add
         // a target handle at index 1.
         use adamant_bytecode_format::SignatureToken;
-        let mut m = module_with_body(0, 0, vec![
-            ld_u64(0), ld_u64(0),
-            extension(AdamantBytecode::InvokeShielded(FunctionHandleIndex(1))),
-            pop(),
-            ret(),
-        ]);
+        let mut m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(0),
+                ld_u64(0),
+                extension(AdamantBytecode::InvokeShielded(FunctionHandleIndex(1))),
+                pop(),
+                ret(),
+            ],
+        );
         // Add target handle: 2 params, 1 return.
-        m.signatures.push(Signature(vec![SignatureToken::U64, SignatureToken::U64])); // 3
+        m.signatures
+            .push(Signature(vec![SignatureToken::U64, SignatureToken::U64])); // 3
         m.signatures.push(Signature(vec![SignatureToken::U64])); // 4
         m.function_handles.push(FunctionHandle {
             module: ModuleHandleIndex(0),
@@ -872,13 +928,19 @@ mod tests {
     #[test]
     fn invoke_transparent_resolves_function_handle() {
         use adamant_bytecode_format::SignatureToken;
-        let mut m = module_with_body(0, 0, vec![
-            ld_u64(0), ld_u64(0),
-            extension(AdamantBytecode::InvokeTransparent(FunctionHandleIndex(1))),
-            pop(),
-            ret(),
-        ]);
-        m.signatures.push(Signature(vec![SignatureToken::U64, SignatureToken::U64]));
+        let mut m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(0),
+                ld_u64(0),
+                extension(AdamantBytecode::InvokeTransparent(FunctionHandleIndex(1))),
+                pop(),
+                ret(),
+            ],
+        );
+        m.signatures
+            .push(Signature(vec![SignatureToken::U64, SignatureToken::U64]));
         m.signatures.push(Signature(vec![SignatureToken::U64]));
         m.function_handles.push(FunctionHandle {
             module: ModuleHandleIndex(0),
@@ -893,10 +955,14 @@ mod tests {
     /// Zero-arity invoke: 0 params, 0 returns — pop=0, push=0.
     #[test]
     fn invoke_shielded_resolves_zero_arity() {
-        let mut m = module_with_body(0, 0, vec![
-            extension(AdamantBytecode::InvokeShielded(FunctionHandleIndex(1))),
-            ret(),
-        ]);
+        let mut m = module_with_body(
+            0,
+            0,
+            vec![
+                extension(AdamantBytecode::InvokeShielded(FunctionHandleIndex(1))),
+                ret(),
+            ],
+        );
         m.signatures.push(Signature(vec![])); // 3
         m.signatures.push(Signature(vec![])); // 4
         m.function_handles.push(FunctionHandle {
@@ -917,33 +983,36 @@ mod tests {
     #[test]
     fn generate_proof_fails_open_at_verifier() {
         use crate::bytecode::CircuitId;
-        let m = module_with_body(0, 0, vec![
-            extension(AdamantBytecode::GenerateProof(CircuitId(0))),
-            ret(),
-        ]);
-        run(&m, &AdamantStructuralLimits::genesis())
-            .expect("Category C fails open with (0, 0)");
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                extension(AdamantBytecode::GenerateProof(CircuitId(0))),
+                ret(),
+            ],
+        );
+        run(&m, &AdamantStructuralLimits::genesis()).expect("Category C fails open with (0, 0)");
     }
 
     #[test]
     fn verify_proof_fails_open_at_verifier() {
         use crate::bytecode::CircuitId;
-        let m = module_with_body(0, 0, vec![
-            extension(AdamantBytecode::VerifyProof(CircuitId(0))),
-            ret(),
-        ]);
-        run(&m, &AdamantStructuralLimits::genesis())
-            .expect("Category C fails open with (0, 0)");
+        let m = module_with_body(
+            0,
+            0,
+            vec![extension(AdamantBytecode::VerifyProof(CircuitId(0))), ret()],
+        );
+        run(&m, &AdamantStructuralLimits::genesis()).expect("Category C fails open with (0, 0)");
     }
 
     #[test]
     fn recursive_verify_fails_open_at_verifier() {
-        let m = module_with_body(0, 0, vec![
-            extension(AdamantBytecode::RecursiveVerify),
-            ret(),
-        ]);
-        run(&m, &AdamantStructuralLimits::genesis())
-            .expect("Category D fails open with (0, 0)");
+        let m = module_with_body(
+            0,
+            0,
+            vec![extension(AdamantBytecode::RecursiveVerify), ret()],
+        );
+        run(&m, &AdamantStructuralLimits::genesis()).expect("Category D fails open with (0, 0)");
     }
 
     // --- per-block balance — happy ---
@@ -980,12 +1049,16 @@ mod tests {
         // 1: BrTrue 3      pop 1 → block 0 balanced
         // 2: Nop           fall-through arm, 0 → 0
         // 3: Ret           join, return arity 0
-        let m = module_with_body(0, 0, vec![
-            ld_true(),
-            BytecodeInstruction::Inherited(Bytecode::BrTrue(3)),
-            nop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_true(),
+                BytecodeInstruction::Inherited(Bytecode::BrTrue(3)),
+                nop(),
+                ret(),
+            ],
+        );
         run(&m, &AdamantStructuralLimits::genesis()).expect("each block balances");
     }
 
@@ -998,7 +1071,9 @@ mod tests {
         let m = module_with_body(0, 1, vec![ret()]);
         match run(&m, &AdamantStructuralLimits::genesis()) {
             Err(AdamantValidationError::StackUnderflow { .. }) => {}
-            other => panic!("expected StackUnderflow (Ret pops more than block has), got {other:?}"),
+            other => {
+                panic!("expected StackUnderflow (Ret pops more than block has), got {other:?}")
+            }
         }
     }
 
@@ -1040,13 +1115,17 @@ mod tests {
         // 2: Branch 3
         // 3: Pop          <- branch target; expects empty stack on entry
         // 4: Ret
-        let m = module_with_body(0, 0, vec![
-            ld_true(),
-            BytecodeInstruction::Inherited(Bytecode::BrTrue(3)),
-            BytecodeInstruction::Inherited(Bytecode::Branch(3)),
-            pop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_true(),
+                BytecodeInstruction::Inherited(Bytecode::BrTrue(3)),
+                BytecodeInstruction::Inherited(Bytecode::Branch(3)),
+                pop(),
+                ret(),
+            ],
+        );
         match run(&m, &AdamantStructuralLimits::genesis()) {
             Err(AdamantValidationError::StackUnderflow { .. }) => {}
             other => panic!("expected StackUnderflow at branch-target block, got {other:?}"),
@@ -1058,22 +1137,32 @@ mod tests {
     #[test]
     fn max_push_size_at_limit_accepted() {
         // 3 pushes (LdU64 × 3), each 1 push; cleanup with Pops; max_push_size=3.
-        let m = module_with_body(0, 0, vec![
-            ld_u64(1), ld_u64(2), ld_u64(3),
-            pop(), pop(), pop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![ld_u64(1), ld_u64(2), ld_u64(3), pop(), pop(), pop(), ret()],
+        );
         let limits = limits_with_max_push_size(Some(3));
         run(&m, &limits).expect("3 pushes at limit 3 accepts");
     }
 
     #[test]
     fn max_push_size_above_limit_rejected() {
-        let m = module_with_body(0, 0, vec![
-            ld_u64(1), ld_u64(2), ld_u64(3), ld_u64(4),
-            pop(), pop(), pop(), pop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(1),
+                ld_u64(2),
+                ld_u64(3),
+                ld_u64(4),
+                pop(),
+                pop(),
+                pop(),
+                pop(),
+                ret(),
+            ],
+        );
         let limits = limits_with_max_push_size(Some(3));
         match run(&m, &limits) {
             Err(AdamantValidationError::StackPushOverflow { .. }) => {}
@@ -1083,11 +1172,23 @@ mod tests {
 
     #[test]
     fn max_push_size_disabled_no_check() {
-        let m = module_with_body(0, 0, vec![
-            ld_u64(1), ld_u64(2), ld_u64(3), ld_u64(4), ld_u64(5),
-            pop(), pop(), pop(), pop(), pop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(1),
+                ld_u64(2),
+                ld_u64(3),
+                ld_u64(4),
+                ld_u64(5),
+                pop(),
+                pop(),
+                pop(),
+                pop(),
+                pop(),
+                ret(),
+            ],
+        );
         let limits = limits_with_max_push_size(None);
         run(&m, &limits).expect("None disables push-size check");
     }
@@ -1096,16 +1197,23 @@ mod tests {
 
     #[test]
     fn pack_resolves_struct_field_count() {
-        use adamant_bytecode_format::{FieldDefinition, StructDefinition};
-        use adamant_bytecode_format::{AbilitySet, DatatypeHandle};
         use adamant_bytecode_format::SignatureToken;
-        let mut m = module_with_body(0, 0, vec![
-            ld_u64(1), ld_u64(2), ld_u64(3),
-            BytecodeInstruction::Inherited(Bytecode::Pack(StructDefinitionIndex(0))),
-            pop(),
-            ret(),
-        ]);
-        m.identifiers.push(adamant_bytecode_format::Identifier::new("S").unwrap());
+        use adamant_bytecode_format::{AbilitySet, DatatypeHandle};
+        use adamant_bytecode_format::{FieldDefinition, StructDefinition};
+        let mut m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(1),
+                ld_u64(2),
+                ld_u64(3),
+                BytecodeInstruction::Inherited(Bytecode::Pack(StructDefinitionIndex(0))),
+                pop(),
+                ret(),
+            ],
+        );
+        m.identifiers
+            .push(adamant_bytecode_format::Identifier::new("S").unwrap());
         m.datatype_handles.push(DatatypeHandle {
             module: ModuleHandleIndex(0),
             name: IdentifierIndex(1),
@@ -1115,9 +1223,18 @@ mod tests {
         m.struct_defs.push(StructDefinition {
             struct_handle: adamant_bytecode_format::DatatypeHandleIndex(0),
             field_information: StructFieldInformation::Declared(vec![
-                FieldDefinition { name: IdentifierIndex(0), signature: adamant_bytecode_format::TypeSignature(SignatureToken::U64) },
-                FieldDefinition { name: IdentifierIndex(0), signature: adamant_bytecode_format::TypeSignature(SignatureToken::U64) },
-                FieldDefinition { name: IdentifierIndex(0), signature: adamant_bytecode_format::TypeSignature(SignatureToken::U64) },
+                FieldDefinition {
+                    name: IdentifierIndex(0),
+                    signature: adamant_bytecode_format::TypeSignature(SignatureToken::U64),
+                },
+                FieldDefinition {
+                    name: IdentifierIndex(0),
+                    signature: adamant_bytecode_format::TypeSignature(SignatureToken::U64),
+                },
+                FieldDefinition {
+                    name: IdentifierIndex(0),
+                    signature: adamant_bytecode_format::TypeSignature(SignatureToken::U64),
+                },
             ]),
         });
         run(&m, &AdamantStructuralLimits::genesis())
@@ -1126,17 +1243,24 @@ mod tests {
 
     #[test]
     fn unpack_resolves_struct_field_count() {
-        use adamant_bytecode_format::{FieldDefinition, StructDefinition};
-        use adamant_bytecode_format::{AbilitySet, DatatypeHandle};
         use adamant_bytecode_format::SignatureToken;
-        let mut m = module_with_body(0, 0, vec![
-            ld_u64(1), ld_u64(2),
-            BytecodeInstruction::Inherited(Bytecode::Pack(StructDefinitionIndex(0))),
-            BytecodeInstruction::Inherited(Bytecode::Unpack(StructDefinitionIndex(0))),
-            pop(), pop(),
-            ret(),
-        ]);
-        m.identifiers.push(adamant_bytecode_format::Identifier::new("S").unwrap());
+        use adamant_bytecode_format::{AbilitySet, DatatypeHandle};
+        use adamant_bytecode_format::{FieldDefinition, StructDefinition};
+        let mut m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(1),
+                ld_u64(2),
+                BytecodeInstruction::Inherited(Bytecode::Pack(StructDefinitionIndex(0))),
+                BytecodeInstruction::Inherited(Bytecode::Unpack(StructDefinitionIndex(0))),
+                pop(),
+                pop(),
+                ret(),
+            ],
+        );
+        m.identifiers
+            .push(adamant_bytecode_format::Identifier::new("S").unwrap());
         m.datatype_handles.push(DatatypeHandle {
             module: ModuleHandleIndex(0),
             name: IdentifierIndex(1),
@@ -1146,8 +1270,14 @@ mod tests {
         m.struct_defs.push(StructDefinition {
             struct_handle: adamant_bytecode_format::DatatypeHandleIndex(0),
             field_information: StructFieldInformation::Declared(vec![
-                FieldDefinition { name: IdentifierIndex(0), signature: adamant_bytecode_format::TypeSignature(SignatureToken::U64) },
-                FieldDefinition { name: IdentifierIndex(0), signature: adamant_bytecode_format::TypeSignature(SignatureToken::U64) },
+                FieldDefinition {
+                    name: IdentifierIndex(0),
+                    signature: adamant_bytecode_format::TypeSignature(SignatureToken::U64),
+                },
+                FieldDefinition {
+                    name: IdentifierIndex(0),
+                    signature: adamant_bytecode_format::TypeSignature(SignatureToken::U64),
+                },
             ]),
         });
         run(&m, &AdamantStructuralLimits::genesis())
@@ -1158,12 +1288,18 @@ mod tests {
     fn vec_pack_consumes_immediate_arity() {
         use adamant_bytecode_format::SignatureIndex as SI;
         // VecPack(_, num) pops `num` and pushes 1.
-        let m = module_with_body(0, 0, vec![
-            ld_u64(1), ld_u64(2), ld_u64(3),
-            BytecodeInstruction::Inherited(Bytecode::VecPack(SI(0), 3)),
-            pop(),
-            ret(),
-        ]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(1),
+                ld_u64(2),
+                ld_u64(3),
+                BytecodeInstruction::Inherited(Bytecode::VecPack(SI(0), 3)),
+                pop(),
+                ret(),
+            ],
+        );
         // Need a non-empty signature pool entry for the vec
         // element type. Genesis-default signatures vec already
         // has SignatureIndex(0) as the locals signature; the
@@ -1176,13 +1312,19 @@ mod tests {
     #[test]
     fn call_resolves_function_handle() {
         use adamant_bytecode_format::SignatureToken;
-        let mut m = module_with_body(0, 0, vec![
-            ld_u64(1), ld_u64(2),
-            BytecodeInstruction::Inherited(Bytecode::Call(FunctionHandleIndex(1))),
-            pop(),
-            ret(),
-        ]);
-        m.signatures.push(Signature(vec![SignatureToken::U64, SignatureToken::U64]));
+        let mut m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(1),
+                ld_u64(2),
+                BytecodeInstruction::Inherited(Bytecode::Call(FunctionHandleIndex(1))),
+                pop(),
+                ret(),
+            ],
+        );
+        m.signatures
+            .push(Signature(vec![SignatureToken::U64, SignatureToken::U64]));
         m.signatures.push(Signature(vec![SignatureToken::U64]));
         m.function_handles.push(FunctionHandle {
             module: ModuleHandleIndex(0),
@@ -1200,13 +1342,21 @@ mod tests {
         use adamant_bytecode_format::FunctionInstantiation;
         use adamant_bytecode_format::FunctionInstantiationIndex;
         use adamant_bytecode_format::SignatureToken;
-        let mut m = module_with_body(0, 0, vec![
-            ld_u64(1), ld_u64(2),
-            BytecodeInstruction::Inherited(Bytecode::CallGeneric(FunctionInstantiationIndex(0))),
-            pop(),
-            ret(),
-        ]);
-        m.signatures.push(Signature(vec![SignatureToken::U64, SignatureToken::U64]));
+        let mut m = module_with_body(
+            0,
+            0,
+            vec![
+                ld_u64(1),
+                ld_u64(2),
+                BytecodeInstruction::Inherited(Bytecode::CallGeneric(FunctionInstantiationIndex(
+                    0,
+                ))),
+                pop(),
+                ret(),
+            ],
+        );
+        m.signatures
+            .push(Signature(vec![SignatureToken::U64, SignatureToken::U64]));
         m.signatures.push(Signature(vec![SignatureToken::U64]));
         m.function_handles.push(FunctionHandle {
             module: ModuleHandleIndex(0),
@@ -1354,7 +1504,11 @@ mod tests {
     fn cross_validation_accepts_balanced_loop_via_branch() {
         // 0: Branch 0 — self-loop with empty body. Stack delta
         // per iteration = 0; CFG is reducible (self-loop).
-        let m = module_with_body(0, 0, vec![BytecodeInstruction::Inherited(Bytecode::Branch(0))]);
+        let m = module_with_body(
+            0,
+            0,
+            vec![BytecodeInstruction::Inherited(Bytecode::Branch(0))],
+        );
         cross_validate_stack_usage_pipeline(&m);
     }
 }

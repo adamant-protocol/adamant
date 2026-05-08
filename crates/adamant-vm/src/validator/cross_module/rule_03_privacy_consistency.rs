@@ -215,7 +215,9 @@ fn verify_function_call_graph(
             if target_handle.module == module.self_module_handle_idx {
                 // Internal call: resolve to the deploying
                 // module's function-def and recurse.
-                if let Some(target_def_idx) = resolve_internal_function_def(module, target_handle_idx) {
+                if let Some(target_def_idx) =
+                    resolve_internal_function_def(module, target_handle_idx)
+                {
                     verify_function_call_graph(
                         module,
                         resolver,
@@ -249,7 +251,10 @@ fn verify_function_call_graph(
 /// Cross-module mode-consistency check: resolve the dependency
 /// module + the target function's privacy annotation, compare
 /// against the caller's mode.
-#[allow(clippy::too_many_arguments, reason = "diagnostic carries multi-field locus")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "diagnostic carries multi-field locus"
+)]
 fn check_cross_module_call(
     module: &AdamantCompiledModule,
     resolver: &dyn ModuleResolver,
@@ -261,10 +266,8 @@ fn check_cross_module_call(
     instr: &BytecodeInstruction,
 ) -> Result<(), AdamantValidationError> {
     let target_handle = &module.function_handles[target_handle_idx.0 as usize];
-    let target_module_handle =
-        &module.module_handles[target_handle.module.0 as usize];
-    let target_address =
-        module.address_identifiers[target_module_handle.address.0 as usize];
+    let target_module_handle = &module.module_handles[target_handle.module.0 as usize];
+    let target_address = module.address_identifiers[target_module_handle.address.0 as usize];
     let target_module_name = module.identifiers[target_module_handle.name.0 as usize].clone();
     let target_module_id = ModuleId::new(target_address, target_module_name);
 
@@ -282,22 +285,23 @@ fn check_cross_module_call(
         // privacy consistency. Reject per the missing-
         // dependency disposition documented at this module's
         // preamble.
-        return Err(AdamantValidationError::CrossModulePrivacyConsistencyViolation {
-            calling_public_index: calling_public_idx,
-            calling_function_index: calling_function_idx,
-            code_offset,
-            target_module_id,
-            calling_function_handle_idx: target_handle_idx,
-            reason: missing_dep_reason_for(caller_mode, instr),
-        });
+        return Err(
+            AdamantValidationError::CrossModulePrivacyConsistencyViolation {
+                calling_public_index: calling_public_idx,
+                calling_function_index: calling_function_idx,
+                code_offset,
+                target_module_id,
+                calling_function_handle_idx: target_handle_idx,
+                reason: missing_dep_reason_for(caller_mode, instr),
+            },
+        );
     };
 
     // Find the dep function-def whose handle name matches the
     // call's target name. The dep was already validated at its
     // own deploy time (Rule 3 single-module + Rule 2 + privacy_
     // metadata_structure), so the lookup is structurally safe.
-    let Some(dep_target_def_idx) =
-        find_dep_function_def_by_name(dep_module, target_function_name)
+    let Some(dep_target_def_idx) = find_dep_function_def_by_name(dep_module, target_function_name)
     else {
         // Target function not found in dep module — this is a
         // Rule 4-style non-existence (unimplemented handle on
@@ -306,14 +310,16 @@ fn check_cross_module_call(
         // checker, more specifically — though that's deploy-
         // time of the dep, not this caller). For static-
         // analysis robustness in this walker, reject.
-        return Err(AdamantValidationError::CrossModulePrivacyConsistencyViolation {
-            calling_public_index: calling_public_idx,
-            calling_function_index: calling_function_idx,
-            code_offset,
-            target_module_id,
-            calling_function_handle_idx: target_handle_idx,
-            reason: missing_dep_reason_for(caller_mode, instr),
-        });
+        return Err(
+            AdamantValidationError::CrossModulePrivacyConsistencyViolation {
+                calling_public_index: calling_public_idx,
+                calling_function_index: calling_function_idx,
+                code_offset,
+                target_module_id,
+                calling_function_handle_idx: target_handle_idx,
+                reason: missing_dep_reason_for(caller_mode, instr),
+            },
+        );
     };
 
     let dep_target_mode = lookup_privacy_mode(dep_module, dep_target_def_idx);
@@ -336,14 +342,16 @@ fn check_cross_module_call(
                      PrivacyMode values are unreachable per the from_byte filter"
                 ),
             };
-            return Err(AdamantValidationError::CrossModulePrivacyConsistencyViolation {
-                calling_public_index: calling_public_idx,
-                calling_function_index: calling_function_idx,
-                code_offset,
-                target_module_id,
-                calling_function_handle_idx: target_handle_idx,
-                reason,
-            });
+            return Err(
+                AdamantValidationError::CrossModulePrivacyConsistencyViolation {
+                    calling_public_index: calling_public_idx,
+                    calling_function_index: calling_function_idx,
+                    code_offset,
+                    target_module_id,
+                    calling_function_handle_idx: target_handle_idx,
+                    reason,
+                },
+            );
         }
     }
     // If `dep_target_mode` is `None`: the dep target is
@@ -371,7 +379,9 @@ fn missing_dep_reason_for(
     _instr: &BytecodeInstruction,
 ) -> PrivacyConsistencyViolationReason {
     match caller_mode {
-        PrivacyMode::Shielded => PrivacyConsistencyViolationReason::ShieldedReachesInvokeTransparent,
+        PrivacyMode::Shielded => {
+            PrivacyConsistencyViolationReason::ShieldedReachesInvokeTransparent
+        }
         PrivacyMode::Transparent => {
             PrivacyConsistencyViolationReason::TransparentReachesInvokeShielded
         }
@@ -624,7 +634,12 @@ mod tests {
         // Deploying module: shielded public "p" calls dep::f.
         let mut m = skeleton_module(0x01, "deploying");
         let ext_handle = add_external_handle(&mut m, 0x02, "dep", "f");
-        let pub_idx = add_function(&mut m, "p", Visibility::Public, vec![call(ext_handle), ret()]);
+        let pub_idx = add_function(
+            &mut m,
+            "p",
+            Visibility::Public,
+            vec![call(ext_handle), ret()],
+        );
         set_privacy_metadata(&mut m, &[(pub_idx.0, PRIVACY_SHIELDED_BYTE)]);
         let mut resolver = InMemoryModuleResolver::new();
         resolver.insert(dep);
@@ -638,7 +653,12 @@ mod tests {
         set_privacy_metadata(&mut dep, &[(dep_pub.0, PRIVACY_TRANSPARENT_BYTE)]);
         let mut m = skeleton_module(0x01, "deploying");
         let ext_handle = add_external_handle(&mut m, 0x02, "dep", "f");
-        let pub_idx = add_function(&mut m, "p", Visibility::Public, vec![call(ext_handle), ret()]);
+        let pub_idx = add_function(
+            &mut m,
+            "p",
+            Visibility::Public,
+            vec![call(ext_handle), ret()],
+        );
         set_privacy_metadata(&mut m, &[(pub_idx.0, PRIVACY_TRANSPARENT_BYTE)]);
         let mut resolver = InMemoryModuleResolver::new();
         resolver.insert(dep);
@@ -681,7 +701,12 @@ mod tests {
         set_privacy_metadata(&mut dep, &[(dep_pub.0, PRIVACY_TRANSPARENT_BYTE)]);
         let mut m = skeleton_module(0x01, "deploying");
         let ext_handle = add_external_handle(&mut m, 0x02, "dep", "f");
-        let pub_idx = add_function(&mut m, "p", Visibility::Public, vec![call(ext_handle), ret()]);
+        let pub_idx = add_function(
+            &mut m,
+            "p",
+            Visibility::Public,
+            vec![call(ext_handle), ret()],
+        );
         set_privacy_metadata(&mut m, &[(pub_idx.0, PRIVACY_SHIELDED_BYTE)]);
         let mut resolver = InMemoryModuleResolver::new();
         resolver.insert(dep);
@@ -694,7 +719,9 @@ mod tests {
                 assert_eq!(target_module_id.address, Address::from_bytes([0x02; 32]));
                 assert_eq!(target_module_id.name.as_str(), "dep");
             }
-            other => panic!("expected ShieldedReachesInvokeTransparent cross-module, got {other:?}"),
+            other => {
+                panic!("expected ShieldedReachesInvokeTransparent cross-module, got {other:?}")
+            }
         }
     }
 
@@ -705,7 +732,12 @@ mod tests {
         set_privacy_metadata(&mut dep, &[(dep_pub.0, PRIVACY_SHIELDED_BYTE)]);
         let mut m = skeleton_module(0x01, "deploying");
         let ext_handle = add_external_handle(&mut m, 0x02, "dep", "f");
-        let pub_idx = add_function(&mut m, "p", Visibility::Public, vec![call(ext_handle), ret()]);
+        let pub_idx = add_function(
+            &mut m,
+            "p",
+            Visibility::Public,
+            vec![call(ext_handle), ret()],
+        );
         set_privacy_metadata(&mut m, &[(pub_idx.0, PRIVACY_TRANSPARENT_BYTE)]);
         let mut resolver = InMemoryModuleResolver::new();
         resolver.insert(dep);
@@ -714,7 +746,9 @@ mod tests {
                 reason: PrivacyConsistencyViolationReason::TransparentReachesInvokeShielded,
                 ..
             }) => {}
-            other => panic!("expected TransparentReachesInvokeShielded cross-module, got {other:?}"),
+            other => {
+                panic!("expected TransparentReachesInvokeShielded cross-module, got {other:?}")
+            }
         }
     }
 
@@ -725,7 +759,12 @@ mod tests {
         // reason.
         let mut m = skeleton_module(0x01, "deploying");
         let ext_handle = add_external_handle(&mut m, 0x02, "dep", "f");
-        let pub_idx = add_function(&mut m, "p", Visibility::Public, vec![call(ext_handle), ret()]);
+        let pub_idx = add_function(
+            &mut m,
+            "p",
+            Visibility::Public,
+            vec![call(ext_handle), ret()],
+        );
         set_privacy_metadata(&mut m, &[(pub_idx.0, PRIVACY_SHIELDED_BYTE)]);
         let resolver = InMemoryModuleResolver::new(); // empty
         match verify(&m, &resolver) {
@@ -749,7 +788,12 @@ mod tests {
         let dep = skeleton_module(0x02, "dep"); // no functions
         let mut m = skeleton_module(0x01, "deploying");
         let ext_handle = add_external_handle(&mut m, 0x02, "dep", "missing_fn");
-        let pub_idx = add_function(&mut m, "p", Visibility::Public, vec![call(ext_handle), ret()]);
+        let pub_idx = add_function(
+            &mut m,
+            "p",
+            Visibility::Public,
+            vec![call(ext_handle), ret()],
+        );
         set_privacy_metadata(&mut m, &[(pub_idx.0, PRIVACY_TRANSPARENT_BYTE)]);
         let mut resolver = InMemoryModuleResolver::new();
         resolver.insert(dep);

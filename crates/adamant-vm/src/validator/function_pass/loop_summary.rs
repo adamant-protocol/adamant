@@ -222,8 +222,9 @@ impl LoopSummary {
     pub(super) fn preorder(&self) -> impl DoubleEndedIterator<Item = NodeId> + '_ {
         (0..self.blocks.len()).map(|id| {
             NodeId(
-                u16::try_from(id)
-                    .expect("DFST node count fits u16; CFG block count is bounded by binary format"),
+                u16::try_from(id).expect(
+                    "DFST node count fits u16; CFG block count is bounded by binary format",
+                ),
             )
         })
     }
@@ -497,14 +498,7 @@ mod tests {
         // 3: Branch 5
         // 4: Nop                  <- true arm
         // 5: Ret                  <- join
-        let cfg = cfg_of(&[
-            ld_true(),
-            br_true(4),
-            nop(),
-            branch(5),
-            nop(),
-            ret(),
-        ]);
+        let cfg = cfg_of(&[ld_true(), br_true(4), nop(), branch(5), nop(), ret()]);
         let summary = LoopSummary::new(&cfg);
         // The join block (offset 5) should have a non-empty
         // pred_edges list — at least one arm reaches it via a

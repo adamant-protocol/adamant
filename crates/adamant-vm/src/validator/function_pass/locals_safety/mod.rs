@@ -282,14 +282,14 @@ mod tests {
     //! inherited-bytecode catchall behavior.
 
     use super::*;
+    use crate::bytecode::{AdamantBytecode, BytecodeInstruction};
+    use crate::module::{AdamantCodeUnit, AdamantCompiledModule, AdamantFunctionDefinition};
     use adamant_bytecode_format::{
-        AbilitySet, Ability, AddressIdentifierIndex, DatatypeHandle, DatatypeHandleIndex,
+        Ability, AbilitySet, AddressIdentifierIndex, DatatypeHandle, DatatypeHandleIndex,
         FunctionHandle, FunctionHandleIndex, Identifier, IdentifierIndex, ModuleHandle,
         ModuleHandleIndex, Signature, SignatureIndex, SignatureToken, StructDefinitionIndex,
         Visibility,
     };
-    use crate::bytecode::{AdamantBytecode, BytecodeInstruction};
-    use crate::module::{AdamantCodeUnit, AdamantCompiledModule, AdamantFunctionDefinition};
 
     // --- builders ---
 
@@ -399,11 +399,11 @@ mod tests {
     /// `datatype_handles` pool. Returns the `SignatureToken`
     /// referring to it.
     fn add_non_drop_datatype(m: &mut AdamantCompiledModule) -> SignatureToken {
-        let handle_idx = u16::try_from(m.datatype_handles.len())
-            .expect("test fixture handle count fits u16");
+        let handle_idx =
+            u16::try_from(m.datatype_handles.len()).expect("test fixture handle count fits u16");
         m.identifiers.push(Identifier::new("S").unwrap());
-        let name_idx = u16::try_from(m.identifiers.len() - 1)
-            .expect("test fixture identifier count fits u16");
+        let name_idx =
+            u16::try_from(m.identifiers.len() - 1).expect("test fixture identifier count fits u16");
         // Abilities = key only (no drop).
         m.datatype_handles.push(DatatypeHandle {
             module: ModuleHandleIndex(0),
@@ -443,32 +443,28 @@ mod tests {
     fn stloc_to_available_non_drop_local_rejects() {
         // Non-drop datatype as the local; StLoc on Available
         // would destroy the prior value.
-        let mut m = module_with_function(
-            vec![],
-            vec![],
-            vec![/* placeholder */ ret()],
-        );
+        let mut m = module_with_function(vec![], vec![], vec![/* placeholder */ ret()]);
         let s_token = add_non_drop_datatype(&mut m);
         // Reset locals to [non-drop]; param is Available at entry
         // via an extra parameter of the same type.
         m.signatures[0] = Signature(vec![s_token.clone()]); // params: 1 non-drop
         m.signatures[1] = Signature(vec![s_token.clone()]); // locals: 1 non-drop
-        // Body: param idx 0 is Available; local idx 1 is Unavailable.
-        // CopyLoc 0 (push non-drop value via copy — but non-drop
-        // also lacks copy, so use MoveLoc).
-        // Simpler: MoveLoc 0 (push from param), StLoc 1 (write to
-        // unavailable local — succeeds, makes it Available),
-        // MoveLoc 0 (already moved out — would error). Use
-        // MoveLoc to non-drop is fine for movement.
-        // Actually simplest: param is Available, local is
-        // Unavailable. StLoc 1 (Unavailable -> Available) needs
-        // a value pushed. MoveLoc 0 pushes the param value.
-        // Then StLoc 1 again with another MoveLoc would try
-        // to overwrite. Need: param twice, MoveLoc 0; StLoc 1;
-        // MoveLoc 0 again would be unavailable.
-        // Cleanest: 2 params, both non-drop. Push first via
-        // MoveLoc 0, StLoc 2 (local). Push second via MoveLoc 1,
-        // StLoc 2 again — Available + non-drop -> StLocDestroysNonDrop.
+                                                            // Body: param idx 0 is Available; local idx 1 is Unavailable.
+                                                            // CopyLoc 0 (push non-drop value via copy — but non-drop
+                                                            // also lacks copy, so use MoveLoc).
+                                                            // Simpler: MoveLoc 0 (push from param), StLoc 1 (write to
+                                                            // unavailable local — succeeds, makes it Available),
+                                                            // MoveLoc 0 (already moved out — would error). Use
+                                                            // MoveLoc to non-drop is fine for movement.
+                                                            // Actually simplest: param is Available, local is
+                                                            // Unavailable. StLoc 1 (Unavailable -> Available) needs
+                                                            // a value pushed. MoveLoc 0 pushes the param value.
+                                                            // Then StLoc 1 again with another MoveLoc would try
+                                                            // to overwrite. Need: param twice, MoveLoc 0; StLoc 1;
+                                                            // MoveLoc 0 again would be unavailable.
+                                                            // Cleanest: 2 params, both non-drop. Push first via
+                                                            // MoveLoc 0, StLoc 2 (local). Push second via MoveLoc 1,
+                                                            // StLoc 2 again — Available + non-drop -> StLocDestroysNonDrop.
         m.signatures[0] = Signature(vec![s_token.clone(), s_token.clone()]); // 2 params
         m.signatures[1] = Signature(vec![s_token.clone()]); // 1 local
         m.function_defs[0].code = Some(AdamantCodeUnit {
@@ -668,7 +664,10 @@ mod tests {
         let m = module_with_function(
             vec![],
             vec![],
-            vec![BytecodeInstruction::Adamant(AdamantBytecode::OutOfGas), ret()],
+            vec![
+                BytecodeInstruction::Adamant(AdamantBytecode::OutOfGas),
+                ret(),
+            ],
         );
         run(&m).expect("OutOfGas passes through locals-safety");
     }
@@ -726,11 +725,7 @@ mod tests {
 
     #[test]
     fn branch_does_not_affect_locals_state() {
-        let m = module_with_function(
-            vec![],
-            vec![],
-            vec![branch(2), nop(), ret()],
-        );
+        let m = module_with_function(vec![], vec![], vec![branch(2), nop(), ret()]);
         run(&m).expect("Branch doesn't affect locals state");
     }
 
@@ -952,9 +947,9 @@ mod tests {
         // rejection.
         let mut m = module_with_function(vec![], vec![], vec![ret()]);
         let nd = add_non_drop_datatype(&mut m);
-        m.signatures[0] = Signature(vec![nd.clone()]);  // params: [nd]
-        m.signatures[1] = Signature(vec![nd]);  // locals: [nd]
-        // Function handle params now = SI(0) (non-drop), locals = SI(1) (non-drop).
+        m.signatures[0] = Signature(vec![nd.clone()]); // params: [nd]
+        m.signatures[1] = Signature(vec![nd]); // locals: [nd]
+                                               // Function handle params now = SI(0) (non-drop), locals = SI(1) (non-drop).
         m.function_defs[0].code.as_mut().unwrap().code = vec![mv_loc(0), st_loc(0), ret()];
         cross_validate_locals_safety_pipeline(&m);
     }
@@ -988,13 +983,13 @@ mod tests {
         m.function_defs[0].code.as_mut().unwrap().code = vec![
             mv_loc(0), // move param 0 to stack
             st_loc(2), // store into local 0 (frame slot 2;
-                       // first non-param slot). Locals[0]
-                       // becomes Available with non-drop.
+            // first non-param slot). Locals[0]
+            // becomes Available with non-drop.
             mv_loc(1), // move param 1 to stack
             st_loc(2), // attempt to store into local 0 (which
-                       // is Available with non-drop) → would
-                       // destroy the existing non-drop value
-                       // → StLocDestroysNonDrop rejection.
+            // is Available with non-drop) → would
+            // destroy the existing non-drop value
+            // → StLocDestroysNonDrop rejection.
             ret(),
         ];
         cross_validate_locals_safety_pipeline(&m);

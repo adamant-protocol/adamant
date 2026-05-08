@@ -92,8 +92,8 @@ mod tests {
     //! not iteration-bound analysis, so there is no upstream
     //! parity surface.
 
-    use crate::module_wire::adamant_serialize;
     use crate::module::{AdamantCodeUnit, AdamantCompiledModule, AdamantFunctionDefinition};
+    use crate::module_wire::adamant_serialize;
     use crate::validator::{verify_module, AdamantVerifierConfig};
     use adamant_bytecode_format::{
         AddressIdentifierIndex, Bytecode, FunctionHandle, FunctionHandleIndex, Identifier,

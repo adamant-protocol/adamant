@@ -112,9 +112,7 @@ pub(super) fn verify(module: &AdamantCompiledModule) -> Result<(), AdamantValida
                 continue;
             };
 
-            if let Some(reason) =
-                forbidden_dynamic_target(module, target_handle_idx)
-            {
+            if let Some(reason) = forbidden_dynamic_target(module, target_handle_idx) {
                 return Err(AdamantValidationError::DynamicDispatchViolation {
                     calling_function_index,
                     code_offset,
@@ -424,8 +422,12 @@ mod tests {
         // dynamic_field and dynamic_object_field are
         // forbidden.
         let mut m = deploying_module(0xab, "deploying", vec![ret()]);
-        let ext =
-            add_external_handle(&mut m, FORBIDDEN_ADDRESS, "transfer", "transfer_to_recipient");
+        let ext = add_external_handle(
+            &mut m,
+            FORBIDDEN_ADDRESS,
+            "transfer",
+            "transfer_to_recipient",
+        );
         m.function_defs[0].code.as_mut().unwrap().code = vec![call(ext), ret()];
         verify(&m).expect("non-dynamic-field module at 0x2 not forbidden");
     }
@@ -472,9 +474,8 @@ mod tests {
         let ext = add_external_handle(&mut m, FORBIDDEN_ADDRESS, FORBIDDEN_DYNAMIC_FIELD, "borrow");
         // Build a function-instantiation pointing at the
         // external dynamic_field handle.
-        let fi_idx = FunctionInstantiationIndex(
-            u16::try_from(m.function_instantiations.len()).unwrap(),
-        );
+        let fi_idx =
+            FunctionInstantiationIndex(u16::try_from(m.function_instantiations.len()).unwrap());
         m.function_instantiations.push(FunctionInstantiation {
             handle: ext,
             type_parameters: SignatureIndex(0),

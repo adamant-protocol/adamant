@@ -589,8 +589,12 @@ mod tests {
             vec![generate_proof(), pop(), ret()],
         );
         let helper_handle = m.function_defs[helper_idx.0 as usize].function;
-        let transparent_idx =
-            add_function(&mut m, "pt", Visibility::Public, vec![ld_u64(), pop(), ret()]);
+        let transparent_idx = add_function(
+            &mut m,
+            "pt",
+            Visibility::Public,
+            vec![ld_u64(), pop(), ret()],
+        );
         let shielded_idx = add_function(
             &mut m,
             "ps",
@@ -604,7 +608,8 @@ mod tests {
                 (shielded_idx.0, PRIVACY_SHIELDED_BYTE),
             ],
         );
-        verify(&m)
-            .expect("mixed-modes module: only transparent walked; transparent doesn't reach circuit");
+        verify(&m).expect(
+            "mixed-modes module: only transparent walked; transparent doesn't reach circuit",
+        );
     }
 }

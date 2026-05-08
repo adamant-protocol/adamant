@@ -1508,9 +1508,9 @@ mod tests {
                 reason: TypeMismatchReason::CastTargetTypeInvalid,
                 ..
             }) => {}
-            other => panic!(
-                "expected Adamant step 4 TypeMismatch on inherited module, got {other:?}"
-            ),
+            other => {
+                panic!("expected Adamant step 4 TypeMismatch on inherited module, got {other:?}")
+            }
         }
     }
 

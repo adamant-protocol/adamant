@@ -37,9 +37,7 @@
 //!   shape; same shielding-vs-runtime canonical pattern).
 //! - No metering surface (D-1a/D-1b/D-2/D-3 precedent).
 
-use adamant_bytecode_format::{
-    AbilitySet, FunctionDefinitionIndex, LocalIndex, SignatureIndex,
-};
+use adamant_bytecode_format::{AbilitySet, FunctionDefinitionIndex, LocalIndex, SignatureIndex};
 
 use crate::module::AdamantCompiledModule;
 use crate::validator::error::AdamantValidationError;
@@ -140,13 +138,11 @@ impl LocalsAbstractState {
         let mut cache = AdamantAbilityCache::new(module);
         let mut all_local_abilities = Vec::with_capacity(num_locals);
         for tok in parameter_tokens.iter().chain(local_tokens.iter()) {
-            let abilities = cache
-                .abilities(type_parameter_abilities, tok)
-                .expect(
-                    "AdamantAbilityCache resolution is structurally infallible after \
+            let abilities = cache.abilities(type_parameter_abilities, tok).expect(
+                "AdamantAbilityCache resolution is structurally infallible after \
                      bounds_checker; type-parameter and datatype indices are validated \
                      at step 3",
-                );
+            );
             all_local_abilities.push(abilities);
         }
 

@@ -37,8 +37,8 @@
 //! shape β of the same discipline) — see
 //! `module_pass/PROVENANCE.md`.
 
-use move_binary_format::CompiledModule;
 use move_binary_format::errors::{PartialVMResult, VMResult};
+use move_binary_format::CompiledModule;
 use move_bytecode_verifier::ability_cache::AbilityCache;
 use move_bytecode_verifier::code_unit_verifier;
 use move_bytecode_verifier_meter::dummy::DummyMeter;

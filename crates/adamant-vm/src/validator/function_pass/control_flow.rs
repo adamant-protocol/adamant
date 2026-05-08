@@ -219,11 +219,9 @@ mod tests {
     //! detection + `max_loop_depth` gating.
 
     use super::*;
-    use adamant_bytecode_format::{
-        Bytecode, EnumDefinitionIndex, VariantJumpTableIndex,
-    };
-    use adamant_bytecode_format::handle::JumpTableInner;
     use crate::bytecode::AdamantBytecode;
+    use adamant_bytecode_format::handle::JumpTableInner;
+    use adamant_bytecode_format::{Bytecode, EnumDefinitionIndex, VariantJumpTableIndex};
 
     fn ret() -> BytecodeInstruction {
         BytecodeInstruction::Inherited(Bytecode::Ret)
@@ -285,12 +283,7 @@ mod tests {
     fn empty_body_rejected() {
         let code: Vec<BytecodeInstruction> = vec![];
         let jts: Vec<VariantJumpTable> = vec![];
-        let result = verify_function(
-            &AdamantStructuralLimits::genesis(),
-            fn_idx(7),
-            &code,
-            &jts,
-        );
+        let result = verify_function(&AdamantStructuralLimits::genesis(), fn_idx(7), &code, &jts);
         match result {
             Err(AdamantValidationError::EmptyFunctionBody { fn_def_idx }) => {
                 assert_eq!(fn_def_idx, fn_idx(7));
@@ -346,12 +339,7 @@ mod tests {
         // BrTrue is conditional — falls through if condition false.
         let code = vec![ld_true(), br_true(0)];
         let jts: Vec<VariantJumpTable> = vec![];
-        let result = verify_function(
-            &AdamantStructuralLimits::genesis(),
-            fn_idx(3),
-            &code,
-            &jts,
-        );
+        let result = verify_function(&AdamantStructuralLimits::genesis(), fn_idx(3), &code, &jts);
         match result {
             Err(AdamantValidationError::MissingFallthroughTerminator {
                 fn_def_idx,
@@ -370,12 +358,7 @@ mod tests {
         // the end of its body.
         let code = vec![ld_u64(1), pop()];
         let jts: Vec<VariantJumpTable> = vec![];
-        match verify_function(
-            &AdamantStructuralLimits::genesis(),
-            fn_idx(0),
-            &code,
-            &jts,
-        ) {
+        match verify_function(&AdamantStructuralLimits::genesis(), fn_idx(0), &code, &jts) {
             Err(AdamantValidationError::MissingFallthroughTerminator { code_offset, .. }) => {
                 assert_eq!(code_offset, 1);
             }
@@ -392,12 +375,7 @@ mod tests {
     fn last_adamant_extension_rejected() {
         let code = vec![nop(), out_of_gas()];
         let jts: Vec<VariantJumpTable> = vec![];
-        match verify_function(
-            &AdamantStructuralLimits::genesis(),
-            fn_idx(0),
-            &code,
-            &jts,
-        ) {
+        match verify_function(&AdamantStructuralLimits::genesis(), fn_idx(0), &code, &jts) {
             Err(AdamantValidationError::MissingFallthroughTerminator { .. }) => {}
             other => panic!("expected MissingFallthroughTerminator, got {other:?}"),
         }
@@ -444,11 +422,15 @@ mod tests {
     fn nested_loops_reducible() {
         // Depth 2 nested loops.
         let code = vec![
-            ld_true(), br_true(8),  // outer header (0,1)
-            ld_true(), br_true(6),  // inner header (2,3)
-            nop(), branch(2),       // inner body, back-edge
-            nop(), branch(0),       // outer body, back-edge
-            ret(),                  // exit (8)
+            ld_true(),
+            br_true(8), // outer header (0,1)
+            ld_true(),
+            br_true(6), // inner header (2,3)
+            nop(),
+            branch(2), // inner body, back-edge
+            nop(),
+            branch(0), // outer body, back-edge
+            ret(),     // exit (8)
         ];
         let jts: Vec<VariantJumpTable> = vec![];
         verify_function(&AdamantStructuralLimits::genesis(), fn_idx(0), &code, &jts)
@@ -491,12 +473,7 @@ mod tests {
         // 3: Branch 2       <- block 3 → block 2 (cycle)
         let code = vec![ld_true(), br_true(3), branch(3), branch(2)];
         let jts: Vec<VariantJumpTable> = vec![];
-        match verify_function(
-            &AdamantStructuralLimits::genesis(),
-            fn_idx(0),
-            &code,
-            &jts,
-        ) {
+        match verify_function(&AdamantStructuralLimits::genesis(), fn_idx(0), &code, &jts) {
             Err(AdamantValidationError::IrreducibleControlFlow {
                 reason: IrreducibleReason::InvalidLoopSplit,
                 ..
@@ -517,12 +494,7 @@ mod tests {
         let code = vec![ld_true(), br_false(3), branch(3), branch(2)];
         let jts: Vec<VariantJumpTable> = vec![];
         assert!(matches!(
-            verify_function(
-                &AdamantStructuralLimits::genesis(),
-                fn_idx(0),
-                &code,
-                &jts,
-            ),
+            verify_function(&AdamantStructuralLimits::genesis(), fn_idx(0), &code, &jts,),
             Err(AdamantValidationError::IrreducibleControlFlow {
                 reason: IrreducibleReason::InvalidLoopSplit,
                 ..
@@ -542,12 +514,7 @@ mod tests {
         let code = vec![ld_true(), br_true(4), branch(4), pop(), branch(2)];
         let jts: Vec<VariantJumpTable> = vec![];
         assert!(matches!(
-            verify_function(
-                &AdamantStructuralLimits::genesis(),
-                fn_idx(0),
-                &code,
-                &jts,
-            ),
+            verify_function(&AdamantStructuralLimits::genesis(), fn_idx(0), &code, &jts,),
             Err(AdamantValidationError::IrreducibleControlFlow {
                 reason: IrreducibleReason::InvalidLoopSplit,
                 ..
@@ -561,12 +528,7 @@ mod tests {
     fn invalid_loop_split_payload_pinned() {
         let code = vec![ld_true(), br_true(3), branch(3), branch(2)];
         let jts: Vec<VariantJumpTable> = vec![];
-        match verify_function(
-            &AdamantStructuralLimits::genesis(),
-            fn_idx(11),
-            &code,
-            &jts,
-        ) {
+        match verify_function(&AdamantStructuralLimits::genesis(), fn_idx(11), &code, &jts) {
             Err(AdamantValidationError::IrreducibleControlFlow {
                 fn_def_idx,
                 code_offset,
@@ -591,8 +553,7 @@ mod tests {
         let code = vec![ld_true(), br_true(4), nop(), branch(0), ret()];
         let jts: Vec<VariantJumpTable> = vec![];
         let limits = limits_with_max_loop_depth(Some(1));
-        verify_function(&limits, fn_idx(0), &code, &jts)
-            .expect("depth-1 loop accepted at limit 1");
+        verify_function(&limits, fn_idx(0), &code, &jts).expect("depth-1 loop accepted at limit 1");
     }
 
     /// Depth exceeding the limit rejects.
@@ -600,10 +561,14 @@ mod tests {
     fn loop_depth_above_limit_rejected() {
         // Depth-2 nested loop.
         let code = vec![
-            ld_true(), br_true(8),
-            ld_true(), br_true(6),
-            nop(), branch(2),
-            nop(), branch(0),
+            ld_true(),
+            br_true(8),
+            ld_true(),
+            br_true(6),
+            nop(),
+            branch(2),
+            nop(),
+            branch(0),
             ret(),
         ];
         let jts: Vec<VariantJumpTable> = vec![];
@@ -622,10 +587,14 @@ mod tests {
     #[test]
     fn loop_max_depth_reached_payload_pinned() {
         let code = vec![
-            ld_true(), br_true(8),
-            ld_true(), br_true(6),
-            nop(), branch(2),
-            nop(), branch(0),
+            ld_true(),
+            br_true(8),
+            ld_true(),
+            br_true(6),
+            nop(),
+            branch(2),
+            nop(),
+            branch(0),
             ret(),
         ];
         let jts: Vec<VariantJumpTable> = vec![];
@@ -655,10 +624,14 @@ mod tests {
     #[test]
     fn loop_max_depth_disabled_for_reducibility_check() {
         let code = vec![
-            ld_true(), br_true(8),
-            ld_true(), br_true(6),
-            nop(), branch(2),
-            nop(), branch(0),
+            ld_true(),
+            br_true(8),
+            ld_true(),
+            br_true(6),
+            nop(),
+            branch(2),
+            nop(),
+            branch(0),
             ret(),
         ];
         let jts: Vec<VariantJumpTable> = vec![];
@@ -741,7 +714,8 @@ mod tests {
             ..AdamantFunctionDefinition::default()
         });
         m.identifiers.push(Identifier::new("f").unwrap());
-        m.address_identifiers.push(AccountAddress::from_bytes([0u8; 32]));
+        m.address_identifiers
+            .push(AccountAddress::from_bytes([0u8; 32]));
         m
     }
 
@@ -750,17 +724,14 @@ mod tests {
     fn cross_validate_control_flow(m: &AdamantCompiledModule) {
         let limits = AdamantStructuralLimits::genesis();
         let function_def = &m.function_defs[0];
-        let code_unit = function_def
-            .code
-            .as_ref()
-            .expect("test fixture has body");
+        let code_unit = function_def.code.as_ref().expect("test fixture has body");
         let adamant_result =
-            verify_function(&limits, fn_idx(0), &code_unit.code, &code_unit.jump_tables).map(|_| ());
+            verify_function(&limits, fn_idx(0), &code_unit.code, &code_unit.jump_tables)
+                .map(|_| ());
 
         let sui_module = to_sui(m);
         let sui_config = sui_config_from(&limits);
-        let sui_fn_def_idx =
-            move_binary_format::file_format::FunctionDefinitionIndex(0);
+        let sui_fn_def_idx = move_binary_format::file_format::FunctionDefinitionIndex(0);
         let sui_function_def = &sui_module.function_defs()[0];
         let sui_code_unit = sui_function_def
             .code
@@ -831,10 +802,7 @@ mod tests {
     fn cross_validation_rejects_irreducible_two_entry_loop() {
         // Same shape as `irreducible_two_entry_loop` Layer A test:
         // blocks 2 and 3 form a cycle with no unique dominator.
-        let m = module_with_body(
-            vec![ld_true(), br_true(3), branch(3), branch(2)],
-            vec![],
-        );
+        let m = module_with_body(vec![ld_true(), br_true(3), branch(3), branch(2)], vec![]);
         cross_validate_control_flow(&m);
     }
 
