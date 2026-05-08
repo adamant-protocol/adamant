@@ -289,22 +289,36 @@ pub fn verify_module(
     module_pass::signature_checker::verify(&module)?;
     module_pass::recursive_data_def::verify(&module)?;
 
-    // Step 3 + 4 transitional: inherited Sui-Move verifier
-    // passes (transitional bridge until Phase 5/5b.5).
-    // Modules with Adamant extensions skip this step — Sui's
-    // verifier cannot consume bytecode that includes the
-    // 0x80..=0x90 opcode space, and Adamant-native per-
-    // instruction verification of the 17 extensions is in
-    // scope for Phase 5/5b.4 + 5/5b.5.
+    // Step 4: Adamant-native per-function passes per
+    // §6.2.1.8 step 4. Five passes consumed by the
+    // `function_pass::verify_function_bodies` orchestrator:
+    // control-flow validation → operand-stack discipline →
+    // locals safety → type safety → reference safety. Runs
+    // on ALL modules (both inherited-subset and Adamant-
+    // extension); cross-pass-pipeline-dependency between
+    // passes is documented at each pass's module preamble.
+    // Phase 5/5b.4 D-6 wires the batch.
+    function_pass::verify_function_bodies(&module, config.structural_limits())?;
+
+    // Sui-verifier bridge (transitional defense-in-depth
+    // until Phase 5/5b.5). Modules with Adamant extensions
+    // skip this — Sui's verifier cannot consume bytecode that
+    // includes the 0x80..=0x90 opcode space.
     //
-    // For inherited modules this runs after the Adamant-
-    // native step-3 batch above. The two paths are partially
-    // redundant on inherited-subset module-level checks (e.g.,
-    // both ports of `constants`, `friends`, etc. validate
-    // overlapping properties); the redundancy is intentional
-    // defense-in-depth during the transition. After 5/5b.5
-    // tears out the Sui bridge, Adamant-native passes are
-    // the only path.
+    // For inherited-subset modules this runs after the
+    // Adamant-native step-3 batch and the now-complete
+    // Adamant-native step-4 batch above. The two paths are
+    // parallel-redundant on inherited-subset modules
+    // (both ports of `constants`, `friends`, etc. at step 3
+    // and per-instruction `type_safety` / `reference_safety`
+    // at step 4 validate overlapping properties); the
+    // redundancy is intentional defense-in-depth during the
+    // transition. The bridge serves as a soundness-test
+    // infrastructure: if Adamant accepts but Sui rejects on
+    // the same module, the divergence indicates a cross-
+    // pass-pipeline-dependency drift in Adamant. After
+    // 5/5b.5 tears out the Sui bridge, Adamant-native
+    // passes are the only path.
     if !module.contains_adamant_extensions() {
         // Re-deserialize via Sui to obtain a CompiledModule. The
         // bytes are guaranteed to be Sui's canonical encoding for
@@ -327,11 +341,16 @@ pub fn verify_module(
     }
 
     // Step 5: Adamant-specific rules per §6.2.1.6 in
-    // numerical rule order. Rule 5 is enforced at step 1
-    // (Adamant deserializer's strict mode rejects deprecated
-    // global-storage opcodes per §6.2.1.6 Rule 5). Rules 3,
-    // 6, 7 land in subsequent sub-arcs. Rule 8 is a no-op at
-    // deployment per §6.2.1.6 amendment 804d9db.
+    // numerical rule order. Rule 5 (no global storage
+    // instructions) is enforced at step 1 (Adamant
+    // deserializer's strict mode rejects the deprecated
+    // global-storage opcodes per §6.2.1.6 Rule 5). Rules 6
+    // (no dynamic dispatch) and 7 (privacy-circuit
+    // instructions in shielded context only) land in
+    // subsequent sub-arcs. Rule 8 (bounded loops) is a no-op
+    // at deployment per §6.2.1.6 amendment 804d9db (gas-
+    // budget bound at runtime carries the determinism
+    // guarantee).
     rule_01_mutability::verify(&module)?;
     rule_02_privacy::verify(&module)?;
     rule_03_privacy_consistency::verify(&module)?;
@@ -1190,5 +1209,334 @@ mod tests {
                  recursive_data_def's unreachable! arm, got {other:?}"
             ),
         }
+    }
+
+    // ============================================================
+    // D-6 (Phase 5/5b.4): pipeline integration of step 4 (per-
+    // function batch) into verify_module
+    // ============================================================
+    //
+    // End-to-end tests covering step 4 wire-in. Each test
+    // exercises the full pipeline (steps 1 → 2 → 3 → 4 → bridge
+    // → 5) and asserts on the expected outcome.
+
+    use crate::bytecode::{AdamantBytecode, BytecodeInstruction as BI};
+    use crate::validator::error::{BorrowViolationReason, TypeMismatchReason};
+
+    /// D-6 happy path with Adamant extensions: a module containing
+    /// one `Sha3_256` (Cat A) extension passes all 5 steps. Confirms
+    /// the Adamant-native pipeline runs end-to-end on Adamant-
+    /// extension modules (where the Sui bridge is skipped).
+    #[test]
+    fn d6_e2e_adamant_extension_module_happy_path() {
+        let mut m = integration_base_module();
+        // params signature [vector<u8>] for the Sha3_256 input.
+        let params_idx = SignatureIndex(u16::try_from(m.signatures.len()).unwrap());
+        m.signatures
+            .push(Signature(vec![SignatureToken::Vector(Box::new(
+                SignatureToken::U8,
+            ))]));
+        // empty signature for locals + return.
+        let empty_sig = SignatureIndex(u16::try_from(m.signatures.len()).unwrap());
+        m.signatures.push(Signature(vec![]));
+        let f_name = IdentifierIndex(u16::try_from(m.identifiers.len()).unwrap());
+        m.identifiers.push(Identifier::new("f").unwrap());
+        m.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: f_name,
+            parameters: params_idx,
+            return_: empty_sig,
+            type_parameters: vec![],
+        });
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: empty_sig,
+                code: vec![
+                    BI::Inherited(Bytecode::MoveLoc(0)),
+                    BI::Adamant(AdamantBytecode::Sha3_256),
+                    BI::Inherited(Bytecode::Pop),
+                    BI::Inherited(Bytecode::Ret),
+                ],
+                jump_tables: vec![],
+            }),
+        });
+        let bytes = serialize_module(&m);
+        let config = AdamantVerifierConfig::new();
+        assert!(
+            verify_module(&bytes, &config).is_ok(),
+            "Adamant-extension module with Sha3_256 must pass all 5 steps end-to-end"
+        );
+    }
+
+    /// D-6 step-4 negative (type-safety): a module whose function
+    /// body has a type-safety violation is rejected at step 4 with
+    /// `TypeMismatch`. Steps 1-3 pass; step 5 doesn't run.
+    #[test]
+    fn d6_e2e_step4_rejects_type_safety_violation() {
+        let mut m = integration_base_module();
+        let empty_sig = SignatureIndex(u16::try_from(m.signatures.len()).unwrap());
+        m.signatures.push(Signature(vec![]));
+        let f_name = IdentifierIndex(u16::try_from(m.identifiers.len()).unwrap());
+        m.identifiers.push(Identifier::new("f").unwrap());
+        m.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: f_name,
+            parameters: empty_sig,
+            return_: empty_sig,
+            type_parameters: vec![],
+        });
+        // Body: LdTrue + CastU8 + Pop + Ret. CastU8 expects an
+        // integer; Bool is rejected as CastTargetTypeInvalid.
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: empty_sig,
+                code: vec![
+                    BI::Inherited(Bytecode::LdTrue),
+                    BI::Inherited(Bytecode::CastU8),
+                    BI::Inherited(Bytecode::Pop),
+                    BI::Inherited(Bytecode::Ret),
+                ],
+                jump_tables: vec![],
+            }),
+        });
+        let bytes = serialize_module(&m);
+        let config = AdamantVerifierConfig::new();
+        match verify_module(&bytes, &config) {
+            Err(AdamantValidationError::TypeMismatch {
+                reason: TypeMismatchReason::CastTargetTypeInvalid,
+                ..
+            }) => {}
+            other => panic!(
+                "expected TypeMismatch(CastTargetTypeInvalid) from step 4 on Bool→u8 cast, \
+                 got {other:?}"
+            ),
+        }
+    }
+
+    /// D-6 step-4 negative (reference-safety): a module whose
+    /// function body has a borrow violation is rejected at step 4
+    /// with `BorrowViolation`.
+    #[test]
+    fn d6_e2e_step4_rejects_reference_safety_violation() {
+        let mut m = integration_base_module();
+        // params: u64 value at local 0.
+        let params_idx = SignatureIndex(u16::try_from(m.signatures.len()).unwrap());
+        m.signatures.push(Signature(vec![SignatureToken::U64]));
+        let empty_sig = SignatureIndex(u16::try_from(m.signatures.len()).unwrap());
+        m.signatures.push(Signature(vec![]));
+        let f_name = IdentifierIndex(u16::try_from(m.identifiers.len()).unwrap());
+        m.identifiers.push(Identifier::new("f").unwrap());
+        m.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: f_name,
+            parameters: params_idx,
+            return_: empty_sig,
+            type_parameters: vec![],
+        });
+        // Body: ImmBorrowLoc(0) + ImmBorrowLoc(0) + Pop + Pop +
+        // Ret. Wait — two ImmBorrowLocs is allowed (no aliasing
+        // for immutable). Use MutBorrowLoc + ImmBorrowLoc which
+        // fires BorrowLocHasBorrow.
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: empty_sig,
+                code: vec![
+                    BI::Inherited(Bytecode::MutBorrowLoc(0)),
+                    BI::Inherited(Bytecode::ImmBorrowLoc(0)),
+                    BI::Inherited(Bytecode::Pop),
+                    BI::Inherited(Bytecode::Pop),
+                    BI::Inherited(Bytecode::Ret),
+                ],
+                jump_tables: vec![],
+            }),
+        });
+        let bytes = serialize_module(&m);
+        let config = AdamantVerifierConfig::new();
+        match verify_module(&bytes, &config) {
+            Err(AdamantValidationError::BorrowViolation {
+                reason: BorrowViolationReason::BorrowLocHasBorrow,
+                ..
+            }) => {}
+            other => panic!(
+                "expected BorrowViolation(BorrowLocHasBorrow) from step 4 on \
+                 MutBorrowLoc + ImmBorrowLoc aliasing, got {other:?}"
+            ),
+        }
+    }
+
+    /// D-6 step-4-vs-step-5 ordering: a module with BOTH a
+    /// step-4 type-safety violation AND a step-5 Rule 1 violation
+    /// (missing mutability metadata) — step 4 runs after step 3
+    /// but step 5 violations should... wait, this is wrong.
+    /// Actually: Rule 1 is at step 5. Step 4 runs BEFORE step 5.
+    /// So if a module has a step-4 violation AND a step-5
+    /// violation, step 4 fires first. Confirm this ordering.
+    ///
+    /// Wait — Rule 1 (mutability) check looks for the metadata
+    /// entry. If missing, it fires `MissingMutabilityMetadata`.
+    /// But the `integration_base_module` ALREADY has mutability;
+    /// we'd need to construct a module without it AND with a
+    /// step-4 violation. Test: drop mutability from
+    /// `integration_base_module` then add a function body with
+    /// type-safety violation.
+    #[test]
+    fn d6_e2e_step4_fires_before_step5_when_both_violated() {
+        let mut m = integration_base_module();
+        // Drop mutability metadata to trigger Rule 1 violation
+        // at step 5.
+        m.metadata.clear();
+        // Add a function body with a type-safety violation.
+        let empty_sig = SignatureIndex(u16::try_from(m.signatures.len()).unwrap());
+        m.signatures.push(Signature(vec![]));
+        let f_name = IdentifierIndex(u16::try_from(m.identifiers.len()).unwrap());
+        m.identifiers.push(Identifier::new("f").unwrap());
+        m.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: f_name,
+            parameters: empty_sig,
+            return_: empty_sig,
+            type_parameters: vec![],
+        });
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: empty_sig,
+                code: vec![
+                    BI::Inherited(Bytecode::LdTrue),
+                    BI::Inherited(Bytecode::CastU8),
+                    BI::Inherited(Bytecode::Pop),
+                    BI::Inherited(Bytecode::Ret),
+                ],
+                jump_tables: vec![],
+            }),
+        });
+        let bytes = serialize_module(&m);
+        let config = AdamantVerifierConfig::new();
+        match verify_module(&bytes, &config) {
+            Err(AdamantValidationError::TypeMismatch {
+                reason: TypeMismatchReason::CastTargetTypeInvalid,
+                ..
+            }) => {}
+            other => panic!(
+                "expected step 4 (TypeMismatch) to fire before step 5 (Rule 1 missing \
+                 mutability) when both are violated, got {other:?}"
+            ),
+        }
+    }
+
+    /// D-6 step-4-vs-bridge ordering for inherited modules: a
+    /// pure-Sui-base module with a type-safety violation is
+    /// rejected by Adamant step 4 (with a typed `TypeMismatch`),
+    /// not by the Sui bridge (which would emit `SuiVerifier`).
+    /// Confirms Adamant step 4 fires first on inherited modules
+    /// AND that the typed Adamant error variant wins over the
+    /// Sui-formatted bridge error. Bridge-redundancy-validation
+    /// test per Q5 at D-6 plan-gate.
+    #[test]
+    fn d6_e2e_step4_fires_before_bridge_on_inherited_module() {
+        let mut m = integration_base_module();
+        // Inherited-only module: no Adamant extensions in body.
+        // Type-safety violation: LdTrue + CastU8.
+        let empty_sig = SignatureIndex(u16::try_from(m.signatures.len()).unwrap());
+        m.signatures.push(Signature(vec![]));
+        let f_name = IdentifierIndex(u16::try_from(m.identifiers.len()).unwrap());
+        m.identifiers.push(Identifier::new("f").unwrap());
+        m.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: f_name,
+            parameters: empty_sig,
+            return_: empty_sig,
+            type_parameters: vec![],
+        });
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: empty_sig,
+                code: vec![
+                    BI::Inherited(Bytecode::LdTrue),
+                    BI::Inherited(Bytecode::CastU8),
+                    BI::Inherited(Bytecode::Pop),
+                    BI::Inherited(Bytecode::Ret),
+                ],
+                jump_tables: vec![],
+            }),
+        });
+        // Confirm contains_adamant_extensions returns false (so
+        // the bridge would run if step 4 didn't reject first).
+        assert!(
+            !m.contains_adamant_extensions(),
+            "test fixture must be a pure-inherited module to exercise the bridge path"
+        );
+        let bytes = serialize_module(&m);
+        let config = AdamantVerifierConfig::new();
+        match verify_module(&bytes, &config) {
+            Err(AdamantValidationError::TypeMismatch {
+                reason: TypeMismatchReason::CastTargetTypeInvalid,
+                ..
+            }) => {}
+            Err(AdamantValidationError::SuiVerifier(_)) => panic!(
+                "Sui bridge should not have run — Adamant step 4 must fire first \
+                 with TypeMismatch on inherited modules"
+            ),
+            other => panic!("expected Adamant step 4 TypeMismatch before bridge, got {other:?}"),
+        }
+    }
+
+    /// D-6 happy path inherited-only: a pure-Sui-base module
+    /// with no Adamant extensions and no violations passes all
+    /// steps including step 4 + bridge defense-in-depth.
+    /// Pairs with the previous test to confirm both branches
+    /// (step 4 reject and bridge defense-in-depth pass) are
+    /// exercised.
+    #[test]
+    fn d6_e2e_inherited_module_with_clean_body_passes_through_bridge() {
+        let mut m = integration_base_module();
+        let empty_sig = SignatureIndex(u16::try_from(m.signatures.len()).unwrap());
+        m.signatures.push(Signature(vec![]));
+        let f_name = IdentifierIndex(u16::try_from(m.identifiers.len()).unwrap());
+        m.identifiers.push(Identifier::new("f").unwrap());
+        m.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: f_name,
+            parameters: empty_sig,
+            return_: empty_sig,
+            type_parameters: vec![],
+        });
+        m.function_defs.push(AdamantFunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Private,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(AdamantCodeUnit {
+                locals: empty_sig,
+                code: vec![BI::Inherited(Bytecode::Ret)],
+                jump_tables: vec![],
+            }),
+        });
+        assert!(!m.contains_adamant_extensions());
+        let bytes = serialize_module(&m);
+        let config = AdamantVerifierConfig::new();
+        assert!(
+            verify_module(&bytes, &config).is_ok(),
+            "clean inherited module must pass step 4 + bridge defense-in-depth + step 5"
+        );
     }
 }
