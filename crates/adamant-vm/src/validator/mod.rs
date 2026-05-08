@@ -126,6 +126,7 @@ mod function_pass;
 mod module_pass;
 mod rule_01_mutability;
 mod rule_02_privacy;
+mod rule_03_privacy_consistency;
 mod rule_04_no_natives;
 
 #[cfg(test)]
@@ -333,6 +334,7 @@ pub fn verify_module(
     // deployment per §6.2.1.6 amendment 804d9db.
     rule_01_mutability::verify(&module)?;
     rule_02_privacy::verify(&module)?;
+    rule_03_privacy_consistency::verify(&module)?;
     rule_04_no_natives::verify(&module)?;
 
     Ok(module)

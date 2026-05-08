@@ -1112,9 +1112,33 @@ pub enum AdamantValidationError {
         /// Sub-reason discriminator.
         reason: BorrowViolationReason,
     },
+    /// Rule 3 (privacy consistency) call-graph walker found
+    /// an `Invoke*` instruction in a function reachable from
+    /// a public function whose declared privacy mode is the
+    /// opposite of the instruction's mode. Carries a
+    /// [`PrivacyConsistencyViolationReason`] closed-enum sub-
+    /// reason discriminator.
+    ///
+    /// Whitepaper §6.2.1.6 Rule 3. Phase 5/5b.4 D-5c.
+    /// Cross-module enforcement is deferred to Phase 5/5b.5
+    /// per §6.2.1.6 line 477 ("statically checked at deploy
+    /// time against annotations of dependency modules").
+    PrivacyConsistencyViolation {
+        /// Public function (entry point of the call graph)
+        /// whose declared privacy mode is being violated.
+        calling_public_index: FunctionDefinitionIndex,
+        /// Function (possibly the public function itself, or
+        /// a transitively-called private function) containing
+        /// the offending `Invoke*` instruction.
+        violating_function_index: FunctionDefinitionIndex,
+        /// Bytecode offset of the offending `Invoke*`.
+        code_offset: CodeOffset,
+        /// Sub-reason discriminator.
+        reason: PrivacyConsistencyViolationReason,
+    },
     // Rule 5 (no global storage instructions) is enforced at
     // parse time inside `AdamantDeserializer`; no separate
-    // variant. Variants for Rules 3, 6, 7 land in subsequent
+    // variant. Variants for Rules 6, 7 land in subsequent
     // waves.
 }
 
@@ -1437,6 +1461,48 @@ pub enum BorrowViolationReason {
     /// transferred (the reference has an outstanding borrow).
     /// Maps to Sui's `RET_BORROWED_MUTABLE_REFERENCE_ERROR`.
     RetBorrowedMutableReference,
+}
+
+/// Structured reason for an
+/// [`AdamantValidationError::PrivacyConsistencyViolation`]
+/// rejection. Each variant identifies the direction of the
+/// privacy-mode mismatch caught by the call-graph walker.
+///
+/// Phase 5/5b.4 D-5c (`rule_03_privacy_consistency`).
+/// Closed-enum shape mirrors `TypeMismatchReason` (D-5a.0
+/// precedent) and `BorrowViolationReason` (D-5b.2 precedent);
+/// declared with producer per Q5 at D-5c plan-gate.
+///
+/// Forward-extensibility: cross-module Rule 3 enforcement at
+/// Phase 5/5b.5 may surface additional sub-reasons (e.g.,
+/// `ShieldedReachesUnannotatedExternal`).
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum PrivacyConsistencyViolationReason {
+    /// A `#[shielded]` public function reaches (directly or
+    /// transitively) an `InvokeTransparent` instruction. Per
+    /// §6.2.1.6 Rule 3: "A `#[shielded]` function may not
+    /// contain any `InvokeTransparent` instruction."
+    ShieldedReachesInvokeTransparent,
+    /// A `#[transparent]` public function reaches (directly
+    /// or transitively) an `InvokeShielded` instruction. Per
+    /// §6.2.1.6 Rule 3: "A `#[transparent]` function may not
+    /// contain any `InvokeShielded` instruction."
+    TransparentReachesInvokeShielded,
+}
+
+impl core::fmt::Display for PrivacyConsistencyViolationReason {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ShieldedReachesInvokeTransparent => write!(
+                f,
+                "shielded public function reaches InvokeTransparent (directly or transitively)"
+            ),
+            Self::TransparentReachesInvokeShielded => write!(
+                f,
+                "transparent public function reaches InvokeShielded (directly or transitively)"
+            ),
+        }
+    }
 }
 
 impl core::fmt::Display for BorrowViolationReason {
@@ -2022,6 +2088,18 @@ impl core::fmt::Display for AdamantValidationError {
                 "function definition {} offset {code_offset}: {reason} \
                  (whitepaper §6.2.1.8 step 4, `function_pass::reference_safety`)",
                 fn_def_idx.0
+            ),
+            Self::PrivacyConsistencyViolation {
+                calling_public_index,
+                violating_function_index,
+                code_offset,
+                reason,
+            } => write!(
+                f,
+                "privacy-consistency violation reachable from public function {} \
+                 (offending instruction in function {} at offset {code_offset}): {reason} \
+                 (whitepaper §6.2.1.6 Rule 3)",
+                calling_public_index.0, violating_function_index.0
             ),
         }
     }
