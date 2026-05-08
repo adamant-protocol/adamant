@@ -98,7 +98,7 @@
 //! addition per the line 524 "extended where necessary"
 //! clause for the `b"adamant.privacy"` metadata entry.
 //!
-//! Three Adamant-specific rules wired at step 5:
+//! Six Adamant-specific module-level rules wired at step 5:
 //!
 //! - [`rule_01_mutability`] — every module carries exactly one
 //!   `b"adamant.mutability"` metadata entry whose value
@@ -106,13 +106,50 @@
 //! - [`rule_02_privacy`] (B-4.1) — every `Visibility::Public`
 //!   function carries a privacy annotation in the
 //!   `b"adamant.privacy"` metadata table.
+//! - [`rule_03_privacy_consistency`] (D-5c, single-module) —
+//!   shielded public functions do not transitively reach
+//!   `InvokeTransparent`; transparent public functions do not
+//!   transitively reach `InvokeShielded`. Cross-module
+//!   enforcement is invoked by the deployment-validator caller
+//!   via [`cross_module::ModuleResolver`] (E-2b).
 //! - [`rule_04_no_natives`] — no function definition has
 //!   `code: None`.
+//! - [`rule_06_no_dynamic_dispatch`] (E-3) — modules calling
+//!   `0x2::dynamic_field::*` or `0x2::dynamic_object_field::*`
+//!   must opt in via `b"adamant.allows_dynamic" = true`.
+//! - [`rule_07_privacy_circuit_in_shielded_only`] (E-4) —
+//!   `GenerateProof` / `VerifyProof` / `RecursiveVerify` /
+//!   `ReleaseSubViewKey` may not appear in functions
+//!   reachable from `#[transparent]` public functions.
 //!
-//! Rule 5 is enforced at step 1 (Adamant deserializer's strict
-//! mode rejects deprecated global-storage opcodes). Rules 3, 6,
-//! 7 land in subsequent sub-arcs; Rule 8 is a no-op at
-//! deployment.
+//! # Rule enforcement venues (non-step-5)
+//!
+//! Two of the eight whitepaper §6.2.1.6 rules are enforced
+//! outside step 5:
+//!
+//! - **Rule 5 (no global storage instructions).** Enforced at
+//!   step 1 inside [`crate::adamant_deserialize`]'s strict
+//!   mode; the wire decoder rejects each of the 10 deprecated
+//!   global-storage bytecode variants at parse time. No
+//!   step-5 invocation; the absence of a `rule_05_*` module
+//!   matches this venue placement.
+//! - **Rule 8 (bounded loops).** Verifier-level no-op per
+//!   §6.2.1.6 amendment 804d9db; runtime gas-budget per §6.2.4
+//!   carries the determinism binding. The architectural
+//!   position pin lives in [`rule_08_bounded_loops`] (E-5)
+//!   without a step-5 invocation.
+//!
+//! # Cross-module verification (deployment-validator wiring)
+//!
+//! [`cross_module::rule_03_privacy_consistency`] (E-2b) extends
+//! single-module Rule 3 across module boundaries via the
+//! [`cross_module::ModuleResolver`] trait. The walker has no
+//! production caller in `adamant-vm`; the eventual caller is
+//! the AVM runtime stdlib's `adamant::module::deploy` function
+//! (Phase 5/6) per whitepaper §6.5 line 97. Module-level
+//! `dead_code` allow on `cross_module` documents the
+//! foundation-then-producer arc shape parallel to D-1a / D-1b
+//! precedent.
 //!
 //! # Discipline reference
 //!

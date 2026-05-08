@@ -1,15 +1,32 @@
-# Provenance: bytecode-verifier fork (`module_pass/` + `function_pass/`)
+# Provenance: bytecode-verifier fork + Adamant-specific rules
 
 This document is the **canonical audit anchor for the Adamant
-bytecode-verifier fork**; it covers both the
-`adamant-vm/src/validator/module_pass/` subtree (module-level
-passes) and the `adamant-vm/src/validator/function_pass/`
-subtree (per-function passes). Originally established at Phase
+bytecode-verifier fork plus the Adamant-specific rule modules
+landed across Phase 5/5b**. Originally established at Phase
 5/5b.2 for module-level passes; **expanded at Phase 5/5b.4 D-7
-to cover per-function passes** as the natural cross-pass audit
-anchor when Phase 5/5b.4 added the per-function pipeline. The
-file remains physically located under `module_pass/` for git-
-history continuity; the scope is bytecode-verifier-wide.
+to cover per-function passes**; **re-expanded at Phase 5/5b.5
+E-7 to cover cross-module verifier work + the Phase 5/5b.5
+rule modules** (`rule_06_no_dynamic_dispatch` +
+`rule_07_privacy_circuit_in_shielded_only` +
+`rule_08_bounded_loops`). 2nd instance of scope-expansion-
+history-as-canonical-record sub-pattern (registered at E-7;
+1st instance at D-7).
+
+Subtrees covered:
+
+- `adamant-vm/src/validator/module_pass/` (module-level
+  passes; B-1 through B-6 + C-1 through C-5)
+- `adamant-vm/src/validator/function_pass/` (per-function
+  passes + frameworks; D-1 through D-7)
+- `adamant-vm/src/validator/cross_module/` (cross-module
+  verifier work; E-2)
+- `adamant-vm/src/validator/rule_NN_*` modules (Adamant-
+  specific rules at validator/-level: Rules 1, 2, 3, 4 from
+  prior phases; Rules 6, 7, 8 from Phase 5/5b.5)
+
+The file remains physically located under `module_pass/` for
+git-history continuity; the scope is bytecode-verifier-wide
+plus the validator's full §6.2.1.6 rule surface.
 
 The fork is parallel to `crates/adamant-bytecode-format/PROVENANCE.md`
 (which forks the bytecode-format primitives from
@@ -2952,6 +2969,395 @@ exist" and "tests get run."
   `tests/no_sui_in_production_deps.rs` build-system
   independence check).
 
+- **2026-05-09 (Phase 5/5b.5 E-1 closure: Sui-bridge tear-
+  out):** Two-sub-checkpoint sub-arc per Q2(b) at E-1 plan-
+  gate (production-code refactor + Cargo.toml restructure
+  separated). Constituent commits: E-1a (`0b774a3`,
+  production-code refactor) + E-1b (`4fb4114`, Cargo.toml
+  restructure + build-system check). Cumulative E-1 LOC:
+  ~544 net diff (E-1a 177 inserts / 324 deletions; E-1b
+  367 inserts / 63 deletions). adamant-vm crate test count
+  E-1a → E-1b: 830 → 831 (+1; upstream-parity pin in
+  `validator/config.rs`). Workspace test count progression:
+  1532 → 1534 (+2 across E-1; +1 from upstream-parity pin
+  + +1 from build-system check). **E-1a removes the Sui-
+  verifier bridge from `validator::verify_module`'s
+  pipeline; E-1b moves 4 vendored Sui-Move crates
+  (`move-binary-format` with wasm, `move-core-types`,
+  `move-bytecode-verifier`, `move-vm-config`) from
+  `[dependencies]` to `[dev-dependencies]`. The build-system
+  independence check at `tests/no_sui_in_production_deps.rs`
+  walks `cargo metadata`'s resolve graph and asserts no
+  `move-*` crate appears in `adamant-vm`'s production
+  dependency graph; sanity-check empirically confirmed the
+  test fires on regression.** AdamantValidationError
+  variant count: 64 → 63 (-1; SuiVerifier removed at E-1a).
+  **1st instance of variant-count-via-tear-out sub-shape**
+  (NEW; per Q2 refinement at E-1 plan-gate). **1st
+  instance of architectural-commitment-mechanically-guarded
+  pattern** (NEW; the build-system check is the mechanical
+  guardrail for §6.2.1.8's resistant-proof posture
+  commitment; the `move-*`-crates absence is constitutionally
+  meaningful, parallel to "no foundation, no admin keys,
+  no upgrade authority after genesis"). **1st instance of
+  upstream-constant-duplication-with-test-time-parity-pin
+  pattern** (NEW; 3 Adamant-native constants
+  `DEFAULT_MAX_VARIANTS`, `DEFAULT_MAX_CONSTANT_VECTOR_LEN`,
+  `DEFAULT_MAX_IDENTIFIER_LENGTH` duplicate Sui upstream
+  values; test-time parity pin asserts upstream agreement).
+  **1st instance of test-actually-fires-on-regression
+  sanity-check methodology shape** (NEW; verified-empirically
+  discipline operating at build-system-test level). **1st
+  instance of gap-source-removal closure for Open Layer B
+  gaps pattern** (NEW; SuiVerifier audit gap registered at
+  C-5 closes via bridge removal — retired-via-fulfillment).
+  **1st instance of bridge-as-soundness-test-infrastructure
+  framing reaching CLOSURE PHASE** (NEW; bridge framed at
+  D-6 as soundness-test infrastructure during transition;
+  bridge retires at E-1a and the framing itself closes;
+  D-6 bridge-redundancy-validation tests #5 + #6 refactor
+  from bridge-ordering-validation to typed-error-validation).
+
+- **2026-05-09 (Phase 5/5b.5 E-2 closure: cross-module
+  Rule 3):** Two-sub-checkpoint sub-arc per Q4(b) at E-2
+  plan-gate (foundation + walker separated). Constituent
+  commits: E-2a (`8e4d814`, foundation: ModuleResolver
+  trait + ModuleId type + new error variant + trait/API
+  correctness tests) + E-2b (`4e5bbab`, cross-module Rule
+  3 walker + happy-path / negative-path tests). Cumulative
+  E-2 LOC: ~1,263 net inserts (E-2a 406; E-2b 857).
+  adamant-vm crate test count E-1b → E-2b: 831 → 849 (+18;
+  E-2a +7 trait/API tests + E-2b +11 walker tests).
+  Workspace test count: 1534 → 1552 (+18). **E-2a
+  introduces the `validator/cross_module/` module subtree
+  housing the cross-module verifier work. New types:
+  `ModuleId(Address, Identifier)` thin newtype mirroring
+  Sui-Move's ModuleId shape without the production-side
+  Sui dependency (Adamant-native per the §6.2.1.8
+  resistant-proof posture); `ModuleResolver` trait with
+  one method `resolve(&self, id: &ModuleId) ->
+  Option<&AdamantCompiledModule>`; `InMemoryModuleResolver`
+  test impl backed by HashMap.** New error variant:
+  `CrossModulePrivacyConsistencyViolation` reusing
+  `PrivacyConsistencyViolationReason` closed enum from
+  D-5c. AdamantValidationError variant count: 63 → 64
+  (+1). **E-2b's walker reuses D-5c's `call_target_handle`
+  via the `pub(in crate::validator)` visibility promotion
+  landing in this commit** — 4th instance of spec-text-
+  DIRECTS-shared-helper canonical principle (cross-scope-
+  reuse sub-shape 1st instance; rule-of-three pending
+  across cross-scope-reuse). Cross-module walker has no
+  production caller in adamant-vm; the eventual caller is
+  the AVM runtime stdlib's `adamant::module::deploy`
+  function (Phase 5/6) per whitepaper §6.5 line 97; module-
+  level `dead_code` allow on `cross_module` documents the
+  foundation-then-producer arc shape. **1st instance of
+  same-rule-different-scope-shares-sub-reason-enum
+  methodology pattern** (NEW; per Q3 disposition at E-2
+  plan-gate; PrivacyConsistencyViolationReason shared
+  between PrivacyConsistencyViolation single-module +
+  CrossModulePrivacyConsistencyViolation cross-module).
+  **1st instance of helper-extraction sub-shape γ
+  (extract-at-N=1-anticipating)** (NEW; per Q5 disposition
+  at E-2 plan-gate; InMemoryModuleResolver extracted at
+  N=1 with 7 immediate consumers + anticipated reuse at
+  E-2b walker tests). Helper-extraction discipline now has
+  three empirical sub-shapes: α=N=2 (B-2.2); β=N=3 (D-7a);
+  γ=N=1-anticipating (E-2a).
+
+- **2026-05-09 (Phase 5/5b.5 E-3 closure: Rule 6 — no
+  dynamic dispatch):** Single sub-checkpoint commit
+  (`922d4bd`). ~600 net inserts; 11 new tests in
+  `validator/rule_06_no_dynamic_dispatch.rs::tests`.
+  adamant-vm crate test count: 849 → 860 (+11). Workspace
+  test count: 1552 → 1563 (+11). New typed-error variant:
+  `DynamicDispatchViolation` with `DynamicDispatchViolation
+  Reason` closed enum (sub-reasons: `DynamicFieldNotOptedIn`,
+  `DynamicObjectFieldNotOptedIn`). AdamantValidationError
+  variant count: 64 → 65 (+1). Public closed enums: 9 → 10
+  (+1; `DynamicDispatchViolationReason`). Implements
+  whitepaper §6.2.1.6 Rule 6: modules calling
+  `0x2::dynamic_field::*` or `0x2::dynamic_object_field::*`
+  must opt in via the `b"adamant.allows_dynamic"` metadata
+  entry with value `true`. Adamant-native pre-resolved
+  constants: `FORBIDDEN_ADDRESS` (const Address-as-32-bytes
+  with byte 31 = 0x02; Q3 empirically resolved at impl-
+  gate that `Address::from_bytes` IS const-stable);
+  `FORBIDDEN_DYNAMIC_FIELD` and
+  `FORBIDDEN_DYNAMIC_OBJECT_FIELD` `&'static str` consts;
+  `DYNAMIC_OPTIN_METADATA_KEY = b"adamant.allows_dynamic"`.
+  Pass logic: short-circuit accept if metadata carries the
+  opt-in entry with BCS-decoded `true`; otherwise iterate
+  function bodies, for each `Call`/`CallGeneric` resolve
+  target FunctionHandle's module to `(address, name)`, if
+  matches a forbidden pair reject with the appropriate
+  sub-reason. Missing/false/malformed opt-in payload all
+  default to disallow per spec text. **1st instance of
+  spec-text-pinned-constant-with-Adamant-native-ownership
+  pattern** (NEW; per Q2 refinement at E-3 plan-gate).
+  Distinct from E-1b's
+  upstream-constant-duplication-with-test-time-parity-pin
+  pattern: E-1b pins to Sui upstream; E-3 pins to
+  whitepaper spec text. Both share Adamant-native ownership
+  discipline; differ in pinning authority. Pattern-cluster:
+  Adamant-native constants now have two empirical sub-
+  classifications. **1st instance of Adamant-spec-text-
+  parity-test discipline** (NEW; the
+  `adamant_native_constants_match_spec_text` test pins all
+  four constants against §6.2.1.6 line 485 spec text).
+  **1st instance of trigger-condition-boundary defensive-
+  testing sub-pattern** (NEW; two boundary tests
+  `call_to_dynamic_field_at_wrong_address_accepts` and
+  `call_to_other_module_at_0x2_accepts` verify the trigger
+  requires BOTH address=0x2 AND module name match).
+
+- **2026-05-09 (Phase 5/5b.5 E-4 closure: Rule 7 —
+  privacy-circuit instructions in shielded context only):**
+  Single sub-checkpoint commit (`f7e6189`). ~720 net
+  inserts; 13 new tests in
+  `validator/rule_07_privacy_circuit_in_shielded_only.rs::tests`.
+  adamant-vm crate test count: 860 → 873 (+13). Workspace
+  test count: 1563 → 1576 (+13). New typed-error variant:
+  `PrivacyCircuitContextViolation` with
+  `PrivacyCircuitContextViolationReason` closed enum (4
+  sub-reasons; one per restricted Adamant extension).
+  AdamantValidationError variant count: 65 → 66 (+1).
+  Public closed enums: 10 → 11 (+1;
+  `PrivacyCircuitContextViolationReason`; naming honored
+  Q3 refinement at E-4 plan-gate to follow canonical
+  `<X>Violation` + `<X>ViolationReason` shape). Implements
+  whitepaper §6.2.1.6 Rule 7: `GenerateProof` /
+  `VerifyProof` / `RecursiveVerify` / `ReleaseSubViewKey`
+  may appear only in shielded-reachable code. Walker walks
+  only `#[transparent]` public functions per Q2(b) at E-4
+  plan-gate (walk-set-filter-at-entry sub-classification of
+  call-graph walker pattern); `#[shielded]` publics are
+  permitted to reach privacy-circuit instructions. Reuses
+  D-5c's `call_target_handle` helper — **5th instance of
+  spec-text-DIRECTS-shared-helper canonical principle
+  (cross-scope-reuse sub-shape 2nd instance; rule-of-three
+  pending)**. Resolves only internal call edges; cross-
+  module call edges NOT walked per Q6 disposition (transitive
+  coverage via Rule 3 cross-module + Rule 7 single-module
+  composition). **1st instance of rule-composition-for-
+  cross-module-coverage methodology pattern** (NEW; per Q6
+  disposition at E-4 plan-gate; registered in BOTH walker
+  preamble AND PROVENANCE.md per the code-and-PROVENANCE.md
+  registration sub-shape). **1st instance of code-and-
+  PROVENANCE.md methodology-pattern-registration sub-
+  shape** (NEW; vs PROVENANCE.md-only registration used
+  for most patterns). **2nd instance of trigger-condition-
+  boundary defensive-testing sub-pattern**
+  (`mixed_modes_only_transparent_walked` boundary test on
+  walk-set filter). **Helper-extraction discipline sub-
+  shape α complexity-reduction qualifier 1st instance
+  registered** (NEW; per Q1 disposition at E-4 plan-gate;
+  refines sub-shape α from "mechanical extract at N=2" to
+  "evaluate-extraction-at-N=2"; D-5c walker ported to E-4
+  walker with state-threading difference rather than
+  refactored to closure-typed predicate API). **Call-graph
+  walker pattern sub-classifications registered** (NEW;
+  per-walk-state-determines-reject for D-5c carrying
+  `caller_mode` state, vs walk-set-filter-at-entry for
+  E-4 filtering walk-set to `#[transparent]` publics).
+
+- **2026-05-09 (Phase 5/5b.5 E-5 closure: Rule 8 —
+  bounded loops architectural-position pin):** Single sub-
+  checkpoint commit (`4764be3`). ~195 net inserts; 1 new
+  pin test in `validator/rule_08_bounded_loops.rs::tests`.
+  adamant-vm crate test count: 873 → 874 (+1). Workspace
+  test count: 1576 → 1577 (+1). **No new typed-error
+  variants; no step-5 invocation in `verify_module`** —
+  Rule 8 is verifier-level no-op per §6.2.1.6 amendment
+  804d9db; runtime gas-budget per §6.2.4 carries the
+  determinism binding. AdamantValidationError variant
+  count: 66 (unchanged from E-4). The pin module exists
+  as documentation + test surface only; the lack of a
+  `verify(&module)` function call is the canonical
+  implementation of "verifier-level check is a no-op".
+  Pin test (`unbounded_self_loop_module_accepts_at_deploy_time`)
+  constructs a module with `Branch(0)` self-loop body +
+  mandatory mutability metadata + valid VERSION_MAX, and
+  asserts `verify_module` returns Ok. **1st instance of
+  architectural-position-pin-for-explicit-non-enforcement
+  methodology pattern** (NEW; per Q5 disposition at E-5
+  plan-gate; renamed from initial framing per Q5 naming
+  refinement). Distinct from spec-text-DIRECTS-shared-
+  helper (about reuse) and rule-composition-for-cross-
+  module-coverage (about transitive coverage); this
+  pattern is about explicit non-enforcement at the
+  verifier layer. Three patterns now operating across
+  distinct architectural-decision domains. **2nd instance
+  of code-and-PROVENANCE.md methodology-pattern-
+  registration sub-shape** (after E-4's rule-composition-
+  for-cross-module-coverage). **1st instance of variant-
+  count-via-no-op sub-shape** (NEW; per Q4 disposition at
+  E-5 plan-gate). Variant-count discipline now has three
+  empirical sub-shapes: variant-count-via-add (most rule
+  sub-arcs); variant-count-via-tear-out (E-1a SuiVerifier
+  removal); variant-count-via-no-op (E-5 architectural-
+  position pin). **1st instance of architectural-position-
+  confirmation testing test-shape pattern** (NEW; test
+  asserts verifier accepts what spec mandates non-
+  enforcement of). Distinct from trigger-condition-
+  boundary defensive-testing (different mechanical shapes;
+  same methodology-positive defensive-testing core
+  discipline). **1st instance of defensive-fixture-
+  isolation pattern** (NEW; pin test fixture includes
+  mandatory mutability metadata + VERSION_MAX so other
+  rules don't pre-empt Rule 8 acceptance assertion).
+
+- **2026-05-09 (Phase 5/5b.5 E-6 closure: Open Layer B
+  gaps closure):** Single sub-checkpoint commit
+  (`eb766b8`). ~263 net inserts (281 inserts; 18
+  deletions); 8 new tests (7 BorrowViolationReason
+  negative-path tests in `validator/function_pass/reference_safety/pass.rs::tests`
+  + 1 `st_loc_destroys_non_drop` Layer B parity test in
+  `validator/function_pass/locals_safety/mod.rs::tests`).
+  adamant-vm crate test count: 874 → 882 (+8). Workspace
+  test count: 1577 → 1585 (+8). No new typed-error
+  variants; no new closed enums. AdamantValidationError
+  variant count: 66 (unchanged from E-5; variant-count-
+  via-coverage-expansion sub-shape 1st instance). Public
+  closed enums: 11 (unchanged). **Empirical-scope-
+  inventory correction at E-6 impl-gate**: plan-gate
+  framing said "6 of 13 BorrowViolationReason sub-reasons
+  deferred" but empirical grep at impl-gate found 7 of 13
+  (`ReadRefHasMutableBorrow` was also deferred — D-5b.2's
+  original "6 of 13" comment was off-by-one). Closed all
+  7 deferred + 1 `st_loc_destroys_non_drop` = 8 new
+  tests. **3rd instance of running-total drift discipline
+  (rule-of-three threshold MET at E-6).** Pattern instances:
+  B-6 → C-1/C-2/C-3 propagation (variant-count baseline);
+  D-3 → D-4-through-D-6 propagation (workspace-test-count
+  drift); D-5b.2 → D-7b → E-6 propagation (BorrowViolationReason
+  sub-reason-count off-by-one). Pattern stable across
+  count types, discovery venues, and workstream contexts;
+  operates as cross-cutting canonical principle alongside
+  verbatim-survey-at-plan-gate-prevents-scope-error
+  pattern. **1st instance of gap-fill closure sub-shape
+  of Open Layer B gaps closure pattern** (NEW; per Q1
+  disposition at E-6 plan-gate). Two empirical sub-shapes
+  now: gap-source-removal (E-1a SuiVerifier; bridge tear-
+  out retires gap by removing what needed Layer B parity)
+  + gap-fill (E-6; fixture construction closes gap). Each
+  fixture uses the cp_loc-of-mutable-reference pattern
+  (mirrors D-5b.2's
+  borrow_field_with_outstanding_full_borrow_rejected) to
+  create aliased &mut references on the stack — when the
+  targeted instruction operates on one alias,
+  is_writable / is_readable / is_freezable returns false
+  because the source has another outstanding mutable
+  borrow. **Plan-incremental-disposition sub-pattern β
+  closure-phase 2nd instance** (after D-5a.0 → D-5a.1.b
+  TypeMismatchReason audit closure; here at D-5b.2 → E-6
+  BorrowViolationReason audit closure). **1st instance of
+  variant-count-via-coverage-expansion sub-shape** (NEW;
+  per Q4 disposition at E-6 plan-gate). Variant-count
+  discipline now has four empirical sub-shapes (add /
+  tear-out / no-op / coverage-expansion). **1st instance
+  of coverage-deferred-gap-closure sub-shape of variant-
+  vs-test mapping audit principle** (NEW; per Q2
+  disposition). Three empirical sub-shapes now: coverage-
+  baseline-establishment (C-3 origin); coverage-
+  retroactive-audit (C-5 + D-7b); coverage-deferred-gap-
+  closure (E-6). **1st instance of test-placement public-
+  API-boundary-canonical-for-audit-purposes sub-shape**
+  (NEW; per Q3 disposition). **1st instance of sub-shape
+  2 (pre-arc-split) empirical-substantiality qualifier**
+  (NEW; per Q5 disposition; E-6 has 8 components but
+  bundled because methodology shape is uniform).
+  BorrowViolationReason variant-vs-test mapping audit
+  closes cleanly: all 13 sub-reasons have explicit
+  negative-test coverage post-E-6.
+
+- **2026-05-09 (Phase 5/5b.5 E-7 closure: Phase 5/5b.5
+  closes; Phase 5/5b cumulative closure):** Documentation-
+  only sub-checkpoint. No functional source-code changes
+  beyond `validator/mod.rs` preamble update for Rule 5 /
+  Rule 8 venue clarifications (deferred from E-5 per Q3
+  disposition); tests unchanged at 1585. PROVENANCE.md
+  updates batch the Phase 5/5b.5 per-sub-arc closure
+  entries (E-1 through E-6 above) plus the Phase 5/5b.5
+  methodology accumulation streams section, the E-1b
+  lib-count baseline corrigendum, the variant-vs-test
+  mapping audit appendix for the 3 new variants since
+  D-7b + 1 removed-variant closure-of-record note for
+  SuiVerifier, the Phase 5/5b cumulative closure section,
+  and updates to existing thematic sections. CLAUDE.md
+  state-bump for Phase 5/5b.5 closure + Phase 5/5b
+  cumulative closure lands in the same commit per the
+  deferred-to-phase-closure pattern (B-6 / C-5 / D-7b
+  precedents).
+
+  **Sub-arc delta (E-7 alone):** 1 functional source-code
+  change (`validator/mod.rs` preamble doc-cleanup);
+  documentation-only otherwise; tests unchanged at 1585;
+  ~2500-4500 LOC of net edits to PROVENANCE.md +
+  CLAUDE.md (largest single documentation closure batch
+  in the project's history).
+
+  **Cumulative phase delta (Phase 5/5b.5, E-1a through
+  E-7):** 7 sub-arcs (E-1 split into E-1a/E-1b; E-2 split
+  into E-2a/E-2b; E-3, E-4, E-5, E-6, E-7 each single).
+  **9 commits on origin** (E-1a `0b774a3`; E-1b `4fb4114`;
+  E-2a `8e4d814`; E-2b `4e5bbab`; E-3 `922d4bd`; E-4
+  `f7e6189`; E-5 `4764be3`; E-6 `eb766b8`; E-7 closure
+  commit lands with this state-bump). Workspace test
+  count progression: **1532 → 1585 (+53)**.
+  AdamantValidationError progression: **64 → 66 (+2 net;
+  -1 SuiVerifier removed at E-1a + 3 added: CrossModulePrivacyConsistencyViolation
+  E-2a / DynamicDispatchViolation E-3 /
+  PrivacyCircuitContextViolation E-4)**. **2 new public
+  closed enums:** `DynamicDispatchViolationReason` (E-3),
+  `PrivacyCircuitContextViolationReason` (E-4) — bringing
+  the cumulative public closed-enum count to **11
+  total** (HandleKind, DefKind, InvalidSignatureReason,
+  IrreducibleReason, TypeMismatchReason, BorrowViolation
+  Reason, PrivacyConsistencyViolationReason,
+  DynamicDispatchViolationReason,
+  PrivacyCircuitContextViolationReason, FieldOwnerKind,
+  MalformedConstantReason). **3 verification gates fired**
+  during Phase 5/5b.5: 12th at E-2 plan-gate (§6.2.1.6
+  line 477 cross-module Rule 3); 13th at E-3 plan-gate
+  (§6.2.1.6 Rule 6 + line 485); 14th at E-4 plan-gate
+  (§6.2.1.6 Rule 7); 15th at E-5 plan-gate (§6.2.1.6
+  Rule 8 + amendment 804d9db). Total cumulative
+  verification gates 11 → 15 (+4). **Production-side Sui
+  dependency complete elimination at E-1.** adamant-vm
+  production-binary dependency graph contains zero
+  `move-*` crates per the §6.2.1.8 resistant-proof
+  posture; build-system independence check at
+  `tests/no_sui_in_production_deps.rs` mechanically
+  enforces the architectural commitment. **5 per-Adamant-
+  rule modules** finalized at Phase 5/5b.5: Rules 1, 2,
+  3 (single-module), 4 from prior phases; Rules 6, 7
+  added at E-3 / E-4; Rule 8 architectural-position pin
+  at E-5; Rule 5 enforced at parse-time inside
+  adamant_deserialize. Plus cross-module Rule 3 at
+  `validator/cross_module/` (E-2; production caller
+  awaiting Phase 5/6 AVM runtime stdlib). **Methodology
+  patterns formalized at E-7** (full enumeration in the
+  Phase 5/5b.5 closure methodology accumulation streams
+  section below): rule-of-three thresholds met across the
+  phase for running-total drift discipline (3 instances
+  at E-6 + 4th instance at E-7 session-resume); spec-
+  text-DIRECTS-shared-helper canonical principle (5
+  instances total: 3 cross-pass-distinct + 2 cross-scope-
+  reuse); verbatim-survey-at-plan-gate-prevents-scope-
+  error pattern (8 instances; pattern stable beyond
+  threshold). Plus ~25 new patterns / sub-shapes /
+  refinements registered at sub-rule-of-three threshold
+  for forward-tracking. **Cross-cutting canonical
+  principles operating beyond rule-of-three threshold:**
+  verbatim-survey-at-plan-gate-prevents-scope-error;
+  running-total drift discipline; spec-text-DIRECTS-
+  shared-helper; eager-error first-failure-wins;
+  variant-vs-test mapping audit principle. Phase 5/5b.5
+  closes; **Phase 5/5b CLOSED** with all 6 sub-arcs done
+  (5/5b.1a + 5/5b.1b + 5/5b.2 + 5/5b.3 + 5/5b.4 +
+  5/5b.5).
+
 ## Phase 5/5b.3 closure — methodology accumulation streams
 
 The six new methodology streams formalized at C-5 closure
@@ -3806,7 +4212,669 @@ discipline catches another running-total drift instance.
 **Methodology-positive empirical operation:** D-7 plan-gate
 caught the drift before D-7b documentation inherited the
 wrong baseline; second methodology-positive operation of
-the C-5-registered discipline.
+the C-5-registered discipline. **Pattern reaches 3
+instances and rule-of-three threshold MET at E-6** when
+the BorrowViolationReason sub-reason-count off-by-one was
+caught at E-6 impl-gate empirical grep (D-5b.2's "6 of 13"
+framing empirically corrected to "7 of 13"). **Pattern
+reaches 4 instances at E-7 session-resume** when the
+adamant-vm lib-count drift originating at E-1b was caught
+at E-7 session-resume empirical verification (claimed lib
+830 unchanged; empirical 831 — propagated through 7
+subsequent commits). See "Corrigendum: E-1b lib-count
+baseline drift" section near the end of this file for the
+per-commit reconstruction.
+
+## Phase 5/5b.5 closure — methodology accumulation streams
+
+The methodology streams formalized at E-7 closure across
+the 7 sub-arcs of Phase 5/5b.5 (E-1 through E-7). Each
+below extends the canonical methodology catalog above for
+future phase inheritance (5/5c, 5/6, future
+implementation work). Numbering continues from Phase
+5/5b.4 closure stream count (which ended at 29) — this
+section opens at (30).
+
+### (30) Architectural-commitment-mechanically-guarded pattern (NEW; 1st instance at E-1b)
+
+When a constitutional / spec-level architectural commitment
+exists, mechanical assertion at the build-system level
+prevents architectural drift even if per-source-file
+vigilance lapses. The mechanical guardrail makes the
+commitment robust against future drift in a way that
+documentation alone cannot.
+
+1st instance at E-1b: `tests/no_sui_in_production_deps.rs`
+walks `cargo metadata`'s resolve graph and asserts no
+`move-*` crate appears in `adamant-vm`'s production
+dependency graph. The build-system check is the mechanical
+guardrail for §6.2.1.8's resistant-proof posture
+commitment ("vendored Sui-Move crates appear only at test
+time; production-binary dependency graph contains zero
+move-* crates"). Constitutionally meaningful posture —
+parallel shape to "no foundation, no admin keys, no
+upgrade authority after genesis" commitments in the
+whitepaper; mechanical guardrails make commitments robust
+against future drift.
+
+Sanity-check empirically performed at E-1b: temporarily
+reintroduced `move-vm-config` to `[dependencies]`,
+confirmed the test fires with the offending crate names
+enumerated, then reverted. **1st instance of test-actually-
+fires-on-regression sanity-check methodology shape**
+registered alongside this pattern.
+
+Rule-of-three pending. Future build-system checks at
+analogous architectural-commitment boundaries (e.g., a
+hypothetical genesis-state-immutability check at Phase 5/6
+or Phase 5/5c) would inherit the pattern shape.
+
+### (31) Upstream-constant-duplication-with-test-time-parity-pin pattern (NEW; 1st instance at E-1b)
+
+Adamant-native constants duplicate Sui upstream values
+(test-time parity pin asserts upstream agreement);
+production code references Adamant-native constants
+exclusively (no Sui dependency in production graph).
+Methodology-positive shape: protects against accidental
+drift while making deliberate divergence visible.
+
+1st instance at E-1b: 3 constants duplicated from
+`move_vm_config::verifier`:
+
+- `DEFAULT_MAX_VARIANTS = 127`
+- `DEFAULT_MAX_CONSTANT_VECTOR_LEN = 1024 * 1024` (1 MiB)
+- `DEFAULT_MAX_IDENTIFIER_LENGTH = 128`
+
+The `adamant_structural_limits_constants_match_sui_upstream`
+test pins parity. If Adamant chooses to deviate from Sui
+upstream, the parity pin fires and forces explicit
+deliberate-Adamant-decision registration.
+
+Pattern-cluster: Adamant-native constants now have two
+empirical sub-classifications operating across distinct
+artifact-types:
+
+- **Sui-upstream-parity-pinned** (E-1b 1st instance;
+  pinning authority is Sui upstream tag).
+- **Adamant-spec-text-pinned** (E-3 1st instance — see
+  stream (33) below; pinning authority is whitepaper
+  spec text).
+
+Both share Adamant-native ownership discipline; differ in
+pinning authority. Rule-of-three pending across the
+broader Adamant-native-constants discipline (which now has
+two sub-classifications; one more would meet rule-of-three).
+
+### (32) Same-rule-different-scope-shares-sub-reason-enum pattern (NEW; 1st instance at E-2)
+
+When a rule applies across multiple verifier scopes (e.g.,
+single-module + cross-module), Adamant uses two typed
+variants but ONE shared closed sub-reason enum. The
+diagnostic locus differs (single-module vs cross-module)
+but the rule-violation reason discriminator is shared.
+
+1st instance at E-2: `PrivacyConsistencyViolation` (D-5c
+single-module) and `CrossModulePrivacyConsistencyViolation`
+(E-2a cross-module) share `PrivacyConsistencyViolationReason`'s
+2 sub-reasons (`ShieldedReachesInvokeTransparent`,
+`TransparentReachesInvokeShielded`).
+
+Distinct from cross-module-error-variant-shape pattern
+(E-2 1st instance; about diagnostic-field shape). Same-
+rule-different-scope-shares-sub-reason-enum is about
+sub-reason enum reuse across scopes. Future shape: if
+Phase 5/6 AVM runtime adds a runtime-check variant for
+Rule 3 (third scope: deployment-time + runtime), the
+sub-reason enum would be reused there too — 2nd instance.
+Rule-of-three pending.
+
+### (33) Spec-text-pinned-constant-with-Adamant-native-ownership pattern (NEW; 1st instance at E-3)
+
+Adamant-native constants whose values are pinned by
+whitepaper spec text (not Sui upstream). The
+test-time parity pin asserts the constants match the spec
+text empirically.
+
+1st instance at E-3: 4 constants pinned by §6.2.1.6 line
+485:
+
+- `FORBIDDEN_ADDRESS = [0u8; 31, 2u8]` (Sui standard-
+  library address `0x2`)
+- `FORBIDDEN_DYNAMIC_FIELD = "dynamic_field"`
+- `FORBIDDEN_DYNAMIC_OBJECT_FIELD = "dynamic_object_field"`
+- `DYNAMIC_OPTIN_METADATA_KEY = b"adamant.allows_dynamic"`
+
+The `adamant_native_constants_match_spec_text` test pins
+all four against §6.2.1.6 line 485 spec text. **1st
+instance of Adamant-spec-text-parity-test discipline
+registered alongside** (analogous to E-1b's upstream-
+parity-test discipline; different pinning authority).
+
+Distinct from E-1b's
+upstream-constant-duplication-with-test-time-parity-pin
+pattern (which pins to Sui upstream tag). Both share
+Adamant-native ownership discipline; differ in pinning
+authority. Pattern-cluster: Adamant-native constants
+discipline now has two empirical sub-classifications;
+rule-of-three pending across the broader cluster.
+
+### (34) Helper-extraction discipline sub-shape γ extract-at-N=1-anticipating (NEW; 1st instance at E-2a)
+
+Sub-shape γ of helper-extraction discipline (which
+already had α=N=2 at B-2.2 + β=N=3 at D-7a). Sub-shape γ
+fires when extraction is anticipation-triggered rather
+than reuse-triggered: the test surface anticipates
+multiple consumers from inception of the work, motivating
+extraction at first use.
+
+1st instance at E-2a: `InMemoryModuleResolver` extracted
+at N=1 with 7 immediate consumers in the trait/API
+correctness tests + anticipated reuse at E-2b walker
+tests. The cross-module subtree has multiple Layer A test
+sites from inception, motivating anticipated extraction
+at first use rather than the reuse-triggered extraction
+sub-shapes α (`module_pass` at B-2.2; N=2) and β
+(`function_pass` at D-7a; N=3).
+
+Helper-extraction discipline now has three empirical
+sub-shapes:
+
+- **α: extract-at-N=2** (low fixture overhead; reuse-
+  triggered; B-2.2 module_pass `assert_pass_parity`)
+- **β: extract-at-N=3** (high fixture overhead; reuse-
+  triggered; D-7a function_pass test_helpers)
+- **γ: extract-at-N=1-anticipating** (anticipated reuse
+  triggers extraction at first use; E-2a cross_module
+  test_helpers)
+
+Rule-of-three pending across sub-shapes (currently 3
+sub-shapes, one instance each).
+
+### (35) Helper-extraction discipline sub-shape α complexity-reduction qualifier (NEW; 1st refinement instance at E-4)
+
+Sub-shape α (extract-at-N=2) refined at E-4 from "mechanical
+extract at N=2" to "evaluate-extraction-at-N=2 — extract
+ONLY when extraction reduces complexity; defer otherwise."
+
+1st refinement instance at E-4: D-5c walker + E-4 walker
+=  2 instances. Sub-shape α threshold met. But extraction
+would have added closure-typed predicate API noise (state
+threading differs: `caller_mode` for Rule 3 vs no per-call
+state for Rule 7). Deferral was right shape; D-5c walker
+ported to E-4 walker with state-threading difference
+rather than refactored to closure-typed predicate API.
+
+Methodology consequence: helper-extraction discipline
+sub-shape α has a complexity-reduction qualifier.
+Future plan-gate evaluations of sub-shape α extraction at
+N=2 ask "does extraction reduce complexity?" before
+firing.
+
+Rule-of-three pending for the qualifier specifically.
+
+### (36) Call-graph walker pattern sub-classifications (NEW; per-walk-state vs walk-set-filter)
+
+Two empirical sub-classifications of call-graph walker
+shape based on reject-condition shape:
+
+- **Per-walk-state-determines-reject** (D-5c shape): walk
+  every public function; per-walk mode (caller_mode in
+  Rule 3) determines reject condition.
+- **Walk-set-filter-at-entry** (E-4 shape): filter walk-
+  set at entry (only `#[transparent]` publics for Rule
+  7); reject condition is uniform within walks.
+
+Same call-graph-walker pattern; different reject-condition
+shape. Both methodology-positive; choice depends on
+whether the rejection mode varies per-walk (per-walk-
+state) or is uniform (walk-set-filter).
+
+Rule-of-three pending across each sub-classification.
+
+### (37) Rule-composition-for-cross-module-coverage pattern (NEW; 1st instance at E-4)
+
+When a rule's cross-module surface is transitively bound
+through composition with another rule's cross-module
+machinery + the rule's per-module enforcement, Adamant
+documents the transitive-coverage argument explicitly so
+future maintainers don't assume the rule has a missing
+cross-module implementation.
+
+1st instance at E-4: Rule 7 cross-module coverage bound
+through:
+
+1. Cross-module Rule 3 (E-2b) catches transparent →
+   shielded boundary crossings at the call edge.
+2. Rule 7 single-module catches privacy-circuit
+   instructions in transparent-reachable code within each
+   module.
+
+Composition: transparent caller (deploying module) calls
+a shielded function in a dep module — cross-module Rule
+3 (E-2b) rejects at the call edge. Transparent caller
+calls a transparent function in a dep module — the dep
+was validated at its own deploy time to not contain
+privacy-circuit instructions in transparent-reachable
+code (Rule 7 single-module on the dep). Composition is
+closed; Rule 7 single-module + Rule 3 cross-module covers
+the full constitutional surface.
+
+Distinct from spec-text-DIRECTS-shared-helper canonical
+principle (about reuse) and architectural-position-pin-
+for-explicit-non-enforcement (about explicit non-
+enforcement). This pattern is about constitutional
+coverage via composition.
+
+Rule-of-three pending.
+
+### (38) Code-and-PROVENANCE.md methodology-pattern-registration sub-shape (NEW; 2 instances at E-4 + E-5)
+
+When a methodology pattern affects implementation
+decisions that future maintainers might question, the
+pattern's rationale lives in BOTH code (per-module
+preamble or variant doc-comment) AND PROVENANCE.md
+(canonical methodology accumulation record).
+
+vs the default sub-shape: PROVENANCE.md-only registration
+(used for most patterns; canonical record is the
+reference; code carries the implementation, not the
+methodology rationale).
+
+Two instances at Phase 5/5b.5:
+
+- **E-4 rule-composition-for-cross-module-coverage**
+  (walker preamble + variant doc-comment + canonical
+  record). Future maintainer searching for "why no
+  cross-module Rule 7 walker?" finds the transitive-
+  coverage argument in code immediately.
+- **E-5 architectural-position-pin-for-explicit-non-
+  enforcement** (module preamble + canonical record).
+  Future maintainer searching for "why no Rule 8 verify
+  function?" finds the architectural position in code.
+
+Rule-of-three pending across this sub-shape.
+
+### (39) Architectural-position-pin-for-explicit-non-enforcement pattern (NEW; 1st instance at E-5)
+
+When a spec amendment mandates a verifier-level no-op for
+a rule whose enforcement venue is elsewhere (runtime,
+parse-time, etc.), Adamant lands a canonical pin module
+documenting (a) the architectural position, (b) the spec
+text, (c) a test confirming the verifier accepts a fixture
+that would otherwise be the rule's trigger condition. The
+pin makes the absence of enforcement consensus-binding —
+future maintainers searching for `rule_NN` find the
+canonical record.
+
+1st instance at E-5: `rule_08_bounded_loops` per §6.2.1.6
+amendment 804d9db ("Static loop-bound verification is not
+required at deployment time; the gas-budget bound at
+runtime carries the determinism guarantee"). Pin module
+contains doc-comment + 1 test
+(`unbounded_self_loop_module_accepts_at_deploy_time`); no
+`verify(&module)` function call at step 5.
+
+Distinct from:
+
+- Spec-text-DIRECTS-shared-helper canonical principle
+  (about reuse).
+- Rule-composition-for-cross-module-coverage (about
+  transitive coverage).
+- Architectural-position-pin-for-explicit-non-enforcement
+  (this pattern; about explicit non-enforcement).
+
+Three patterns operating across distinct architectural-
+decision domains, all surfacing decisions that future
+maintainers might question.
+
+Rule-of-three pending. Future candidates: Rule 5 (no
+global storage instructions) is enforced at parse time
+inside `adamant_deserialize`'s strict mode — pinned at
+the deserializer side rather than via a validator pin
+module. If a future spec amendment lands a deploy-time-
+no-op rule, the architectural-position-pin pattern's 2nd
+instance fires.
+
+### (40) Trigger-condition-boundary defensive-testing sub-pattern (NEW; 2 instances E-3 + E-4)
+
+Tests that verify the trigger condition fires only when
+ALL conditions match — boundary discrimination preserves
+the trigger condition against accidental widening in
+future refactors.
+
+Two instances:
+
+- **E-3** (Rule 6 boundary tests):
+  - `call_to_dynamic_field_at_wrong_address_accepts`
+    (address discrimination — name match only at non-0x2
+    address: not forbidden)
+  - `call_to_other_module_at_0x2_accepts` (module-name
+    discrimination — 0x2 address with non-dynamic-field
+    name: not forbidden)
+- **E-4** (Rule 7 walk-set boundary):
+  - `mixed_modes_only_transparent_walked` (transparent
+    public not reaching circuit accepts; shielded public
+    reaching circuit accepts; only transparent walked)
+
+Pattern shape: when a rule's trigger condition is
+multi-conditional, defensive boundary tests verify each
+condition's exclusion-from-trigger. Without these,
+future refactor could accidentally widen the trigger
+(e.g., remove the address check; rule fires on any 0x2
+module name match).
+
+Rule-of-three pending.
+
+### (41) Architectural-position-confirmation testing sub-pattern (NEW; 1st instance at E-5)
+
+Test asserts the verifier ACCEPTS a fixture that would
+otherwise be the rule's trigger condition — confirms
+spec-mandated non-enforcement empirically. Distinct from
+trigger-condition-boundary defensive-testing (which
+verifies the trigger DOES fire when conditions match);
+this confirms the verifier DOES NOT enforce when spec
+mandates non-enforcement.
+
+1st instance at E-5: `unbounded_self_loop_module_accepts_at_deploy_time`
+asserts the verifier accepts an unbounded `Branch(0)`
+self-loop module — the canonical empirical pin that
+Rule 8 is not enforced at the verifier layer.
+
+Both methodology-positive defensive-testing core
+discipline; different mechanical shapes:
+
+- Trigger-condition-boundary (E-3 + E-4): trigger fires
+  only when ALL conditions match.
+- Architectural-position-confirmation (E-5): verifier
+  accepts what spec mandates non-enforcement of.
+
+Rule-of-three pending.
+
+### (42) Defensive-fixture-isolation pattern (NEW; 1st instance at E-5)
+
+When testing one rule's behavior, ensure other rules
+don't pre-empt the assertion. Fixture is curated to
+satisfy all OTHER rules so the test's failure path is
+exclusively the targeted rule.
+
+1st instance at E-5: `unbounded_self_loop_module_accepts_at_deploy_time`
+fixture includes mandatory mutability metadata (Rule 1)
++ `VERSION_MAX = 7` + valid module-handle wiring + valid
+function-handle wiring. Without these, Rule 1 (or another
+rule) would pre-empt the Rule 8 acceptance assertion.
+
+Same posture as D-7a Layer B fixture curation
+(composite-pipeline parity sound because fixtures
+isolated targeted pass per the Sui-public-API-shape-
+constrains-parity-helper sub-pattern).
+
+Rule-of-three pending.
+
+### (43) Open Layer B gaps closure two sub-shapes (NEW; gap-source-removal at E-1a + gap-fill at E-6)
+
+Open Layer B gaps closure pattern (registered at D-7b)
+now has two empirical sub-shapes:
+
+- **Gap-source-removal closure** (E-1a 1st instance):
+  the gap closes via removing what needed Layer B
+  parity. SuiVerifier audit gap (registered at C-5)
+  closes via the bridge tear-out at E-1a — the variant
+  itself is removed; nothing left to audit.
+- **Gap-fill closure** (E-6 1st instance): the gap
+  closes via fixture construction filling the audit
+  hole. BorrowViolationReason 7-of-13 sub-reasons +
+  st_loc_destroys_non_drop close via E-6's negative-
+  test fixtures.
+
+Different mechanical shapes; same audit-gap-closure
+core discipline. Rule-of-three pending across each
+sub-shape.
+
+### (44) Variant-vs-test mapping audit principle three sub-shapes (NEW; coverage trajectories)
+
+Variant-vs-test mapping audit principle (canonical at
+C-3, retroactive audit at C-5 + D-7b, deferred-gap
+closure at E-6) now has three empirical sub-shapes:
+
+- **Coverage-baseline-establishment** (C-3 origin):
+  forward-looking — new variants get audit at impl-gate.
+- **Coverage-retroactive-audit** (C-5 + D-7b): backward-
+  looking validation of existing variants.
+- **Coverage-deferred-gap-closure** (E-6): closes audit
+  gaps that were honestly-scope-flagged at prior sub-
+  arcs.
+
+All three sub-shapes operate across Phase 5/5b. Rule-of-
+three threshold met for the audit principle's coverage-
+trajectory taxonomy.
+
+### (45) Variant-vs-test mapping audit closure shapes (NEW; test-addition vs variant-removal)
+
+Within the audit principle, two closure shapes:
+
+- **Test-addition closure** (most variants): new variant
+  gets audit at impl-gate; explicit negative test added
+  alongside producer.
+- **Variant-removal closure** (E-1a SuiVerifier): audit
+  gap closes via tear-out — variant removed; nothing
+  left to audit.
+
+Structurally similar to Open Layer B gaps closure's gap-
+source-removal sub-shape (E-1a) — same retire-via-
+fulfillment shape applied at variant level.
+
+Rule-of-three pending across variant-removal-closure
+specifically.
+
+### (46) Variant-count discipline four sub-shapes (NEW; comprehensive empirical taxonomy)
+
+Variant-count discipline now has four empirical sub-
+shapes:
+
+- **Variant-count-via-add** (most rule sub-arcs): new
+  rejection conditions add typed variants.
+- **Variant-count-via-tear-out** (E-1a; 64 → 63):
+  bridge tear-out removes SuiVerifier variant.
+- **Variant-count-via-no-op** (E-5; 66 unchanged):
+  architectural-position pin; no rejection condition
+  at deploy time.
+- **Variant-count-via-coverage-expansion** (E-6; 66
+  unchanged): work expands Layer B coverage on existing
+  variants without adding new ones.
+
+Pattern of "core discipline + empirical sub-
+classifications" continues stable across multiple
+methodology areas (helper-extraction three sub-shapes;
+Adamant-native-constants two sub-classifications;
+Open Layer B gaps closure two sub-shapes; etc.).
+
+Rule-of-three pending across each sub-shape.
+
+### (47) Test-placement discipline sub-shapes (NEW; producer-adjacent vs public-API-boundary)
+
+Two empirical sub-shapes of test placement:
+
+- **Producer-adjacent placement**: each test alongside
+  its producer (same source file). Granular; useful for
+  unit-test coverage at a lower layer.
+- **Public-API-boundary placement** (E-6 1st instance
+  for variant-vs-test mapping audit purposes): all
+  tests for a closed-enum variant at the end-to-end
+  entry point. Stronger coverage anchored at the
+  verifier's public API; canonical for variant-vs-test
+  mapping audit purposes.
+
+Rule-of-three pending across each sub-shape.
+
+### (48) Sub-shape 2 (pre-arc-split) empirical-substantiality qualifier (NEW; 1st refinement instance at E-6)
+
+Sub-shape 2 of empirical-complexity-drives-sub-checkpoint-
+shape pattern (pre-arc-split) refined at E-6: pattern
+fires when scope is empirically substantial, not
+mechanically at multi-component sub-arc.
+
+1st refinement instance at E-6: E-6 has 8 components (7
+BorrowViolationReason tests + 1 st_loc_destroys_non_drop)
+but bundled because methodology shape is uniform (Layer
+B fixture construction). Pre-arc-split would have over-
+applied; bundling honors the empirical-substantiality
+principle.
+
+Same posture as helper-extraction discipline sub-shape α
+complexity-reduction qualifier (E-4 1st instance):
+extract-at-N=2 fires when extraction reduces complexity,
+not mechanically. Both refinements move from "mechanical
+threshold trigger" to "evaluate trigger empirically with
+qualifier."
+
+Rule-of-three pending for the qualifier specifically.
+
+### (49) Plan-incremental-disposition sub-pattern β closure-phase 2nd instance (D-5b.2 → E-6)
+
+Sub-pattern β (deliberate-deferral) closure-phase
+canonical pattern reaches 2 instances:
+
+- 1st closure: D-5a.0 → D-5a.1.b (TypeMismatchReason 14
+  sub-reason audit closure).
+- 2nd closure: D-5b.2 → E-6 (BorrowViolationReason 13
+  sub-reason audit closure).
+
+Pattern stable across phase boundaries (Phase 5/5b.4 +
+Phase 5/5b.5). Rule-of-three pending at next closure
+instance.
+
+### (50) Cumulative-phase-closure-on-final-sub-arc pattern two shapes (NEW; single-phase vs cumulative-multi-phase)
+
+Phase-closure documentation has two empirical shapes:
+
+- **Single-phase closure** (D-7b 1st instance; Phase
+  5/5b.4 closure only). Per-sub-arc entries +
+  methodology accumulation streams + state-bump.
+- **Cumulative-multi-phase closure** (E-7 1st instance;
+  Phase 5/5b.5 closure + Phase 5/5b cumulative closure
+  across 6 sub-arcs). Adds cumulative-phase tally +
+  cross-phase pattern accumulation.
+
+Different methodology shape; same closure-batch core
+discipline. Rule-of-three pending across cumulative-
+multi-phase closure shape (would land at next phase-
+cumulative closure: Phase 5/5c if applicable, or Phase
+5 overall).
+
+### (51) Scope-expansion-history-as-canonical-record sub-pattern (NEW; 2 instances D-7 + E-7)
+
+How canonical-record files evolve in scope and document
+their own evolution. Each scope expansion adds a paragraph
+at the file's top documenting the expansion.
+
+Two instances:
+
+- **D-7** (1st instance): expanded `module_pass/PROVENANCE.md`
+  to cover `function_pass/` subtree.
+- **E-7** (2nd instance): re-expanded same file to cover
+  `cross_module/` subtree + Phase 5/5b.5 rule modules.
+
+Different from variant-count discipline (count tracking)
+and corrigendum-pattern (correction shape). Specifically
+about how canonical-record files evolve in scope and
+document their own evolution.
+
+Rule-of-three pending.
+
+### (52) Corrigendum-as-canonical-correction-shape sub-pattern of running-total drift discipline (NEW; rule-of-three threshold MET at E-7)
+
+Within the running-total drift discipline, the canonical
+correction landing shape is a corrigendum section in
+PROVENANCE.md with a per-commit progression table.
+
+Three corrigendum instances at E-7 closure:
+
+1. **B-6 baseline error in CLAUDE.md state-bump**
+   (variant-count baseline, registered at C-5;
+   corrigendum at end of file).
+2. **D-3-to-D-4 baseline error in commit-message running
+   totals** (workspace-test-count drift, registered at
+   D-7b; corrigendum at end of file).
+3. **E-1b lib-count baseline drift** (registered at E-7;
+   corrigendum lands in this commit; see "Corrigendum:
+   E-1b lib-count baseline drift" section below).
+
+Rule-of-three threshold met for corrigendum-as-canonical-
+correction-shape sub-pattern. Pattern stability across
+phase boundaries (5/5b.2 + 5/5b.4 + 5/5b.5) confirms
+corrigendum shape is the canonical landing for running-
+total drift catches.
+
+### (53) Pattern-cluster meta-observation across methodology areas (NEW; meta-pattern at E-7)
+
+Methodology framework consistently surfaces empirical
+sub-classifications at scale, not just monolithic
+patterns. Multiple methodology areas have pattern-
+cluster shape:
+
+- Helper-extraction discipline (3 sub-shapes: α/β/γ)
+- Spec-text-DIRECTS-shared-helper canonical principle (2
+  sub-shapes: cross-pass-distinct + cross-scope-reuse)
+- Adamant-native-constants discipline (2 sub-
+  classifications: Sui-upstream-parity-pinned + Adamant-
+  spec-text-pinned)
+- Open Layer B gaps closure (2 sub-shapes: gap-source-
+  removal + gap-fill)
+- Bridge-as-soundness-test-infrastructure (opening +
+  closure phases)
+- Call-graph walker pattern (2 sub-classifications:
+  per-walk-state-determines-reject + walk-set-filter-
+  at-entry)
+- Variant-count discipline (4 sub-shapes: add / tear-
+  out / no-op / coverage-expansion)
+- Variant-vs-test mapping audit principle (3 sub-shapes
+  + 2 closure shapes)
+- Test-placement discipline (2 sub-shapes: producer-
+  adjacent + public-API-boundary)
+- Cumulative-phase-closure-on-final-sub-arc (2 shapes:
+  single-phase + cumulative-multi-phase)
+
+Pattern-cluster is itself a methodology pattern. Sub-
+classifications emerge through empirical iteration;
+framework accommodates discovery rather than forcing
+monolithic patterns.
+
+Worth canonical methodology-meta registration: pattern-
+cluster shape at scale is a stable phenomenon of the
+methodology framework's operation.
+
+### (54) Methodology framework efficiency curve across phases (NEW; meta-observation at E-7)
+
+Empirical observation across phase boundaries: phase-
+later sub-arcs surface plan-gates more cleanly than
+phase-earlier sub-arcs. Framework efficiency improves
+as discipline internalizes:
+
+- Phase 5/5b.2 (B-1 through B-6): framework
+  establishment phase; multi-question plan-gates with
+  significant empirical-resolution cycles.
+- Phase 5/5b.3 (C-1 through C-5): framework refinement;
+  C-3 variant-vs-test mapping audit principle
+  established; C-5 running-total drift discipline
+  registered.
+- Phase 5/5b.4 (D-1 through D-7): framework maturation;
+  multiple cross-cutting canonical principles operating
+  beyond rule-of-three threshold; D-7b 22-subsection
+  methodology accumulation streams.
+- Phase 5/5b.5 (E-1 through E-7): framework efficiency;
+  plan-gates surface more cleanly; methodology data
+  points cluster around new sub-shape registrations
+  rather than novel patterns. E-7 25-subsection
+  methodology accumulation streams.
+
+Efficiency curve is methodology-positive: cost-of-
+discipline decreases as discipline internalizes; framework
+scales without bottlenecking implementation.
+
+Worth canonical meta-registration: methodology framework
+itself improves with phase iteration; pattern stability
+across phase boundaries demonstrates framework
+robustness.
 
 ## Retroactive variant-vs-test mapping audit (50 variants; C-5 closure)
 
@@ -4111,3 +5179,400 @@ messages must claim workspace test count explicitly (the
 D-3 origin gap was "no workspace claim"; future commits
 that don't claim workspace count let the drift propagate
 silently).
+
+## Variant-vs-test mapping audit appendix (3 new variants + 1 removed-variant closure-of-record; E-7 closure)
+
+Per the canonical methodology principle (registered at
+C-3, applied retroactively at C-5 + D-7b), each typed-
+error variant landing in a sub-checkpoint must have at
+least one explicit negative test asserting on the variant
+shape. Phase 5/5b.5 net variant-count delta:
+**64 → 66 (+2 net; -1 SuiVerifier removed at E-1a +
+3 new added across E-2a/E-3/E-4)**. This appendix
+audits the 3 new variants for explicit negative-test
+coverage AND records the closure-of-record for the
+SuiVerifier audit gap (registered at C-5 with disposition
+"deferred to natural resolution at 5/5b.5 bridge tear-
+out"; resolution achieved at E-1a).
+
+D-7b's audit table (64 variants) stays canonical for the
+variants that existed at D-7b closure. This appendix adds
+the 3-variant increment + 1 removed-variant closure-of-
+record.
+
+**Audit method:** `grep -rE "Err\(AdamantValidationError::VARIANT\b"
+crates/adamant-vm/src` per variant; counts include
+positive and negative occurrences in test code.
+
+**Audit results (3 new variants): all 3 have explicit
+negative test coverage.**
+
+| Variant | Sub-checkpoint | Test occurrences | Status |
+|---|---|---|---|
+| `CrossModulePrivacyConsistencyViolation` | E-2a (variant) / E-2b (producer + tests) | 5 | ✓ covered (5 negative tests in `validator/cross_module/rule_03_privacy_consistency::tests`) |
+| `DynamicDispatchViolation` | E-3 | 5 | ✓ covered (5 negative tests in `validator/rule_06_no_dynamic_dispatch::tests`) |
+| `PrivacyCircuitContextViolation` | E-4 | 5 | ✓ covered (5 negative tests; one per restricted Adamant extension + 1 transitive-reach test) |
+
+**Removed-variant closure-of-record:**
+
+`SuiVerifier(VMError)` (registered at Wave 3a; carried
+the C-5 audit gap with disposition "deferred to natural
+resolution at Phase 5/5b.5 Sui-verifier-bridge tear-out
+per the architectural commitment in §6.2.1.8") is
+**removed at E-1a** as part of the bridge tear-out. The
+audit gap is **closed via gap-source-removal**: the
+variant no longer exists in the codebase, so there is
+nothing to audit. 1st instance of variant-removal closure
+shape of variant-vs-test mapping audit principle (NEW;
+registered at E-7 closure stream (45)).
+
+**Combined audit state at E-7 closure (Phase 5/5b.5
+closes; Phase 5/5b CLOSED):** all 66 typed
+`AdamantValidationError` variants have explicit negative-
+test coverage. The 1 audit gap registered at C-5 (the
+`SuiVerifier` transitional bridge variant) closed-of-
+record at E-1a. **No outstanding audit gaps at Phase 5/5b
+closure.** Pattern-cluster: the variant-vs-test mapping
+audit principle's cumulative coverage trajectory
+(C-5 audit at 50 variants → D-7b audit at 64 variants →
+E-7 audit at 66 variants with 0 gaps) demonstrates
+discipline scaling cleanly across phases.
+
+## Corrigendum: E-1b lib-count baseline drift in commit-message running totals
+
+**Source:** Phase 5/5b.5 E-1b closure commit (`4fb4114`,
+2026-05-09).
+
+**The error:** E-1b's commit message claimed
+`adamant-vm lib: 830 tests (unchanged from E-1a closure)`.
+The empirical lib count at E-1b was **831** — E-1b added
+1 lib test (the `adamant_structural_limits_constants_match_sui_upstream`
+upstream-parity pin in `validator/config.rs::tests`) plus
+1 integration test (the
+`adamant_vm_production_deps_contain_no_sui_move_crates`
+build-system check in `tests/no_sui_in_production_deps.rs`,
+which counts as workspace +1 but NOT lib +1). The
+commit message correctly claimed workspace 1532 → 1534
+(+2) but missed the lib +1 from the upstream-parity pin.
+
+**Empirical reality (corrected at E-7 session-resume
+empirical verification):**
+
+- **E-1a closure (commit `0b774a3`):** 830 lib tests
+  (baseline empirically verified)
+- **E-1b closure (commit `4fb4114`):** 830 + 1 = **831**
+  lib tests (commit message: "830 tests (unchanged)";
+  drift origin)
+- **E-2a closure (commit `8e4d814`):** 831 + 7 = **838**
+  lib tests (commit message claimed 837 → 838;
+  + 7 delta correct, baseline 837 was 1 below empirical
+  831 + 7 = 838)
+- **E-2b closure (commit `4e5bbab`):** 838 + 11 = **849**
+  lib tests (commit message claimed 848 → 849;
+  + 11 delta correct, baseline 848 was 1 below empirical)
+- **E-3 closure (commit `922d4bd`):** 849 + 11 = **860**
+  lib tests (commit message claimed 859 → 860;
+  + 11 delta correct, baseline 859 was 1 below empirical)
+- **E-4 closure (commit `f7e6189`):** 860 + 13 = **873**
+  lib tests (commit message claimed 872 → 873;
+  + 13 delta correct, baseline 872 was 1 below empirical)
+- **E-5 closure (commit `4764be3`):** 873 + 1 = **874**
+  lib tests (commit message claimed 873 → 874;
+  + 1 delta correct, baseline 873 was 1 below empirical)
+- **E-6 closure (commit `eb766b8`):** 874 + 8 = **882**
+  lib tests (commit message claimed 881 → 882;
+  + 8 delta correct, baseline 881 was 1 below empirical)
+
+**Drift propagation:** the wrong "830 unchanged" baseline
+inherited by 7 subsequent commits across Phase 5/5b.5,
+with correct per-sub-checkpoint deltas applied to the
+wrong baseline:
+
+| Commit | Inherited baseline | Per-commit delta | Claimed total | Actual total |
+|---|---|---|---|---|
+| E-1b (origin) | 830 (correct from E-1a) | +1 ✗ (claimed 0) | 830 (wrong, -1) | 831 |
+| E-2a | 830 (wrong, -1) | +7 ✓ | 837 (wrong, -1) | 838 |
+| E-2b | 837 (wrong, -1) | +11 ✓ | 848 (wrong, -1) | 849 |
+| E-3 | 848 (wrong, -1) | +11 ✓ | 859 (wrong, -1) | 860 |
+| E-4 | 859 (wrong, -1) | +13 ✓ | 872 (wrong, -1) | 873 |
+| E-5 | 872 (wrong, -1) | +1 ✓ | 873 (wrong, -1) | 874 |
+| E-6 | 873 (wrong, -1) | +8 ✓ | 881 (wrong, -1) | 882 |
+
+Per-sub-checkpoint deltas were empirically correct from
+E-2a forward (each commit's claimed delta matches the
+actual additions; only the inherited E-1b baseline was
+wrong from E-1b forward). Workspace count was correct
+throughout (1534 → 1541 → 1552 → 1563 → 1576 → 1577 →
+1585 all match empirical).
+
+**Catch at E-7 session-resume:** E-7 session-resume
+empirical-grep verification of the resume-prompt baseline
+(claimed `adamant-vm lib: 881 tests`; empirical 882 at
+HEAD `eb766b8`) caught the discrepancy. Per the C-5-
+registered commit-message running-total drift discipline
+(operating beyond rule-of-three threshold post-E-6 with
+this catch as 4th instance), E-7's state-bump uses
+empirically-grep-confirmed counts.
+
+**Correction at E-7:** Phase 5/5b.5 closure metrics use
+empirically-verified counts:
+
+- Pre-Phase-5/5b.5 baseline (= D-7b closure / Phase
+  5/5b.4 closure actual): adamant-vm lib **830 tests**
+  (matches commit message claim)
+- Phase 5/5b.5 added: **+52 lib tests** (per-sub-
+  checkpoint deltas 1+7+11+11+13+1+8 = 52; matches
+  empirical reconstruction)
+- Phase 5/5b.5 closure total: **882 lib tests** (= 830
+  + 52; corrects the inherited "881" claim from E-6
+  commit message)
+
+The commit messages from E-1b through E-6 stay in the git
+log as historical record. Future readers of those commit
+messages consult this corrigendum for the empirically-
+verified counts. **Same posture as the B-6 corrigendum
+above for the AdamantValidationError variant-count drift
+and the D-3-to-D-4 corrigendum for the workspace-test-
+count drift.**
+
+**Methodology consequence:** **3rd corrigendum instance**
+of the running-total drift discipline operating at full
+empirical-catch effectiveness — **rule-of-three threshold
+MET for corrigendum-as-canonical-correction-shape sub-
+pattern** (registered at E-7 closure stream (52)). Pattern
+stability across phase boundaries (5/5b.2 + 5/5b.4 +
+5/5b.5) confirms corrigendum shape is the canonical
+landing for running-total drift catches. Verified-
+empirically posture at session-resume boundary operating
+exactly as designed: catch propagated drift before
+canonical record landing.
+
+**Discipline going forward:** at every phase closure AND
+session-resume boundary, empirically grep-confirm running
+totals (variant counts, lib test counts, workspace test
+counts, sub-reason counts, etc.) via grep-on-code rather
+than inheriting prior state-bump claims. **Session-resume
+verification is now mandatory** per the running-total
+drift discipline operating beyond rule-of-three threshold.
+
+## Phase 5/5b cumulative closure
+
+Phase 5/5b is the longest sub-arc set in the project's
+history: **6 sub-arcs across ~5 weeks** of development
+(2026-05-07 through 2026-05-09; calendar-tight workstream
+with internalized methodology framework discipline).
+**Phase 5/5b CLOSED at E-7 commit.**
+
+### Phase 5/5b sub-arc enumeration
+
+- **Phase 5/5b.1a** (foundation fork; commit `a7a06ab`):
+  bytecode-format primitives — constants, readers,
+  AbilitySet, Identifier — into the new `adamant-bytecode-
+  format` crate.
+- **Phase 5/5b.1b** (foundation fork continued; commit
+  `874e701`): 25 reused parallel-struct neighbour types,
+  index machinery, SignatureToken, full inherited
+  Bytecode enum, CodeUnit, FunctionDefinition, U256 thin
+  newtype, Metadata, AddressIdentifierPool reusing
+  `adamant_types::Address`.
+- **Phase 5/5b.2** (B-1 through B-6; closed at `4b03f14`,
+  workspace 821 → 1035): module-level passes
+  establishment + 9 module-level passes ported Adamant-
+  native + Rule 2 + privacy_metadata_structure + 8-pass
+  pipeline integration.
+- **Phase 5/5b.3** (C-1 through C-5; closed at `7d90847`,
+  workspace 1035 → 1259): module-level pass completion +
+  3 large module-level passes (BoundsChecker /
+  DuplicationChecker / SignatureChecker) + 11-pass
+  pipeline integration. PROVENANCE.md establishment.
+- **Phase 5/5b.4** (D-1 through D-7; closed at `4ce3d5b`,
+  workspace 1259 → 1532): per-function pipeline
+  establishment + 5 per-function passes + Rule 3 single-
+  module + per-function-pass framework (CFG +
+  AbstractInterpreter + AbstractStack + BorrowGraph) +
+  step-4 pipeline integration. PROVENANCE.md scope
+  expansion to cover function_pass.
+- **Phase 5/5b.5** (E-1 through E-7; closed at the
+  current commit, workspace 1532 → 1585): Sui-bridge
+  tear-out + cross-module Rule 3 + Rules 6, 7
+  implementation + Rule 8 architectural-position pin +
+  Open Layer B gaps closure + cumulative closure
+  documentation. PROVENANCE.md re-expansion to cover
+  cross_module + Phase 5/5b.5 rule modules.
+
+### Phase 5/5b cumulative metrics
+
+**Workspace test count progression:** 821 → 1585 (+764
+across the entire Phase 5/5b workstream).
+
+**Per-phase cumulative deltas:**
+
+| Phase | Sub-arcs | Closing workspace test count | Phase delta | AdamantValidationError variants |
+|---|---|---|---|---|
+| Phase 5/5b.1a | 1 | (foundation; tests in adamant-bytecode-format) | foundation | (no validator yet) |
+| Phase 5/5b.1b | 1 | (foundation continued) | foundation | (no validator yet) |
+| Phase 5/5b.2 | 6 (B-1..B-6) | 1035 | +214 | 7 → 33 (+26) |
+| Phase 5/5b.3 | 5 (C-1..C-5) | 1259 | +224 | 33 → 50 (+17) |
+| Phase 5/5b.4 | 12 commits / 9 sub-arcs | 1532 | +273 | 50 → 64 (+14) |
+| Phase 5/5b.5 | 9 commits / 7 sub-arcs | 1585 | +53 | 64 → 66 (+2 net) |
+
+**Cumulative AdamantValidationError variants:** 7 → 66
+(+59 net).
+
+**Cumulative public closed enums:** 0 → 11. Enumeration:
+HandleKind (B-3.1), DefKind (C-2), InvalidSignatureReason
+(C-3), IrreducibleReason (D-2), TypeMismatchReason
+(D-5a.0), BorrowViolationReason (D-5b.2),
+PrivacyConsistencyViolationReason (D-5c),
+DynamicDispatchViolationReason (E-3),
+PrivacyCircuitContextViolationReason (E-4), FieldOwnerKind
+(B-2.3), MalformedConstantReason (B-2.1).
+
+**Cumulative deliberate-Adamant-decision instances:** 11
+(per CLAUDE.md state-bump tracking).
+
+**Cumulative verification gates fired:** 8 (pre-Phase-
+5/5b.4) + 3 (Phase 5/5b.4) + 4 (Phase 5/5b.5) = 15
+total. Phase 5/5b alone fired 7 verification gates
+across the §6.2.1.X spec sections.
+
+**Production-side Sui dependency complete elimination:**
+Phase 5/5b.5 E-1 milestone. adamant-vm production-binary
+dependency graph contains zero `move-*` crates per the
+§6.2.1.8 resistant-proof posture; build-system independence
+check at `tests/no_sui_in_production_deps.rs`
+mechanically enforces the architectural commitment.
+
+**Adamant-native verifier feature-completeness at Phase
+5/5b closure:**
+
+- **Module-level passes:** 11 Adamant-native passes wired
+  at step 3 of `verify_module` (bounds_checker first
+  per cross-pass-precedence; 10 others alphabetical /
+  cross-pass-pipeline-dependency-driven).
+- **Per-function passes:** 5 Adamant-native passes wired
+  at step 4 (control_flow → stack_usage → locals_safety
+  → type_safety → reference_safety).
+- **Adamant-specific rules:** 6 module-level rules at
+  step 5 (Rules 1, 2, 3 single-module, 4, 6, 7); Rule 5
+  enforced at step 1 (parse-time); Rule 8 architectural-
+  position pin (no step-5 invocation; runtime carries
+  binding).
+- **Cross-module verification:** Rule 3 cross-module
+  walker at `validator/cross_module/`; awaits Phase 5/6
+  AVM runtime stdlib production caller.
+
+### Phase 5/5b cumulative methodology landmarks
+
+**Cross-cutting canonical principles operating beyond
+rule-of-three threshold at Phase 5/5b closure:**
+
+1. **Verbatim-survey-at-plan-gate-prevents-scope-error
+   pattern.** 8 instances at E-7 closure (D-3, D-5b,
+   D-5c, E-2, E-3, E-4, E-5 plan-gates + the §6.2.1.8
+   pre-arc verifications across Phase 5/5b.2 + 5/5b.3).
+   Stable beyond threshold.
+2. **Running-total drift discipline.** 4 instances at
+   E-7 closure (B-6 → C-1/C-2/C-3 propagation; D-3 →
+   D-4-through-D-6 propagation; D-5b.2 → D-7b → E-6
+   propagation; E-1b → E-2-through-E-6 propagation
+   caught at E-7 session-resume). Cross-cutting canonical
+   principle stable across count types, discovery
+   venues, and workstream contexts.
+3. **Spec-text-DIRECTS-shared-helper canonical principle.**
+   5 instances at E-7 closure: 3 cross-pass-distinct
+   (D-5a.1.b TYPE-SAFETY call_signature; D-5b.2 BORROW-
+   GRAPH call; D-5c CALL-GRAPH call_target_handle) + 2
+   cross-scope-reuse (E-2b cross-module Rule 3 walker
+   reuses D-5c's call_target_handle; E-4 Rule 7 walker
+   reuses D-5c's call_target_handle).
+4. **Eager-error first-failure-wins.** 6+ pattern
+   instances across Phase 5/5b.2 + 5/5b.3 + 5/5b.4
+   (cross-pass-precedence, within-pass eager-error,
+   step-3 vs step-5 pipeline ordering).
+5. **Variant-vs-test mapping audit principle.** 66 of
+   66 variants covered at E-7 closure; 3 sub-shapes
+   operating (coverage-baseline-establishment + coverage-
+   retroactive-audit + coverage-deferred-gap-closure) + 2
+   closure shapes (test-addition + variant-removal).
+
+**Pattern-cluster shape across methodology areas (meta-
+observation registered at E-7 stream (53)):**
+methodology framework consistently surfaces empirical
+sub-classifications at scale — helper-extraction (3 sub-
+shapes); spec-text-DIRECTS-shared-helper (2 sub-shapes);
+Adamant-native-constants (2 sub-classifications); Open
+Layer B gaps closure (2 sub-shapes); call-graph walker (2
+sub-classifications); variant-count discipline (4 sub-
+shapes); variant-vs-test mapping audit (3 sub-shapes + 2
+closure shapes); test-placement (2 sub-shapes);
+cumulative-phase-closure (2 shapes); bridge-as-soundness-
+test-infrastructure (opening + closure phases). Pattern-
+cluster shape itself is a stable phenomenon of the
+framework's operation.
+
+**Methodology framework efficiency curve across phases
+(meta-observation registered at E-7 stream (54)):**
+empirical observation across phase boundaries shows
+phase-later sub-arcs surface plan-gates more cleanly
+than phase-earlier sub-arcs. Cost-of-discipline decreases
+as discipline internalizes; framework scales without
+bottlenecking implementation.
+
+### Phase 5/5b architectural decisions on record
+
+**Constitutional commitments crystallized during Phase
+5/5b:**
+
+1. **Resistant-proof posture (§6.2.1.8).** Adamant
+   protocol works fully independently of Sui's codebase
+   at deploy-time and runtime. Production-binary
+   dependency graph contains zero move-* crates;
+   vendored Sui-Move crates exercised exclusively at
+   test time for cross-validation parity. Build-system
+   independence check at `tests/no_sui_in_production_deps.rs`
+   mechanically enforces the architectural commitment.
+2. **Genesis-fixed verifier semantics.** Verifier accept/
+   reject decisions are consensus-binding and cannot
+   drift with upstream Sui. After genesis, all
+   structural limits + gas costs + rule semantics are
+   immutable per §6.2.1.7 and §6.2.1.8.
+3. **Defense-in-depth at runtime via gas-budget bound
+   for loop termination.** Rule 8 architectural-position
+   pin at E-5; runtime gas-budget per §6.2.4 carries the
+   determinism guarantee. Verifier-level no-op per
+   amendment 804d9db.
+4. **Cross-module Rule 3 enforcement via deployment-
+   validator wiring.** Cross-module call graphs
+   statically checked at deploy time against dependency
+   modules' annotations per §6.2.1.6 line 477. The
+   walker lives in adamant-vm; the production caller
+   awaits Phase 5/6 AVM runtime stdlib.
+
+### Phase 5/5b cumulative outstanding items
+
+**Open Layer B gaps at Phase 5/5b closure: 0** (all
+gaps closed; SuiVerifier audit gap retired-via-
+fulfillment at E-1a; BorrowViolationReason 7-of-13 sub-
+reason gap and st_loc_destroys_non_drop Layer B gap
+filled at E-6).
+
+**Future workstream items (Phase 5/5c or Phase 5/6):**
+
+1. AVM runtime stdlib `adamant::module::deploy`
+   implementation (Phase 5/6) — invokes
+   `validator::verify_module` per-module + cross-module
+   Rule 3 walker per the ModuleResolver trait abstraction.
+2. Phase 5/5c plan-gate scope to be determined
+   (cross-validation infrastructure formalization;
+   T0+T1+T2 tier coverage canonical; T3 real-world
+   corpus pre-mainnet hardening).
+3. Pre-mainnet calibration of Adamant-native structural
+   limits in `validator/config.rs` (per §6.2.1.7
+   amendment workstream registered at B-1 / B-3.4 / B-6
+   / E-7).
+4. Bytecode-format genesis-fixed parameters review (gas
+   costs, structural limits) before mainnet.
+
+Phase 5/5b CLOSED. Next phase (5/5c or 5/6) awaits
+direction.
