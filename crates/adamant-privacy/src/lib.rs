@@ -41,10 +41,15 @@
 
 #![forbid(unsafe_code)]
 
+pub mod gnct;
 pub mod note;
 pub mod nullifier;
 pub mod poseidon;
 
+pub use gnct::{
+    verify_membership, GlobalNoteCommitmentTree, MerklePath, MerkleRoot, TreeFull, GNCT_DEPTH,
+    GNCT_MAX_LEAVES, GNCT_RECENT_ROOTS_WINDOW,
+};
 pub use note::{derive_note_commitment, Note, NoteCommitment, NoteMetadata, StealthAddress};
 pub use nullifier::{
     derive_nullifier, derive_nullifier_key, LeafPosition, Nullifier, NullifierKey, SpendingKey,
