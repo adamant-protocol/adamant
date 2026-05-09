@@ -47,6 +47,7 @@ pub mod memo;
 pub mod note;
 pub mod nullifier;
 pub mod poseidon;
+pub mod recursive_proof;
 pub mod shielded_tx;
 pub mod stealth;
 pub mod view_key;
@@ -69,6 +70,10 @@ pub use nullifier::{
     derive_nullifier, derive_nullifier_key, LeafPosition, Nullifier, NullifierKey, SpendingKey,
 };
 pub use poseidon::{poseidon_hash, FieldBytes, POSEIDON_OUTPUT_BYTES};
+pub use recursive_proof::{
+    EpochCommitment, ProofCadence, RecursiveProof, RecursiveProofEnvelope,
+    RecursiveProofPublicInputs, EPOCH_COMMITMENT_BYTES,
+};
 pub use shielded_tx::{BindingSignature, FeeEntry, Halo2Proof, PublicInputs, ShieldedTransaction};
 pub use stealth::{
     derive_shared_scalar, derive_stealth_address, derive_view_tag, recover_stealth_spending_key,
