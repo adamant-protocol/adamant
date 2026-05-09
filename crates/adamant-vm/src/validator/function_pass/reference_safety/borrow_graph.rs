@@ -114,7 +114,9 @@ pub(super) mod paths {
     }
 }
 
-pub(super) use paths::{Path, PathSlice};
+pub(super) use paths::Path;
+#[cfg(test)]
+pub(super) use paths::PathSlice;
 
 // ===========================================================
 // `shared` helper (forked from
@@ -409,7 +411,7 @@ impl<Loc: Copy, Lbl: Clone + Ord> BorrowGraph<Loc, Lbl> {
 
     /// Checks if the given reference is mutable.
     pub(super) fn is_mutable(&self, id: RefID) -> bool {
-        self.0.get(&id).unwrap().mutable
+        self.0.get(&id).expect("borrow-graph invariant: ref_id/edge present by construction (reference-safety abstract interpreter never queries removed refs)").mutable
     }
 
     /// Adds a new reference to the borrow graph.
@@ -436,7 +438,7 @@ impl<Loc: Copy, Lbl: Clone + Ord> BorrowGraph<Loc, Lbl> {
         &self,
         id: RefID,
     ) -> (BTreeMap<RefID, Loc>, BTreeMap<Lbl, BTreeMap<RefID, Loc>>) {
-        let borrowed_by = &self.0.get(&id).unwrap().borrowed_by;
+        let borrowed_by = &self.0.get(&id).expect("borrow-graph invariant: ref_id/edge present by construction (reference-safety abstract interpreter never queries removed refs)").borrowed_by;
         let mut full_borrows: BTreeMap<RefID, Loc> = BTreeMap::new();
         let mut field_borrows: BTreeMap<Lbl, BTreeMap<RefID, Loc>> = BTreeMap::new();
         for (borrower, edges) in &borrowed_by.0 {
@@ -456,7 +458,7 @@ impl<Loc: Copy, Lbl: Clone + Ord> BorrowGraph<Loc, Lbl> {
 
     /// Returns the edges between `parent` and `child`.
     pub(super) fn between_edges(&self, parent: RefID, child: RefID) -> Vec<(Loc, Path<Lbl>, bool)> {
-        let edges = &self.0.get(&parent).unwrap().borrowed_by.0[&child];
+        let edges = &self.0.get(&parent).expect("borrow-graph invariant: ref_id/edge present by construction (reference-safety abstract interpreter never queries removed refs)").borrowed_by.0[&child];
         edges
             .iter()
             .map(|edge| (edge.loc, edge.path.clone(), edge.strong))
@@ -466,7 +468,7 @@ impl<Loc: Copy, Lbl: Clone + Ord> BorrowGraph<Loc, Lbl> {
     /// Returns the outgoing edges from `id`.
     pub(super) fn out_edges(&self, id: RefID) -> Vec<(Loc, Path<Lbl>, bool, RefID)> {
         let mut returned_edges = vec![];
-        let borrowed_by = &self.0.get(&id).unwrap().borrowed_by;
+        let borrowed_by = &self.0.get(&id).expect("borrow-graph invariant: ref_id/edge present by construction (reference-safety abstract interpreter never queries removed refs)").borrowed_by;
         for (borrower, edges) in &borrowed_by.0 {
             let borrower = *borrower;
             for edge in edges {
@@ -479,7 +481,7 @@ impl<Loc: Copy, Lbl: Clone + Ord> BorrowGraph<Loc, Lbl> {
     /// Returns the incoming edges into `id`.
     pub(super) fn in_edges(&self, id: RefID) -> Vec<(Loc, RefID, Path<Lbl>, bool)> {
         let mut returned_edges = vec![];
-        let borrows_from = &self.0.get(&id).unwrap().borrows_from;
+        let borrows_from = &self.0.get(&id).expect("borrow-graph invariant: ref_id/edge present by construction (reference-safety abstract interpreter never queries removed refs)").borrows_from;
         for src in borrows_from {
             for edge in self.between_edges(*src, id) {
                 returned_edges.push((edge.0, *src, edge.1, edge.2));
@@ -530,14 +532,14 @@ impl<Loc: Copy, Lbl: Clone + Ord> BorrowGraph<Loc, Lbl> {
 
     fn add_edge(&mut self, parent_id: RefID, edge: BorrowEdge<Loc, Lbl>, child_id: RefID) {
         assert!(parent_id != child_id);
-        let parent = self.0.get_mut(&parent_id).unwrap();
+        let parent = self.0.get_mut(&parent_id).expect("borrow-graph invariant: ref_id/edge present by construction (reference-safety abstract interpreter never queries removed refs)");
         parent
             .borrowed_by
             .0
             .entry(child_id)
             .or_insert_with(BorrowEdgeSet::new)
             .insert(edge);
-        let child = self.0.get_mut(&child_id).unwrap();
+        let child = self.0.get_mut(&child_id).expect("borrow-graph invariant: ref_id/edge present by construction (reference-safety abstract interpreter never queries removed refs)");
         child.borrows_from.insert(parent_id);
     }
 
@@ -555,7 +557,7 @@ impl<Loc: Copy, Lbl: Clone + Ord> BorrowGraph<Loc, Lbl> {
 
     fn factor(&mut self, parent_id: RefID, loc: Loc, path: Path<Lbl>, intermediate_id: RefID) {
         debug_assert!(self.check_invariant());
-        let parent = self.0.get_mut(&parent_id).unwrap();
+        let parent = self.0.get_mut(&parent_id).expect("borrow-graph invariant: ref_id/edge present by construction (reference-safety abstract interpreter never queries removed refs)");
         let mut needs_factored = vec![];
         for (child_id, parent_to_child_edges) in &parent.borrowed_by.0 {
             for parent_to_child_edge in parent_to_child_edges {
@@ -568,7 +570,7 @@ impl<Loc: Copy, Lbl: Clone + Ord> BorrowGraph<Loc, Lbl> {
 
         let mut cleanup_ids = BTreeSet::new();
         for (child_id, parent_to_child_edge) in &needs_factored {
-            let parent_to_child_edges = parent.borrowed_by.0.get_mut(child_id).unwrap();
+            let parent_to_child_edges = parent.borrowed_by.0.get_mut(child_id).expect("borrow-graph invariant: ref_id/edge present by construction (reference-safety abstract interpreter never queries removed refs)");
             assert!(parent_to_child_edges.remove(parent_to_child_edge));
             if parent_to_child_edges.is_empty() {
                 assert!(parent.borrowed_by.0.remove(child_id).is_some());
@@ -580,7 +582,7 @@ impl<Loc: Copy, Lbl: Clone + Ord> BorrowGraph<Loc, Lbl> {
             assert!(self
                 .0
                 .get_mut(child_id)
-                .unwrap()
+                .expect("borrow-graph invariant: ref_id/edge present by construction (reference-safety abstract interpreter never queries removed refs)")
                 .borrows_from
                 .remove(&parent_id));
         }
@@ -620,11 +622,11 @@ impl<Loc: Copy, Lbl: Clone + Ord> BorrowGraph<Loc, Lbl> {
             borrowed_by,
             borrows_from,
             ..
-        } = self.0.remove(&id).unwrap();
+        } = self.0.remove(&id).expect("borrow-graph invariant: ref_id/edge present by construction (reference-safety abstract interpreter never queries removed refs)");
         let mut released_edges = 0;
         for parent_ref_id in borrows_from {
-            let parent = self.0.get_mut(&parent_ref_id).unwrap();
-            let parent_edges = parent.borrowed_by.0.remove(&id).unwrap();
+            let parent = self.0.get_mut(&parent_ref_id).expect("borrow-graph invariant: ref_id/edge present by construction (reference-safety abstract interpreter never queries removed refs)");
+            let parent_edges = parent.borrowed_by.0.remove(&id).expect("borrow-graph invariant: ref_id/edge present by construction (reference-safety abstract interpreter never queries removed refs)");
             for parent_edge in parent_edges {
                 for (child_ref_id, child_edges) in &borrowed_by.0 {
                     for child_edge in child_edges {
@@ -640,7 +642,7 @@ impl<Loc: Copy, Lbl: Clone + Ord> BorrowGraph<Loc, Lbl> {
             }
         }
         for child_ref_id in borrowed_by.0.keys() {
-            let child = self.0.get_mut(child_ref_id).unwrap();
+            let child = self.0.get_mut(child_ref_id).expect("borrow-graph invariant: ref_id/edge present by construction (reference-safety abstract interpreter never queries removed refs)");
             child.borrows_from.remove(&id);
         }
         debug_assert!(self.check_invariant());
@@ -813,8 +815,17 @@ impl<Loc: Copy, Lbl: Clone + Ord> BorrowGraph<Loc, Lbl> {
         self.0.keys().copied().collect()
     }
 
-    /// Prints a textual view of the borrow graph (debugging).
-    #[allow(dead_code)]
+    /// Prints a textual view of the borrow graph for debugging
+    /// borrow-graph behaviour from inside test fixtures.
+    ///
+    /// Gated under `#[cfg(test)]` so the `println!` calls do not
+    /// ship in production builds — production paths must not write
+    /// to stdout per CLAUDE.md §8 (audit-pass discipline finding).
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only debugging helper; reserved for future use"
+    )]
     pub(super) fn display(&self)
     where
         Lbl: std::fmt::Display,

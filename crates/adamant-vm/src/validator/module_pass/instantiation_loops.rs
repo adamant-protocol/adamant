@@ -310,7 +310,9 @@ impl<'a> Checker<'a> {
                 .collect();
             if edges.iter().any(|edge_idx| {
                 matches!(
-                    self.graph.edge_weight(*edge_idx).unwrap(),
+                    self.graph.edge_weight(*edge_idx).expect(
+                        "petgraph invariant: edge index obtained from graph traversal is valid"
+                    ),
                     Edge::TyConApp(_)
                 )
             }) {
@@ -321,15 +323,25 @@ impl<'a> Checker<'a> {
     }
 
     fn format_node(&self, node_idx: NodeIndex) -> String {
-        let Node(def_idx, param_idx) = self.graph.node_weight(node_idx).unwrap();
+        let Node(def_idx, param_idx) = self
+            .graph
+            .node_weight(node_idx)
+            .expect("petgraph invariant: NodeIndex obtained from graph traversal is valid");
         format!("f{def_idx}#{param_idx}")
     }
 
     fn format_edge(&self, edge_idx: EdgeIndex) -> String {
-        let (n1, n2) = self.graph.edge_endpoints(edge_idx).unwrap();
+        let (n1, n2) = self
+            .graph
+            .edge_endpoints(edge_idx)
+            .expect("petgraph invariant: EdgeIndex obtained from graph traversal is valid");
         let s1 = self.format_node(n1);
         let s2 = self.format_node(n2);
-        match self.graph.edge_weight(edge_idx).unwrap() {
+        match self
+            .graph
+            .edge_weight(edge_idx)
+            .expect("petgraph invariant: EdgeIndex just resolved via edge_endpoints is valid")
+        {
             Edge::TyConApp(ty) => format!("{s1} --{ty:?}--> {s2}"),
             Edge::Identity => format!("{s1} ----> {s2}"),
         }
@@ -339,7 +351,12 @@ impl<'a> Checker<'a> {
         let msg_edges = edges
             .into_iter()
             .filter_map(|edge_idx| {
-                if matches!(self.graph.edge_weight(edge_idx).unwrap(), Edge::TyConApp(_)) {
+                if matches!(
+                    self.graph.edge_weight(edge_idx).expect(
+                        "petgraph invariant: EdgeIndex obtained from graph traversal is valid"
+                    ),
+                    Edge::TyConApp(_)
+                ) {
                     Some(self.format_edge(edge_idx))
                 } else {
                     None
