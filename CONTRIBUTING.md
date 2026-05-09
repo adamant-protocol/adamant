@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Twenty-three confirmed instances during
+sources before proceeding. Twenty-four confirmed instances during
 Phases 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -796,6 +796,49 @@ Phases 1, 2, 4, and 5:
   removes (commits 80ccd46 + 22b5a8a + this CONTRIBUTING.md
   instance entry; implementation cascade follows in a subsequent
   commit batch).
+- **§7 encryption-posture commitment** (whitepaper 7.0) —
+  Phase 5/6.2 §6.2.1.9 amendment surfaced this as a load-
+  bearing carry-forward (instance 22's "§7 carry-forward
+  (load-bearing)" closing paragraph). §6.2.1.9's shielded-
+  value-equality runtime semantics — `Bytecode::Eq` on two
+  shielded values compares ciphertext bytes verbatim — only
+  delivers the privacy property "ciphertext equality reveals
+  nothing about plaintext equality" if the encryption
+  schemes are probabilistic. The §6.2.1.9 amendment named
+  the probabilistic schemes in use under §7 by their cross-
+  references (Poseidon-with-randomness in §7.1; ML-KEM-768
+  in §7.2; ChaCha20-Poly1305 in §7.6) but §7 itself did not
+  pin "all shielded encryption is probabilistic" as a
+  protocol-level commitment, leaving §7.3.1 (encrypted note
+  delivery), §7.6.1 (memo nonce derivation), and §7.8.1
+  (shielded object contents) admissible to deterministic
+  schemes that would silently break the §6.2.1.9 privacy
+  property. Resolved by spec amendment adding §7.0
+  ("Encryption posture") as a new top-level subsection
+  inserted immediately after §7's introduction, mirroring
+  §6.0's framing-material role at the top of §6. The
+  amendment pins the universal probabilistic-only posture,
+  enumerates the five on-chain shielded-encryption sites
+  with their per-site specification status (two fully
+  specified per existing spec text, one partially specified,
+  two unspecified), pre-binds the three open surfaces to a
+  probabilistic shape for any subsequent specification work,
+  carves out the prover-market witness-encryption surface
+  as out-of-protocol, and explicitly forbids deterministic
+  schemes (AES-ECB, AES-SIV with deterministic IV, Poseidon-
+  as-encryption without per-input randomness) for any on-
+  chain shielded-encryption surface. The posture pin is at
+  the privacy-property level, not the cryptographic-strength
+  level: an implementation that substitutes a deterministic-
+  but-cryptographically-strong scheme is non-conforming
+  regardless of strength. Methodologically, this is the 2nd
+  canonical instance of spec-vs-spec-inconsistency-resolved-
+  via-amendment (1st was instance 23's ML-DSA-87 restriction;
+  rule-of-three pending). Three carry-forwards registered at
+  this amendment for subsequent §7 substantive work: §7.3.1
+  EncryptedNote scheme specification; §7.6.1 nonce derivation;
+  §7.8.1 shielded-object encryption scheme. Each is bound by
+  the §7.0 posture in advance.
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
