@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Twenty-five confirmed instances during
+sources before proceeding. Twenty-six confirmed instances during
 Phases 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -900,6 +900,37 @@ Phases 1, 2, 4, and 5:
   blocked on §7.4.2 reconciliation + adamant-crypto-blst-extra
   hash-to-scalar helper expansion; 5/6.4.b ReleaseSubViewKey
   sub-arc deferred until §7.4.2 reconciliation ratifies.
+- **§7.4.2 Path 1 deterministic ML-KEM sub-view-key
+  construction** (whitepaper 7.4.2) — Closes the instance-25
+  gap-acknowledgment with the full Path 1 cryptographic
+  construction per the locked plan-gate disposition. Three
+  reconciliation paths surfaced at instance 25 (deterministic
+  ML-KEM derivation; ChaCha20-Poly1305 wrap of parent seed;
+  post-decapsulation viewing-filter); Path 1 chosen for: (a)
+  cleanest cryptographic shape — sub-view-key is a first-
+  class ML-KEM keypair with bounded scope; (b) matches §7.4.1's
+  "key" framing semantically; (c) reuses HKDF-SHA3 already in
+  protocol per §7.2.5; (d) scope-restriction enforced
+  cryptographically (stronger than wallet-only Path 3); (e)
+  smaller cryptographic surface than Path 2; (f) deterministic
+  derivation — no per-derivation entropy; (g) matches Zcash/
+  Penumbra precedent for hierarchical viewing keys. Construction:
+  `sub_seed_S = HKDF-SHA3(salt = b"ADAMANT-v1-subview-derive",
+  ikm = sk_v_kem_seed, info = BCS(S), L = 64)` then
+  `(sub_sk_v_kem_S, sub_pk_v_kem_S) = ML-KEM-768.KeyGen(
+  sub_seed_S)`. Properties: one-way derivation (HKDF preimage
+  resistance); scope-bound decapsulation (notes outside scope
+  produce FIPS 203 implicit-rejection nonsense); determinism.
+  Spec-vs-spec-inconsistency-resolved-via-amendment 4th
+  canonical instance (instances 23 + 24 + 25 + 26 — pattern
+  operating well beyond rule-of-three threshold). Amendment-
+  mechanical-shape 5th distinct sub-shape: gap-acknowledgment-
+  replaced-with-full-construction (different from prior 4:
+  append, distributed multi-line, prepend, in-place residual
+  replacement). Carry-forward eliminated: §7.4.2 reconciliation
+  closes; ReleaseSubViewKey real implementation now blocked
+  only on adamant-crypto HKDF-SHA3 helper + ML-KEM KeyGen-from-
+  seed exposure (5/6.4.b sub-arc).
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
