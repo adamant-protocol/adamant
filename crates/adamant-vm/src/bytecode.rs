@@ -83,7 +83,7 @@ pub enum AdamantBytecode {
     /// Produce a sub-view-key per whitepaper §4.4.2 and §7.
     ReleaseSubViewKey,
     /// Produce a KZG commitment over a vector of field elements
-    /// per whitepaper §3.7.2. Pops the vector; pushes a 48-byte
+    /// per whitepaper §3.9.2. Pops the vector; pushes a 48-byte
     /// commitment.
     KzgCommit,
     /// Verify a KZG opening proof. Pops the commitment, the
