@@ -81,6 +81,7 @@ pub mod frame;
 pub mod gas;
 pub mod interpreter;
 pub mod module_helpers;
+pub mod module_resolver_adapter;
 pub mod runtime_value;
 pub mod state_buffer;
 pub mod state_mutator;
@@ -97,6 +98,7 @@ pub use executor::{commit_buffer, load_read_set};
 pub use frame::{Frame, PrivacyMode};
 pub use gas::GasTracker;
 pub use interpreter::{DispatchOutcome, InterpreterState};
+pub use module_resolver_adapter::{LoadedModulesResolver, MalformedSelfHandle};
 pub use runtime_value::{
     compare_unsigned, Container, Reference, RuntimeStructValue, RuntimeValue, RuntimeVariantValue,
 };
