@@ -206,8 +206,12 @@ pub fn dispatch_instruction(
 ///   (§3.4.2), `BlsVerify` (§3.4.3)
 ///
 /// Deferred to alongside their respective adamant-crypto extensions:
-/// - `MlDsaVerify87` — pending adamant-crypto ML-DSA-87 wrapper
 /// - `KzgCommit`, `KzgVerify` — pending adamant-crypto KZG impl
+///
+/// Note: `MlDsaVerify87` was removed from `AdamantBytecode` by
+/// whitepaper §6.2 amendment (commits 80ccd46 + 22b5a8a + 63cbf5c)
+/// restricting the post-quantum signature scheme to ML-DSA-65 per
+/// §3.4.2's "Level 3 is the appropriate balance" commitment.
 ///
 /// Deferred to 5/6.4 (privacy-circuit scaffold):
 /// - `GenerateProof`, `VerifyProof`, `RecursiveVerify`,
@@ -252,8 +256,7 @@ fn dispatch_adamant(
         AB::BlsVerify => dispatch_bls_verify(state),
 
         // ---------- Deferred handlers ----------
-        AB::MlDsaVerify87
-        | AB::KzgCommit
+        AB::KzgCommit
         | AB::KzgVerify
         | AB::GenerateProof(_)
         | AB::VerifyProof(_)

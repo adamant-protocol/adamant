@@ -769,7 +769,6 @@ fn execute_adamant_instr(
         AdamantBytecode::KzgVerify
         | AdamantBytecode::Ed25519Verify
         | AdamantBytecode::MlDsaVerify65
-        | AdamantBytecode::MlDsaVerify87
         | AdamantBytecode::BlsVerify => {
             for _ in 0..3 {
                 let popped = verifier.pop();

@@ -80,9 +80,9 @@
 //!   consistent with §6.2.1.4's explicit pins where present
 //!   (`Sha3_256` / `Blake3` pop `vector<u8>` per lines 416-417;
 //!   `KzgVerify` push `bool` per line 414; `Ed25519Verify` /
-//!   `MlDsaVerify65` / `MlDsaVerify87` / `BlsVerify` push
-//!   `bool` per lines 418-420; `ChargeGas` pop `u64` per line
-//!   421; `RemainingGas` push `u64` per line 422). Notation-
+//!   `MlDsaVerify65` / `BlsVerify` push `bool` per lines 418-420;
+//!   `ChargeGas` pop `u64` per line 421; `RemainingGas` push
+//!   `u64` per line 422). Notation-
 //!   precision
 //!   footnote: §6.2.1.4 lines 416-417's `[u8; 32]` is Rust
 //!   syntax; the bytecode-Move-type for hash outputs is
@@ -1021,12 +1021,12 @@ fn verify_inherited_instr(
 /// Per-instruction transfer for Adamant extensions per
 /// §6.2.1.4 lines 408-423.
 ///
-/// **Category A (12 — static type rules per Sui-Move
+/// **Category A (11 — static type rules per Sui-Move
 /// convention).** Hardcoded per-extension type rules:
 /// `Sha3_256` / `Blake3` / `KzgCommit` / `ReleaseSubViewKey`
 /// pop `vector<u8>` and push `vector<u8>`; `KzgVerify` /
-/// `Ed25519Verify` / `MlDsaVerify65` / `MlDsaVerify87` /
-/// `BlsVerify` pop `vector<u8>` × 3 and push `bool`;
+/// `Ed25519Verify` / `MlDsaVerify65` / `BlsVerify` pop
+/// `vector<u8>` × 3 and push `bool`;
 /// `ChargeGas` pops `u64`; `RemainingGas` pushes `u64`;
 /// `OutOfGas` has no stack effect.
 ///
@@ -1095,7 +1095,6 @@ fn verify_adamant_instr(
         AdamantBytecode::KzgVerify
         | AdamantBytecode::Ed25519Verify
         | AdamantBytecode::MlDsaVerify65
-        | AdamantBytecode::MlDsaVerify87
         | AdamantBytecode::BlsVerify => {
             // Three vector<u8> operands; spec orders pops:
             // sig (top), msg, pk (bottom) — but for type-
@@ -2376,25 +2375,6 @@ mod tests {
             ],
         );
         run(&m).expect("MlDsaVerify65 happy path");
-    }
-
-    /// `MlDsaVerify87` happy path.
-    #[test]
-    fn ml_dsa_verify87_happy_path() {
-        let m = module_with_function(
-            vec![SignatureToken::Vector(Box::new(SignatureToken::U8))],
-            vec![],
-            vec![],
-            vec![
-                cp_loc(0),
-                cp_loc(0),
-                cp_loc(0),
-                extension(AdamantBytecode::MlDsaVerify87),
-                pop(),
-                ret(),
-            ],
-        );
-        run(&m).expect("MlDsaVerify87 happy path");
     }
 
     /// `BlsVerify` happy path.

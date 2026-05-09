@@ -3751,14 +3751,15 @@ mod tests {
             AdamantBytecode::Blake3,
             AdamantBytecode::Ed25519Verify,
             AdamantBytecode::MlDsaVerify65,
-            AdamantBytecode::MlDsaVerify87,
             AdamantBytecode::BlsVerify,
             AdamantBytecode::ChargeGas(GasDimension::Computation),
             AdamantBytecode::RemainingGas(GasDimension::Storage),
             AdamantBytecode::OutOfGas,
         ];
-        // Sanity: 17 entries matches §6.2.1.4's extension count.
-        assert_eq!(extensions.len(), 17);
+        // Sanity: 16 entries matches §6.2.1.4's extension count
+        // post-amendment (commits 80ccd46 + 22b5a8a + 63cbf5c
+        // restricted to ML-DSA-65, removing MlDsaVerify87).
+        assert_eq!(extensions.len(), 16);
 
         for ext in extensions {
             let module = module_with_extension(ext.clone());

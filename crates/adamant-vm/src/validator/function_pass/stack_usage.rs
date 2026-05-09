@@ -29,14 +29,14 @@
 //! plan-gate (10th verification gate, fired in corrective mode)
 //! partitioned them into four categories:
 //!
-//! - **Category A (static `(pop, push)` constants — 12):**
+//! - **Category A (static `(pop, push)` constants — 11):**
 //!   `ReleaseSubViewKey` (1,1), `KzgCommit` (1,1), `KzgVerify`
 //!   (3,1), `Sha3_256` (1,1), `Blake3` (1,1), `Ed25519Verify`
-//!   (3,1), `MlDsaVerify65` (3,1), `MlDsaVerify87` (3,1),
-//!   `BlsVerify` (3,1), `ChargeGas` (1,0), `RemainingGas`
-//!   (0,1), `OutOfGas` (0,0). Hard-coded match arms verbatim
-//!   from §6.2.1.4. (`OutOfGas` aborts the transaction at
-//!   runtime per spec line 423; verifier-treatment is `(0, 0)`
+//!   (3,1), `MlDsaVerify65` (3,1), `BlsVerify` (3,1),
+//!   `ChargeGas` (1,0), `RemainingGas` (0,1), `OutOfGas` (0,0).
+//!   Hard-coded match arms verbatim from §6.2.1.4. (`OutOfGas`
+//!   aborts the transaction at runtime per spec line 423;
+//!   verifier-treatment is `(0, 0)`
 //!   while runtime carries the abort binding.)
 //! - **Category B (parametric in `FunctionHandle` — 2):**
 //!   `InvokeShielded(FH)`, `InvokeTransparent(FH)`. Resolves
@@ -447,7 +447,6 @@ impl<'a> StackUsageVerifier<'a> {
             AdamantBytecode::Blake3 => (1, 1),
             AdamantBytecode::Ed25519Verify => (3, 1),
             AdamantBytecode::MlDsaVerify65 => (3, 1),
-            AdamantBytecode::MlDsaVerify87 => (3, 1),
             AdamantBytecode::BlsVerify => (3, 1),
             AdamantBytecode::ChargeGas(_) => (1, 0),
             AdamantBytecode::RemainingGas(_) => (0, 1),
@@ -799,23 +798,6 @@ mod tests {
                 ld_u64(0),
                 ld_u64(0),
                 extension(AdamantBytecode::MlDsaVerify65),
-                pop(),
-                ret(),
-            ],
-        );
-        run(&m, &AdamantStructuralLimits::genesis()).expect("balance OK");
-    }
-
-    #[test]
-    fn ml_dsa_verify_87_pops_three_pushes_one() {
-        let m = module_with_body(
-            0,
-            0,
-            vec![
-                ld_u64(0),
-                ld_u64(0),
-                ld_u64(0),
-                extension(AdamantBytecode::MlDsaVerify87),
                 pop(),
                 ret(),
             ],

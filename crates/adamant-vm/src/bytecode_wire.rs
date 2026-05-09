@@ -723,7 +723,6 @@ fn serialize_adamant(ext: &AdamantBytecode, out: &mut Vec<u8>) -> Result<(), Ser
         | AdamantBytecode::Blake3
         | AdamantBytecode::Ed25519Verify
         | AdamantBytecode::MlDsaVerify65
-        | AdamantBytecode::MlDsaVerify87
         | AdamantBytecode::BlsVerify
         | AdamantBytecode::OutOfGas => {
             // Zero-operand extensions: nothing more to write.
@@ -800,7 +799,6 @@ fn deserialize_instruction(
             AdamantOpcodeKind::Blake3 => AdamantBytecode::Blake3,
             AdamantOpcodeKind::Ed25519Verify => AdamantBytecode::Ed25519Verify,
             AdamantOpcodeKind::MlDsaVerify65 => AdamantBytecode::MlDsaVerify65,
-            AdamantOpcodeKind::MlDsaVerify87 => AdamantBytecode::MlDsaVerify87,
             AdamantOpcodeKind::BlsVerify => AdamantBytecode::BlsVerify,
             AdamantOpcodeKind::ChargeGas => {
                 AdamantBytecode::ChargeGas(gas_dimension_from_byte(read_u8(cursor)?, byte)?)
@@ -1351,7 +1349,6 @@ mod tests {
         rt_adamant(AdamantBytecode::Blake3);
         rt_adamant(AdamantBytecode::Ed25519Verify);
         rt_adamant(AdamantBytecode::MlDsaVerify65);
-        rt_adamant(AdamantBytecode::MlDsaVerify87);
         rt_adamant(AdamantBytecode::BlsVerify);
         rt_adamant(AdamantBytecode::OutOfGas);
     }
@@ -1425,13 +1422,14 @@ mod tests {
 
     #[test]
     fn deserialize_invalid_operand_gas_dimension() {
-        // ChargeGas (0x8E) followed by 0x06 (out of GasDimension's
-        // 0x00..=0x05 range).
+        // ChargeGas (0x8D after the §6.2 ML-DSA-87-restriction
+        // amendment renumbered the opcode bytes) followed by 0x06
+        // (out of GasDimension's 0x00..=0x05 range).
         let bytes = vec![0x01, AdamantOpcodeKind::ChargeGas.opcode_byte(), 0x06];
         let result = deserialize_function_body(&bytes, &DeserializeConfig::lenient());
         assert!(matches!(
             result,
-            Err(DeserializeError::InvalidOperand { opcode: 0x8E, .. })
+            Err(DeserializeError::InvalidOperand { opcode: 0x8D, .. })
         ));
     }
 
@@ -1544,7 +1542,6 @@ mod tests {
             Just(AdamantBytecode::Blake3),
             Just(AdamantBytecode::Ed25519Verify),
             Just(AdamantBytecode::MlDsaVerify65),
-            Just(AdamantBytecode::MlDsaVerify87),
             Just(AdamantBytecode::BlsVerify),
             dim.clone().prop_map(AdamantBytecode::ChargeGas),
             dim.prop_map(AdamantBytecode::RemainingGas),

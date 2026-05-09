@@ -630,16 +630,6 @@ fn deferred_kzg_commit_surfaces_invalid_instruction() {
     assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
 }
 
-/// MlDsaVerify87 deferred (adamant-crypto exposes only ML-DSA-65
-/// at present per the Phase 5/5 cryptographic foundation).
-#[test]
-fn deferred_ml_dsa_87_surfaces_invalid_instruction() {
-    let module = empty_module();
-    let mut state = state_with_transparent_frame(0);
-    let result = dispatch_adamant(&mut state, AdamantBytecode::MlDsaVerify87, &module);
-    assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
-}
-
 /// Privacy-circuit handlers (sample: GenerateProof) deferred to
 /// 5/6.4.
 #[test]

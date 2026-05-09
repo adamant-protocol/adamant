@@ -1215,11 +1215,10 @@ fn check_inherited_bytecode(
 ///   variant tag (single byte, range 0x00–0x05 per §6.2.1.5
 ///   line 445). Deserializer rejects out-of-range values at
 ///   parse time. C-1.4b passes through.
-/// - **Zero-operand (11 of 17):** `ReleaseSubViewKey`,
+/// - **Zero-operand (10 of 16):** `ReleaseSubViewKey`,
 ///   `KzgCommit`, `KzgVerify`, `RecursiveVerify`, `Sha3_256`,
-///   `Blake3`, `Ed25519Verify`, `MlDsaVerify65`,
-///   `MlDsaVerify87`, `BlsVerify`, `OutOfGas` — no operand.
-///   No bounds-check needed.
+///   `Blake3`, `Ed25519Verify`, `MlDsaVerify65`, `BlsVerify`,
+///   `OutOfGas` — no operand. No bounds-check needed.
 ///
 /// **Adamant-extension treatment in module-level passes (NEW
 /// methodology pattern; first instance):** extensions are
@@ -1270,7 +1269,6 @@ fn check_adamant_bytecode(
         | AdamantBytecode::Blake3
         | AdamantBytecode::Ed25519Verify
         | AdamantBytecode::MlDsaVerify65
-        | AdamantBytecode::MlDsaVerify87
         | AdamantBytecode::BlsVerify
         | AdamantBytecode::OutOfGas => Ok(()),
     }
