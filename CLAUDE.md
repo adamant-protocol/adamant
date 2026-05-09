@@ -361,3 +361,239 @@ The resistant-proof commitment, captured in whitepaper §6.2.1 and §6.2.1.8 (am
 - **The carve-out for test/CI/build-tooling.** Test-only, build-tooling-only, and CI-only dependencies on vendored Sui-Move are explicitly permitted by the spec. What is precluded is Sui-Move logic executing during deploy-time module verification or runtime VM execution. The distinction is mechanical: any crate that appears in the production-binary target's dependency graph is precluded; crates that appear only in `dev-dependencies` or behind test-only feature gates are permitted.
 
 - **Spec-level commitment, not just implementation choice.** The resistant-proof posture is a protocol-level requirement (whitepaper §6.2.1.8). Future implementations of Adamant — different language, different team — must honour it; an implementation that loads Sui-Move at deploy-time or runtime is non-conforming, regardless of whether it reaches the same accept/reject decisions on individual modules.
+
+---
+
+## Section 14: Adamant-native posture (project-wide)
+
+The resistant-proof posture in §13 was originally Sui-Move-specific. As of whitepaper §3.9.2 amendment (commit `9c36c8f`, spec-first verification 30th instance), the same discipline extends **project-wide to all external code**. This section is the canonical record of the discipline; the §11 bullet is supplementary emphasis. When in doubt about a new dependency or external integration, this is the authoritative reference.
+
+The discipline at a single sentence:
+
+> **Adamant-native by default; deliberate exception only after explicit spec-author ratification.**
+
+The reasoning is the same as §13's: a privacy-default L1 with no foundation, no admin keys, no premine, no upgrade authority after genesis cannot rely on external networks, protocols, or project codebases that may shut down, change governance, introduce incompatible upgrades, or be compromised. Independence is part of the value proposition, and independence has to be enforced at the dependency-graph level, not just declared.
+
+### 14.1 The five-category framework
+
+Every dependency or integration falls into exactly one of five categories. The category determines whether the dependency is acceptable and on what terms.
+
+#### Category A — Adamant-native (REQUIRED; protocol-defining)
+
+Application logic and protocol-defining code. External dependency is unacceptable. The protocol's behaviour at consensus must be defined in code Adamant authors and audits.
+
+In scope:
+
+- §5 Object model + state (`adamant-state` crate)
+- §6 Execution + virtual machine (`adamant-vm` crate)
+- §6.0 Transaction format (`adamant-types` crate)
+- §6.2.1 Bytecode format (`adamant-bytecode-format` crate; Phase 5/5b.1a/b fork from Sui-Move)
+- §6.3 AVM runtime (`adamant-vm/src/runtime/`)
+- §7 Privacy layer (`adamant-privacy`; Phase 6)
+- §8 Consensus (DAG-BFT; Phase 7+)
+- §9 Networking + service nodes (Phase 7+)
+- §10–11 Genesis + tokenomics (pre-mainnet)
+
+Decision rule: **if it defines protocol behaviour, it ships as Adamant-native code.**
+
+#### Category B — Bounded ecosystem (PRAGMATIC; locked at current state)
+
+Cryptographic primitives where reimplementation is audit-net-negative. Standardised algorithms (FIPS, RFC, IETF specs) with battle-tested implementations from a small set of well-audited upstream maintainers. The set is **locked**; no new external integrations beyond the enumerated list are added without explicit spec-author ratification.
+
+Locked set (workspace `Cargo.toml` `=` exact pin discipline):
+
+- **§3.3 Hashing.** `sha3 =0.10.9` + `blake3 =1.8.5` + `hmac =0.12.1` + `hkdf =0.12.4`
+- **§3.4.1 Classical signatures.** `ed25519-dalek =2.2.0`
+- **§3.4.2 Post-quantum signatures.** `ml-dsa =0.1.0-rc.9`
+- **§3.7 Post-quantum KEM.** `ml-kem =0.3.0` + `rand_core_0_10 =0.10.1` (alias for the rand_core 0.10 trait surface)
+- **§3.4.3 + §3.6 BLS12-381.** `blst =0.3.16` (via `adamant-crypto-blst-extra` unsafe-permitting wrapper; the workspace's only `unsafe`-permitting crate)
+- **§3.5 Symmetric AEAD.** `chacha20poly1305 =0.10.1`
+- **§5.1.8 Canonical serialization.** `bcs =0.1.6` + `serde =1.0.228` + `serde-big-array =0.5.1`
+- **Memory hygiene.** `zeroize =1.8.2` + `subtle =2.6.1`
+- **RNG trait surface.** `rand_core 0.6` (workspace default for ed25519-dalek's 2.2 trait generation)
+
+Decision rule: **if it's a standardised cryptographic primitive (FIPS / RFC / IETF spec) that's mathematically fixed, the locked bounded ecosystem is acceptable. Adding a new cryptographic primitive requires spec-author ratification + locked-set update.**
+
+#### Category C — Adamant-native layered on Category B (REQUIRED; bridge layer)
+
+Anything that combines primitives into protocol-specific operations. This is where external integrations would otherwise creep in — protocol-specific cryptographic constructions, threshold schemes, commitment-and-proof schemes built on standard primitives. These are Adamant-authored.
+
+In scope:
+
+- **§3.3.1 BIP-340 tagged-hash construction.** Adamant-native; spec-first verification 1st instance (commit `62bfe89`).
+- **§3.6 Threshold encryption.** Adamant-native; in `adamant-crypto::threshold`.
+- **§3.9.2 KZG.** Adamant-native on `adamant-crypto-blst-extra`'s BLS12-381 primitives; spec-first verification 30th instance (commit `9c36c8f`); implementation pending dedicated session.
+- **§3.7.1 + §8.5 Halo 2 + recursive verification.** Posture pending at Phase 6 plan-gate (see §14.4 Decision 1 below). `halo2_gadgets 0.3` currently in workspace.
+- **§3.8 + §8.x Time-lock VDF.** Adamant-native required; Phase 7+.
+- **§7 Privacy operations.** Adamant-native dispatch wrapping circuit operations; Phase 6.
+
+Decision rule: **if it bridges Category B primitives into protocol-specific operations, it ships as Adamant-native code (Category C). Reaching for an external bridge library is the wrong move.**
+
+#### Category D — Test-time only (already excluded from production)
+
+Per §13's resistant-proof posture, the workspace permits test-only / dev-only / CI-only dependencies that do not appear in the production binary's dependency graph. The mechanical enforcement is `tests/no_sui_in_production_deps.rs` (Phase 5/5b.5), which walks the resolved dependency tree via `cargo metadata` and fails CI if any `move-*` crate appears in the production target. The same mechanical posture applies to any future test-only dependency.
+
+In scope (production binary excludes):
+
+- 13 vendored Sui-Move crates (`move-*` under `/vendor/`) for cross-validation parity testing only.
+- Test infrastructure: `proptest`, `insta`, `hex`, `hex-literal`, `datatest-stable`, `arbitrary`.
+
+Decision rule: **test-only dependencies are acceptable provided they appear only in `[dev-dependencies]` or behind test-only feature gates and never appear in the production target's dependency graph. New test-only dependencies must satisfy this mechanical check.**
+
+#### Category E — Workspace utilities (bounded-ecosystem; infrastructure tier)
+
+Production-side, non-consensus, ergonomic infrastructure. These are not cryptographic primitives and not protocol-defining; they are general-purpose Rust infrastructure that's mature, well-audited, and where reimplementation would be net-negative without strengthening the protocol.
+
+Locked set:
+
+- `petgraph 0.8.1` (graph algorithms; promoted to production at Phase 5/5b.2 for CFG / borrow-graph work).
+- `ethnum 1.0.4` (U256 helper; consensus-adjacent — pre-mainnet revisit candidate).
+- `getrandom 0.2.9` (RNG entropy abstraction; CSPRNG plumbing).
+- `thiserror 1.0.24` (error type derivation; macro-only).
+
+Decision rule: **infrastructure-tier crates are acceptable when they are mature, non-consensus, and where reimplementation is audit-net-negative. Consensus-adjacent crates (e.g., `ethnum` for U256) are pre-mainnet revisit candidates: confirm at hardening time whether reimplementation is warranted.**
+
+### 14.2 The discipline — single-rule decision tree
+
+When evaluating any new dependency or integration, walk the following five-step test in order:
+
+1. **Is it a standardised cryptographic primitive (FIPS / RFC / IETF spec) that's mathematically fixed?**
+   → Bounded ecosystem (Category B) is acceptable, *if* it's already in the locked set or warrants spec-author ratification to add.
+
+2. **Does it define protocol behaviour?**
+   → Adamant-native required (Category A).
+
+3. **Does it bridge Category B primitives into protocol-specific operations?**
+   → Adamant-native layered on bounded ecosystem (Category C).
+
+4. **Is it test-time only?**
+   → Acceptable per current discipline (Category D), provided it never appears in the production dependency graph.
+
+5. **None of the above?**
+   → Excluded per Adamant-native posture.
+
+The forking-over-vendoring sub-discipline applies when upstream code is required: rather than adding a runtime dependency, the upstream code is forked into an Adamant-owned crate with a `PROVENANCE.md` documenting the fork (Phase 5/5b.1a/b precedent). Forking gives Adamant the production-binary-graph control the resistant-proof posture demands while still benefiting from upstream code quality and audit history.
+
+### 14.3 Forking-over-vendoring discipline
+
+When functionality requires upstream code that doesn't fit cleanly into Categories B or D — typically because the upstream code defines protocol-binding behaviour or is too entangled with protocol semantics to be a pure cryptographic primitive — the discipline is to **fork**, not depend.
+
+Precedent: Phase 5/5b.1a/b forked Sui-Move's bytecode-format types (constants, readers, AbilitySet, Identifier, the 25 reused parallel-struct neighbour types, SignatureToken, Bytecode enum, CodeUnit, FunctionDefinition, U256, Metadata, AddressIdentifierPool) into the new `adamant-bytecode-format` crate. Each fork is documented in the destination crate's `PROVENANCE.md`: source commit, scope of fork, deviations from upstream, refresh cadence (test-time only after fork).
+
+Mechanical posture:
+
+- Fork lands in an Adamant-owned crate under `crates/`.
+- `PROVENANCE.md` documents source provenance + audit posture + refresh policy.
+- Production binary depends only on the Adamant-owned fork; upstream version (if any) appears only as test-time cross-validation oracle (Category D) or not at all.
+- Upstream changes affect Adamant only as development-time signals (refresh-and-review work item), never as consensus events.
+
+### 14.4 Pending posture decisions
+
+Two posture decisions deserve spec-author deliberation. They are registered here as canonical record of the open questions; the answers land at the appropriate plan-gate.
+
+#### Decision 1 — Halo 2 / `halo2_gadgets` at Phase 6 plan-gate
+
+`halo2_gadgets 0.3` (Zcash / Electric Coin Company ecosystem) is currently in the workspace `[workspace.dependencies]` but not yet pulled into any production-side crate. The Phase 6 privacy-layer workstream (§7 + §3.7.1 + §8.5) will activate the Halo 2 surface for shielded-execution circuits + recursive proof composition.
+
+Three options at Phase 6 plan-gate:
+
+- **Path C1 — Adamant-native Halo 2 implementation.** Tens of thousands of LOC; substantial pre-mainnet investment. Maximum independence; maximum implementation cost.
+- **Path C2 — Fork `halo2_gadgets` (and necessary subset of `halo2_proofs`) into `adamant-halo2` with `PROVENANCE.md`.** Phase 5/5b.1a/b precedent applied to the ZK proof system. Production-binary control retained; upstream code quality preserved; refresh-cadence controlled.
+- **Path C3 — Accept as bounded-ecosystem (Category B-style).** Pragmatic; same posture as the RustCrypto + blst set. Halo 2 is a substantial standardised proof system with audit history; bounded-ecosystem treatment is defensible.
+
+**Recommendation**: Path C2 likely. The forking-over-vendoring discipline applies cleanly: Adamant owns the fork; upstream is consulted at refresh time, not depended on at runtime. Spec-author call at Phase 6 plan-gate.
+
+**Sub-decision (independent of path)**: `halo2_gadgets` currently has a non-exact pin (`"0.3"` not `"=0.3.x"`). Worth tightening to exact pin regardless of posture path. Pre-mainnet hardening candidate.
+
+#### Decision 2 — RocksDB at Phase 4 backfill / pre-mainnet
+
+The Phase 4 object-storage backfill workstream needs a concrete `StateView` / `StateMutator` implementation against persistent storage (in-memory mocks shipped at Phase 5/6.6 satisfy the trait surface for runtime-side wiring; production storage backend is deferred).
+
+Three options:
+
+- **Bounded-ecosystem (Category B-equivalent for storage).** Industry-standard storage infrastructure (RocksDB, sled, redb, etc.). Pragmatic; storage is non-consensus infrastructure.
+- **Adamant-native storage layer.** Effectively building a database. Massive scope; net-negative for protocol value.
+- **Forked storage layer.** Excessive for a non-consensus dependency.
+
+**Recommendation**: bounded-ecosystem acceptable, treating storage as infrastructure tier (Category E-equivalent). The protocol-binding logic on top of storage is Adamant-native (`adamant-state`); the storage backend itself can be off-the-shelf. Spec-author call at Phase 4 backfill plan-gate.
+
+#### Decision 3 — KZG trusted-setup procurement source
+
+Whitepaper §3.9.2 + §11.2 currently specify Ethereum's KZG Powers of Tau ceremony output (July 2023) as the trusted-setup source. The §3.9.2 amendment at instance 30 settled the *implementation* posture (Adamant-native math); the *setup-source* question is independent.
+
+Two options:
+
+- **EthPoT reuse** (current spec text). Conservative-choice; transfers Ethereum's ceremony confidence at zero marginal cost. Hard-fork-to-update if needed.
+- **Adamant ceremony pre-genesis.** Custom ceremony coordinated by the Adamant ecosystem. Substantial pre-mainnet coordination cost; constitutional-impact (how is the participant set determined?). Maximum protocol autonomy.
+
+**Recommendation**: pending spec-author deliberation at pre-mainnet hardening. The §3.9.2 amendment did not change setup-source language; that's a separate constitutional-impact deliberation.
+
+### 14.5 Phase-by-phase build map
+
+The following map records which phases are complete, in progress, or pending, with explicit Category labels for each major deliverable. Categories are A (Adamant-native required), B (bounded ecosystem), C (Adamant-native bridge layer), D (test-time only), E (workspace utility). The map is canonical-record forward planning; spec-author may revise scope at any phase plan-gate.
+
+**Phase 1–2: Foundation (DONE)**
+- `adamant-types` + `adamant-crypto` wrappers — Cat A + B/C bridge layer.
+
+**Phase 3: Cryptographic primitives (DONE)**
+- Hashing/sig/AEAD wrappers around bounded ecosystem — Cat B.
+- BIP-340 tagged-hash construction — Cat C bridge.
+- Threshold encryption — Cat C bridge.
+- KZG — Cat C bridge (implementation pending; spec settled at instance 30).
+- ML-KEM-768 wrapper — Cat B.
+
+**Phase 4: Transactions + lifecycle (DONE)**
+- Transaction type + TxHash + lifecycle validators — Cat A.
+
+**Phase 5: Verifier (DONE; Phase 5/5 closed at commit `5e1bb0d` with 9 architectural commitments per CONTRIBUTING.md spec-first verification instances 16–24)**
+- `adamant-bytecode-format` fork — Cat A (Phase 5/5b.1a/b precedent for forking-over-vendoring).
+- `adamant-vm` verifier — Cat A.
+- Cross-module Rule 3 walker — Cat A.
+
+**Phase 5/6: AVM Runtime (~93%; current phase)**
+- AVM runtime + bytecode dispatch — Cat A.
+- Multi-dimensional gas accounting — Cat A.
+- Transaction-boundary integration (`load_read_set` + `commit_buffer`) — Cat A.
+- KZG implementation pending (Cat C bridge; dedicated session).
+- 5/6.7 + 5/6.8 stdlib pending.
+
+**Phase 6: Privacy layer (NEXT MAJOR PHASE)**
+- `adamant-privacy` — Cat A.
+- Halo 2 ZK circuits — **Posture Decision 1 pending** (C1/C2/C3 at Phase 6 plan-gate).
+- Privacy-circuit handlers (`GenerateProof` / `VerifyProof` / `RecursiveVerify` / `ReleaseSubViewKey`) — Cat C bridge.
+- Recursive proof generation — Cat C bridge.
+
+**Phase 7+: Consensus + networking**
+- DAG-BFT consensus — Cat A required.
+- Threshold-encrypted mempool — Cat A on Cat B primitives.
+- Time-lock VDF — Cat A required.
+- P2P networking — **Posture decision pending**: `libp2p` (bounded-ecosystem-equivalent for networking infrastructure) vs Adamant-native protocol stack. Decide at Phase 7 networking plan-gate.
+- Validator-set management — Cat A required.
+
+**Pre-mainnet hardening**
+- Object-storage RocksDB backend — **Posture Decision 2 pending**.
+- Per-instruction gas-cost calibration — Cat A.
+- Throughput-floor empirical validation — methodological work.
+- Trusted-setup procurement (KZG) — **Posture Decision 3 pending**.
+- AIP framework (`adamant-improvement-proposals` repo) — Cat A process design.
+- `halo2_gadgets` exact-pin tightening — small mechanical hardening.
+
+**Genesis + Mainnet (§10–11)**
+- Genesis pool mechanism — Cat A.
+- Burn-to-mint bridges — Cat A on the Adamant side; per-target-chain integration is bounded-ecosystem-equivalent for the target chain's interface.
+- Active-set selection (FCFS + Genesis NFT per §10.2) — Cat A.
+- Wallet + explorer + SDKs — Cat A (already in 14-repo allocation).
+
+### 14.6 When the discipline is hard
+
+Two patterns deserve explicit acknowledgement:
+
+**Pattern 1 — "But it's just a small dependency..."**
+
+A small dependency is still a dependency. It pulls a transitive tree, expands the audit surface, and ties the protocol's behaviour to upstream maintenance. The five-category test runs the same way regardless of dependency size. If a small crate fits Category B, D, or E, it's acceptable on those terms; otherwise the question is whether the functionality belongs in Adamant-native code (A or C) or doesn't belong in the protocol at all.
+
+**Pattern 2 — "But this is the standard library for X..."**
+
+Standardisation is one input to the test, not a bypass. RustCrypto's `sha3` is in the locked set because SHA3-256 is FIPS 202; that standardisation is what makes the bounded-ecosystem treatment defensible. Arkworks is the standard library for BLS12-381 + KZG in the Rust ecosystem; the spec-author still chose Adamant-native KZG over arkworks integration because the protocol's resistant-proof posture takes precedence over ecosystem ergonomics. Standardisation is a Category B argument; it doesn't override Categories A or C.
+
+When in doubt, escalate to Ryan rather than silently expand the dependency footprint.
