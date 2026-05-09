@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Twenty-four confirmed instances during
+sources before proceeding. Twenty-five confirmed instances during
 Phases 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -839,6 +839,67 @@ Phases 1, 2, 4, and 5:
   EncryptedNote scheme specification; §7.6.1 nonce derivation;
   §7.8.1 shielded-object encryption scheme. Each is bound by
   the §7.0 posture in advance.
+- **§7.4.2 sub-view-key construction specification gap**
+  (whitepaper 7.4.2) — Phase 5/6.4 plan-gate empirical reads
+  (Option A documentation-sub-arc) surfaced this load-bearing
+  gap as a carry-forward bound to the §7.0 amendment-instance-
+  24's three-carry-forward enumeration. §7.4.2's existing
+  formula `sub_view_key_S = (sk_v + Hash(domain || S || sk_v) ·
+  G_aux)` was residual text from pre-ML-KEM design: §7.2.2 was
+  rewritten to use ML-KEM-768 viewing keypairs (line 105
+  explicitly references "earlier drafts of this whitepaper
+  specified a Diffie-Hellman scheme on BLS12-381"), but §7.4.2
+  was not updated to match. The pre-ML-KEM formula is
+  structurally incompatible with §7.2.2's construction:
+  §7.2.2's viewing keypair `(sk_v_kem, pk_v_kem)` is an
+  ML-KEM-768 keypair (public key 1184 bytes, secret key 2400
+  bytes / 64-byte seed), not a BLS12-381 scalar; the pre-
+  ML-KEM formula's `sk_v + Hash(...) · G_aux` requires `sk_v`
+  to be a BLS12-381 scalar, a structural mismatch with the
+  ML-KEM keypair shape post-§7.2.2 rewrite. Three substantively
+  different cryptographic-construction paths exist for
+  reconciling §7.4.2 with §7.2.2's ML-KEM viewing keypair
+  (deterministic ML-KEM derivation; ChaCha20-Poly1305 wrap;
+  post-decapsulation viewing-filter), each with different
+  privacy properties and threat models. Selecting among them
+  is substantial cryptographic-design work warranting a
+  dedicated session — same posture as KZG plan-gate. Resolved
+  by spec amendment replacing §7.4.2's formula and surrounding
+  prose with explicit gap-acknowledgment text: the pre-ML-KEM
+  formula is registered as not-applicable; the future amendment
+  is bound by three constraints (§7.0 encryption posture
+  probabilistic-only, §7.4.1 one-way derivation property,
+  reconciliation with §7.2.2 ML-KEM); implementations `MUST NOT`
+  rely on the previously-written formula; the wallet-enforced-
+  scope framing is preserved unchanged. Same gap-acknowledgment
+  posture as §7.0's "scheme not specified at this amendment"
+  framing for sites 4 + 5; the spec is honest about the
+  incompleteness while pre-binding the eventual specification
+  to known constraints. Three methodology landmarks land at
+  this amendment: (1) **spec-vs-spec-inconsistency-resolved-via-
+  amendment 3rd canonical instance — RULE-OF-THREE THRESHOLD
+  MET** (instance 23 ML-DSA-87 restriction + instance 24 §7.0
+  encryption posture + instance 25 §7.4.2 residual-
+  replacement); (2) **whitepaper-section-asymmetric-rewrite-
+  residual sub-pattern 1st canonical instance** — §7.2.2
+  rewrite (BLS ECDH → ML-KEM) did not propagate to §7.4.2;
+  residual discovered at 5/6.4 plan-gate empirical reads. New
+  sub-pattern shape distinct from prior spec-vs-spec
+  inconsistencies (instance 23 + 24 were within-section or
+  cross-section mismatches without rewrite history). Worth
+  canonical Phase 5/6 PROVENANCE.md registration when
+  PROVENANCE.md formalization next happens; (3) **amendment-
+  mechanical-shape 4th distinct sub-shape — in-place residual
+  replacement** (existing formula removed; gap-acknowledgment
+  text inserted). Different from instance 22 append + instance
+  23 distributed multi-line + instance 24 prepend. Carry-
+  forwards registered: §7.4.2 sub-view-key construction
+  reconciliation with §7.2.2 ML-KEM viewing-keypair
+  (substantial; warrants dedicated cryptographic-design
+  session); ReleaseSubViewKey real implementation continues
+  blocked on §7.4.2 reconciliation + adamant-crypto-blst-extra
+  hash-to-scalar helper expansion; 5/6.4.b ReleaseSubViewKey
+  sub-arc deferred until §7.4.2 reconciliation ratifies.
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
