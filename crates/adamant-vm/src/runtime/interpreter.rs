@@ -513,40 +513,61 @@ fn dispatch_inherited(
             Ok(DispatchOutcome::Continue)
         }
 
-        // ---------- Module-access handlers (defer to 5/6.2c.2.γ-merged) ----------
-        Bytecode::Pack(_)
-        | Bytecode::PackGeneric(_)
-        | Bytecode::Unpack(_)
-        | Bytecode::UnpackGeneric(_)
-        | Bytecode::VecPack(_, _)
-        | Bytecode::VecLen(_)
-        | Bytecode::VecPushBack(_)
-        | Bytecode::VecPopBack(_)
-        | Bytecode::VecUnpack(_, _)
-        | Bytecode::VecSwap(_)
-        | Bytecode::PackVariant(_)
-        | Bytecode::PackVariantGeneric(_)
-        | Bytecode::UnpackVariant(_)
-        | Bytecode::UnpackVariantImmRef(_)
-        | Bytecode::UnpackVariantMutRef(_)
-        | Bytecode::UnpackVariantGeneric(_)
-        | Bytecode::UnpackVariantGenericImmRef(_)
-        | Bytecode::UnpackVariantGenericMutRef(_)
-        | Bytecode::VariantSwitch(_) => {
-            // These 32 handlers require module-access infrastructure
-            // (function/struct/enum/field/signature definitions
-            // resolved via module handle indices) that lands at
-            // 5/6.2c. Until then, they surface as
-            // InvalidInstruction at runtime — the verifier admits
-            // them at deploy time but the runtime scaffold rejects
-            // until handlers land. Consumers should not deploy
-            // modules using these instructions until 5/6.2c ships.
-            let frame = state.top_frame().expect("call stack non-empty");
-            Err(VMError::InvalidInstruction {
-                function_handle: frame.function_handle,
-                pc: frame.pc,
-            })
+        // ---------- Struct ops (Phase 5/6.2c.2.γ-merged) ----------
+        Bytecode::Pack(struct_def_idx) => dispatch_pack(state, module, *struct_def_idx),
+        Bytecode::PackGeneric(inst_idx) => {
+            let struct_def_idx = crate::runtime::module_helpers::resolve_struct_def_instantiation(
+                module, *inst_idx,
+            )?;
+            dispatch_pack(state, module, struct_def_idx)
         }
+        Bytecode::Unpack(struct_def_idx) => dispatch_unpack(state, module, *struct_def_idx),
+        Bytecode::UnpackGeneric(inst_idx) => {
+            let struct_def_idx = crate::runtime::module_helpers::resolve_struct_def_instantiation(
+                module, *inst_idx,
+            )?;
+            dispatch_unpack(state, module, struct_def_idx)
+        }
+
+        // ---------- Vector ops (Phase 5/6.2c.2.γ-merged) ----------
+        Bytecode::VecPack(_sig_idx, n) => dispatch_vec_pack(state, *n),
+        Bytecode::VecLen(_sig_idx) => dispatch_vec_len(state),
+        Bytecode::VecPushBack(_sig_idx) => dispatch_vec_push_back(state),
+        Bytecode::VecPopBack(_sig_idx) => dispatch_vec_pop_back(state),
+        Bytecode::VecUnpack(_sig_idx, n) => dispatch_vec_unpack(state, *n),
+        Bytecode::VecSwap(_sig_idx) => dispatch_vec_swap(state),
+
+        // ---------- Variant ops (Phase 5/6.2c.2.γ-merged) ----------
+        Bytecode::PackVariant(handle_idx) => dispatch_pack_variant(state, module, *handle_idx),
+        Bytecode::PackVariantGeneric(inst_idx) => {
+            let (enum_def_idx, tag) =
+                crate::runtime::module_helpers::resolve_variant_instantiation_handle(
+                    module, *inst_idx,
+                )?;
+            dispatch_pack_variant_inner(state, module, enum_def_idx, tag)
+        }
+        Bytecode::UnpackVariant(handle_idx) => {
+            dispatch_unpack_variant(state, module, *handle_idx, UnpackVariantMode::Owned)
+        }
+        Bytecode::UnpackVariantImmRef(handle_idx) | Bytecode::UnpackVariantMutRef(handle_idx) => {
+            dispatch_unpack_variant(state, module, *handle_idx, UnpackVariantMode::ByRef)
+        }
+        Bytecode::UnpackVariantGeneric(inst_idx) => {
+            let (enum_def_idx, tag) =
+                crate::runtime::module_helpers::resolve_variant_instantiation_handle(
+                    module, *inst_idx,
+                )?;
+            dispatch_unpack_variant_inner(state, enum_def_idx, tag, UnpackVariantMode::Owned)
+        }
+        Bytecode::UnpackVariantGenericImmRef(inst_idx)
+        | Bytecode::UnpackVariantGenericMutRef(inst_idx) => {
+            let (enum_def_idx, tag) =
+                crate::runtime::module_helpers::resolve_variant_instantiation_handle(
+                    module, *inst_idx,
+                )?;
+            dispatch_unpack_variant_inner(state, enum_def_idx, tag, UnpackVariantMode::ByRef)
+        }
+        Bytecode::VariantSwitch(jt_idx) => dispatch_variant_switch(state, module, *jt_idx),
     }
 }
 
@@ -1323,6 +1344,363 @@ fn decode_constant(
             })
         }
     }
+}
+
+// ============================================================================
+// Phase 5/6.2c.2.γ-merged: struct ops + vector ops + variant ops
+// ============================================================================
+
+/// `Bytecode::Pack` handler.
+///
+/// Per Sui-Move file_format.rs:1690-1701 (verbatim, applicable to
+/// the inherited subset): pop n field values in declaration order
+/// (top-of-stack is field(n)), build a struct value, push it.
+fn dispatch_pack(
+    state: &mut InterpreterState,
+    module: &AdamantCompiledModule,
+    struct_def_idx: adamant_bytecode_format::StructDefinitionIndex,
+) -> Result<DispatchOutcome, VMError> {
+    let n = crate::runtime::module_helpers::resolve_struct_field_count(module, struct_def_idx)?;
+    let frame = top_frame_mut(state)?;
+    let mut fields = Vec::with_capacity(n);
+    for _ in 0..n {
+        fields.push(frame.pop_value()?);
+    }
+    fields.reverse();
+    let type_id = crate::runtime::module_helpers::placeholder_type_id_for_struct(struct_def_idx);
+    let container = crate::runtime::runtime_value::Container::from_struct(type_id, fields);
+    frame.push_value(RuntimeValue::Container(container));
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::Unpack` handler.
+///
+/// Per Sui-Move file_format.rs:1715-1726 (verbatim, applicable to
+/// the inherited subset): pop a struct value, push its fields in
+/// declaration order (top-of-stack ends up being the last field).
+fn dispatch_unpack(
+    state: &mut InterpreterState,
+    module: &AdamantCompiledModule,
+    struct_def_idx: adamant_bytecode_format::StructDefinitionIndex,
+) -> Result<DispatchOutcome, VMError> {
+    // Field count is informational here — verifier guarantees the
+    // struct's fields vector matches. We resolve it to fail-fast
+    // if the index is OOB, matching the eager-error posture.
+    let _expected_n =
+        crate::runtime::module_helpers::resolve_struct_field_count(module, struct_def_idx)?;
+    let frame = top_frame_mut(state)?;
+    let rc = frame.pop_struct()?;
+    // Take ownership where possible; otherwise clone interior.
+    let runtime_struct = std::rc::Rc::try_unwrap(rc)
+        .map_or_else(|rc| rc.borrow().clone(), core::cell::RefCell::into_inner);
+    for field in runtime_struct.fields {
+        frame.push_value(field);
+    }
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::VecPack(_, n)` handler.
+///
+/// Per whitepaper §6.2.1.4: "Pack a vector of `n` elements at the
+/// given signature." Pops n elements from the operand stack and
+/// constructs a vector container.
+fn dispatch_vec_pack(state: &mut InterpreterState, n: u64) -> Result<DispatchOutcome, VMError> {
+    let n_usize = usize::try_from(n).map_err(|_| VMError::InvariantViolation {
+        reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+    })?;
+    let frame = top_frame_mut(state)?;
+    let mut elements = Vec::with_capacity(n_usize);
+    for _ in 0..n_usize {
+        elements.push(frame.pop_value()?);
+    }
+    elements.reverse();
+    let container = crate::runtime::runtime_value::Container::from_vec(elements);
+    frame.push_value(RuntimeValue::Container(container));
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::VecLen` handler.
+///
+/// Per whitepaper §6.2.1.4: "Vector length." Pops a reference to a
+/// vector, pushes its length as `u64`.
+fn dispatch_vec_len(state: &mut InterpreterState) -> Result<DispatchOutcome, VMError> {
+    let frame = top_frame_mut(state)?;
+    let vec_ref = frame.pop_reference()?;
+    let len = vec_ref.vector_len()?;
+    let len_u64 = u64::try_from(len).map_err(|_| VMError::InvariantViolation {
+        reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+    })?;
+    frame.push_value(RuntimeValue::U64(len_u64));
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::VecPushBack` handler.
+///
+/// Per whitepaper §6.2.1.4: "Push to the back of a vector." Pops a
+/// value and a reference; pushes the value to the back of the
+/// referenced vector.
+///
+/// Stack order: top is the value, then the reference (Sui
+/// convention; see `move-vm-runtime` semantics for `vector::push_back`).
+fn dispatch_vec_push_back(state: &mut InterpreterState) -> Result<DispatchOutcome, VMError> {
+    let frame = top_frame_mut(state)?;
+    let value = frame.pop_value()?;
+    let vec_ref = frame.pop_reference()?;
+    vec_ref.vector_push_back(value)?;
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::VecPopBack` handler.
+///
+/// Per whitepaper §6.2.1.4: "Pop from the back of a vector." Pops
+/// a reference to a vector, pops its last element, pushes the
+/// element onto the operand stack. Aborts if the vector is empty.
+fn dispatch_vec_pop_back(state: &mut InterpreterState) -> Result<DispatchOutcome, VMError> {
+    let frame = top_frame_mut(state)?;
+    let vec_ref = frame.pop_reference()?;
+    let elem = vec_ref.vector_pop_back()?;
+    frame.push_value(elem);
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::VecUnpack(_, n)` handler.
+///
+/// Per whitepaper §6.2.1.4: "Unpack a vector of `n` elements onto
+/// the stack." Pops a vector container, pushes its elements.
+fn dispatch_vec_unpack(state: &mut InterpreterState, n: u64) -> Result<DispatchOutcome, VMError> {
+    let n_usize = usize::try_from(n).map_err(|_| VMError::InvariantViolation {
+        reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+    })?;
+    let frame = top_frame_mut(state)?;
+    let rc = frame.pop_vector()?;
+    let elements = std::rc::Rc::try_unwrap(rc)
+        .map_or_else(|rc| rc.borrow().clone(), core::cell::RefCell::into_inner);
+    if elements.len() != n_usize {
+        // Verifier's type_safety pass should have ensured the
+        // declared n matches the vector's actual length;
+        // residual binding surfaces here.
+        return Err(VMError::InvariantViolation {
+            reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+        });
+    }
+    for e in elements {
+        frame.push_value(e);
+    }
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::VecSwap` handler.
+///
+/// Per whitepaper §6.2.1.4: "Swap two elements in a vector." Pops
+/// two u64 indices and a reference; swaps elements at the indices.
+///
+/// Stack order: top is index j, then index i, then the reference.
+fn dispatch_vec_swap(state: &mut InterpreterState) -> Result<DispatchOutcome, VMError> {
+    let frame = top_frame_mut(state)?;
+    let j = frame.pop_u64()?;
+    let i = frame.pop_u64()?;
+    let vec_ref = frame.pop_reference()?;
+    let i_usize = usize::try_from(i).map_err(|_| VMError::InvariantViolation {
+        reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+    })?;
+    let j_usize = usize::try_from(j).map_err(|_| VMError::InvariantViolation {
+        reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+    })?;
+    vec_ref.vector_swap(i_usize, j_usize)?;
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::PackVariant` handler.
+///
+/// Per Sui-Move `file_format.rs:1789-1791`: "Stack transition: ...,
+/// field(1)_value, field(2)_value, ..., field(n)_value -> ...,
+/// `variant_value`." Pops n field values for the specified variant
+/// of the specified enum, builds a variant container, pushes it.
+fn dispatch_pack_variant(
+    state: &mut InterpreterState,
+    module: &AdamantCompiledModule,
+    handle_idx: adamant_bytecode_format::VariantHandleIndex,
+) -> Result<DispatchOutcome, VMError> {
+    let (enum_def_idx, tag) =
+        crate::runtime::module_helpers::resolve_variant_handle(module, handle_idx)?;
+    dispatch_pack_variant_inner(state, module, enum_def_idx, tag)
+}
+
+/// Inner `PackVariant` logic shared between non-generic and
+/// generic dispatch paths.
+fn dispatch_pack_variant_inner(
+    state: &mut InterpreterState,
+    module: &AdamantCompiledModule,
+    enum_def_idx: adamant_bytecode_format::EnumDefinitionIndex,
+    tag: adamant_bytecode_format::VariantTag,
+) -> Result<DispatchOutcome, VMError> {
+    let n = crate::runtime::module_helpers::resolve_enum_variant_field_count(
+        module,
+        enum_def_idx,
+        tag,
+    )?;
+    let frame = top_frame_mut(state)?;
+    let mut fields = Vec::with_capacity(n);
+    for _ in 0..n {
+        fields.push(frame.pop_value()?);
+    }
+    fields.reverse();
+    let type_id = crate::runtime::module_helpers::placeholder_type_id_for_enum(enum_def_idx);
+    let container = crate::runtime::runtime_value::Container::from_variant(type_id, tag, fields);
+    frame.push_value(RuntimeValue::Container(container));
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// Mode discriminator for the `UnpackVariant` family.
+#[derive(Debug, Clone, Copy)]
+enum UnpackVariantMode {
+    /// `UnpackVariant` / `UnpackVariantGeneric`: pop an owned
+    /// variant value, push its fields by value.
+    Owned,
+    /// `UnpackVariantImmRef` / `UnpackVariantMutRef` (and generic
+    /// counterparts): pop a reference to a variant, push field
+    /// references (Imm/Mut distinction is verifier-only at runtime
+    /// per the `FreezeRef` no-op posture).
+    ByRef,
+}
+
+/// `Bytecode::UnpackVariant` and friends — non-generic path.
+fn dispatch_unpack_variant(
+    state: &mut InterpreterState,
+    module: &AdamantCompiledModule,
+    handle_idx: adamant_bytecode_format::VariantHandleIndex,
+    mode: UnpackVariantMode,
+) -> Result<DispatchOutcome, VMError> {
+    let (enum_def_idx, tag) =
+        crate::runtime::module_helpers::resolve_variant_handle(module, handle_idx)?;
+    dispatch_unpack_variant_inner(state, enum_def_idx, tag, mode)
+}
+
+/// Inner `UnpackVariant` logic shared across non-generic, generic,
+/// owned, and by-ref paths.
+fn dispatch_unpack_variant_inner(
+    state: &mut InterpreterState,
+    _enum_def_idx: adamant_bytecode_format::EnumDefinitionIndex,
+    expected_tag: adamant_bytecode_format::VariantTag,
+    mode: UnpackVariantMode,
+) -> Result<DispatchOutcome, VMError> {
+    let frame = top_frame_mut(state)?;
+    match mode {
+        UnpackVariantMode::Owned => {
+            // Pop an owned variant container.
+            let value = frame.pop_value()?;
+            let RuntimeValue::Container(crate::runtime::runtime_value::Container::Variant(rc)) =
+                value
+            else {
+                return Err(VMError::InvariantViolation {
+                    reason: InvariantViolationReason::TypeMismatchOnStack,
+                });
+            };
+            let runtime_variant = std::rc::Rc::try_unwrap(rc)
+                .map_or_else(|rc| rc.borrow().clone(), core::cell::RefCell::into_inner);
+            if runtime_variant.variant_tag != expected_tag {
+                return Err(VMError::InvariantViolation {
+                    reason: InvariantViolationReason::VariantTagMismatch,
+                });
+            }
+            for f in runtime_variant.fields {
+                frame.push_value(f);
+            }
+        }
+        UnpackVariantMode::ByRef => {
+            // Pop a reference to a variant.
+            let variant_ref = frame.pop_reference()?;
+            let rc = variant_ref.resolve_variant_container()?;
+            let runtime_variant = rc.borrow();
+            if runtime_variant.variant_tag != expected_tag {
+                return Err(VMError::InvariantViolation {
+                    reason: InvariantViolationReason::VariantTagMismatch,
+                });
+            }
+            // Push a field reference per field. The reference
+            // points into the variant container at the field
+            // index; if a field is itself a container, return
+            // Reference::Container so callers can compose further
+            // borrows.
+            let n = runtime_variant.fields.len();
+            drop(runtime_variant);
+            for i in 0..n {
+                let field_ref = match rc.borrow().fields.get(i) {
+                    Some(RuntimeValue::Container(c)) => {
+                        crate::runtime::runtime_value::Reference::Container(c.clone())
+                    }
+                    Some(_) => crate::runtime::runtime_value::Reference::Indexed {
+                        container: crate::runtime::runtime_value::Container::Variant(
+                            std::rc::Rc::clone(&rc),
+                        ),
+                        idx: i,
+                    },
+                    None => {
+                        return Err(VMError::InvariantViolation {
+                            reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+                        })
+                    }
+                };
+                frame.push_value(RuntimeValue::Reference(field_ref));
+            }
+        }
+    }
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::VariantSwitch` handler.
+///
+/// Per Sui-Move file_format.rs:1813-1819: "Branch on the tag value
+/// of the enum value reference that is on the top of the value
+/// stack, and jumps to the matching code offset for that tag
+/// within the `CodeUnit`." Pops a reference to a variant, looks
+/// up the variant's tag in the function's jump table, and jumps
+/// to the corresponding code offset.
+fn dispatch_variant_switch(
+    state: &mut InterpreterState,
+    module: &AdamantCompiledModule,
+    jt_idx: adamant_bytecode_format::VariantJumpTableIndex,
+) -> Result<DispatchOutcome, VMError> {
+    // Resolve the current frame's function definition, then the
+    // jump table within its code unit. Hold the resolved
+    // jump-table data across the operations (the function_def's
+    // borrow is module-rooted; the frame mutation reborrow shape
+    // is correct under the existing borrow discipline).
+    let function_handle_idx = state
+        .top_frame()
+        .ok_or(VMError::InvariantViolation {
+            reason: InvariantViolationReason::StackUnderflow,
+        })?
+        .function_handle;
+    let function_def =
+        crate::runtime::module_helpers::resolve_function_def(module, function_handle_idx)?;
+    let jt_offsets: Vec<adamant_bytecode_format::CodeOffset> = {
+        let inner = crate::runtime::module_helpers::resolve_jump_table(function_def, jt_idx)?;
+        match inner {
+            adamant_bytecode_format::JumpTableInner::Full(offsets) => offsets.clone(),
+        }
+    };
+    let frame = top_frame_mut(state)?;
+    let variant_ref = frame.pop_reference()?;
+    let rc = variant_ref.resolve_variant_container()?;
+    let tag = rc.borrow().variant_tag;
+    let target = *jt_offsets
+        .get(tag as usize)
+        .ok_or(VMError::InvariantViolation {
+            reason: InvariantViolationReason::JumpTableTagOutOfRange,
+        })?;
+    frame.pc = target;
+    Ok(DispatchOutcome::Continue)
 }
 
 /// Handle a `Bytecode::Call` outer-driver dispatch: resolve the

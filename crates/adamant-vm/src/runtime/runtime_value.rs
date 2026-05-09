@@ -137,6 +137,50 @@ pub struct RuntimeStructValue {
     pub fields: Vec<RuntimeValue>,
 }
 
+/// Runtime-only enum-variant value with [`RuntimeValue`] fields
+/// plus the variant tag.
+///
+/// Distinct from [`RuntimeStructValue`]: variants are categorically
+/// distinct from structs (sum types vs product types) per the
+/// information-theoretic + substructural-types argument at the
+/// Phase 5/6.2c.2.γ-merged plan-gate Q-γ.3 disposition. The
+/// verifier's `type_safety` pass statically distinguishes variant
+/// types from struct types; the runtime preserves that
+/// distinction via [`Container::Variant`] / [`Container::Struct`]
+/// rather than a tagged-struct convention.
+///
+/// `variant_tag` is the runtime-readable variant index per
+/// whitepaper §6.2.1.4 + the inherited Sui-base bytecode-format
+/// commitment at file_format.rs:1813-1819 ("Branch on the tag
+/// value of the enum value reference"). The static
+/// [`adamant_bytecode_format::VariantHandle`] pins the expected
+/// tag at deploy time; the runtime tag must equal the handle's
+/// tag for `UnpackVariant` (verifier-residual:
+/// [`InvariantViolationReason::VariantTagMismatch`]).
+///
+/// At γ-merged scope, variant values do not cross the BCS-encoding
+/// boundary — `to_value` returns `None` for [`Container::Variant`]
+/// values, mirroring the carry-forward shape of [`Reference`].
+/// Variant-to-BCS conversion lands at a future Phase 5/6 sub-arc
+/// when transaction-argument and object-state representation of
+/// enum values is finalized.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RuntimeVariantValue {
+    /// Identifier of the enum's type definition (whitepaper
+    /// section 5.1.2).
+    pub type_id: TypeId,
+    /// Variant index within the enum's `variants` vector
+    /// per [`adamant_bytecode_format::VariantTag`]. Read by
+    /// `VariantSwitch` at runtime; checked against the static
+    /// `VariantHandle::variant` by `UnpackVariant`.
+    pub variant_tag: u16,
+    /// Field values for this specific variant in canonical
+    /// declaration order. The field shape is variant-specific;
+    /// different variants of the same enum may have different
+    /// field counts and types.
+    pub fields: Vec<RuntimeValue>,
+}
+
 /// Heap-allocated runtime container with shared mutable interior.
 ///
 /// Containers wrap their interior in `Rc<RefCell<...>>` to
@@ -149,19 +193,27 @@ pub struct RuntimeStructValue {
 /// `Rc-RefCell` wrappers, allowing composed borrows like
 /// `&mut s.f1.f2` to descend through the container chain.
 ///
-/// Two variants:
+/// Three variants:
 ///
 /// - [`Container::Vector`]: a heap-allocated vector of
 ///   [`RuntimeValue`]s. The polymorphic element type is encoded
 ///   per-position.
 /// - [`Container::Struct`]: a heap-allocated struct value with
 ///   [`RuntimeValue`] fields (per [`RuntimeStructValue`]).
+/// - [`Container::Variant`]: a heap-allocated enum-variant value
+///   with a runtime-readable `variant_tag` plus
+///   [`RuntimeValue`] fields (per [`RuntimeVariantValue`]).
+///   Distinct from `Struct` per the sum-vs-product type-level
+///   distinction (Phase 5/6.2c.2.γ-merged plan-gate Q-γ.3).
 #[derive(Debug, Clone)]
 pub enum Container {
     /// Vector container.
     Vector(Rc<RefCell<Vec<RuntimeValue>>>),
     /// Struct container with [`RuntimeValue`] fields.
     Struct(Rc<RefCell<RuntimeStructValue>>),
+    /// Enum-variant container with a tag and [`RuntimeValue`]
+    /// fields.
+    Variant(Rc<RefCell<RuntimeVariantValue>>),
 }
 
 /// Runtime reference — three variants per Phase 5/6.2c.1.b's
@@ -324,7 +376,15 @@ impl RuntimeValue {
                     fields: bcs_fields,
                 }))
             }
-            Self::Reference(_) => None,
+            // Variant values do not cross the BCS-encoding boundary
+            // at Phase 5/6.2c.2.γ-merged scope — the BCS [`Value`]
+            // surface does not carry a Variant variant. Variant-to-
+            // BCS conversion is a Phase 5/6.X carry-forward when
+            // transaction-argument and object-state representation
+            // of enum values is finalized. Until then, callers that
+            // attempt to convert a variant value to BCS will see
+            // None, the same shape as Reference.
+            Self::Container(Container::Variant(_)) | Self::Reference(_) => None,
         }
     }
 }
@@ -355,6 +415,9 @@ impl PartialEq for RuntimeValue {
                 *a.borrow() == *b.borrow()
             }
             (Self::Container(Container::Struct(a)), Self::Container(Container::Struct(b))) => {
+                *a.borrow() == *b.borrow()
+            }
+            (Self::Container(Container::Variant(a)), Self::Container(Container::Variant(b))) => {
                 *a.borrow() == *b.borrow()
             }
             // Reference operands are not Eq-comparable per
@@ -421,6 +484,13 @@ impl Reference {
                     })?;
                     Ok(element.clone())
                 }
+                Container::Variant(rc) => {
+                    let cell = rc.borrow();
+                    let field = cell.fields.get(*idx).ok_or(VMError::InvariantViolation {
+                        reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+                    })?;
+                    Ok(field.clone())
+                }
             },
         }
     }
@@ -468,6 +538,14 @@ impl Reference {
                         *target_rc.borrow_mut() = new_vec;
                         Ok(())
                     }
+                    (
+                        Container::Variant(target_rc),
+                        RuntimeValue::Container(Container::Variant(source_rc)),
+                    ) => {
+                        let new_variant = source_rc.borrow().clone();
+                        *target_rc.borrow_mut() = new_variant;
+                        Ok(())
+                    }
                     _ => Err(VMError::InvariantViolation {
                         reason: InvariantViolationReason::TypeMismatchOnStack,
                     }),
@@ -490,6 +568,17 @@ impl Reference {
                     let slot = cell.get_mut(*idx).ok_or(VMError::InvariantViolation {
                         reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
                     })?;
+                    *slot = value;
+                    Ok(())
+                }
+                Container::Variant(rc) => {
+                    let mut cell = rc.borrow_mut();
+                    let slot = cell
+                        .fields
+                        .get_mut(*idx)
+                        .ok_or(VMError::InvariantViolation {
+                            reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+                        })?;
                     *slot = value;
                     Ok(())
                 }
@@ -606,6 +695,96 @@ impl Reference {
             }),
         }
     }
+
+    /// Resolve a reference to the underlying variant container.
+    /// Analogous to [`Self::resolve_struct_container`] for variants.
+    /// Used by `UnpackVariantImmRef` / `UnpackVariantMutRef` to
+    /// access the variant's tag and fields through a reference.
+    pub fn resolve_variant_container(&self) -> Result<Rc<RefCell<RuntimeVariantValue>>, VMError> {
+        match self {
+            Self::Container(Container::Variant(rc)) => Ok(Rc::clone(rc)),
+            Self::Local { locals, idx } => {
+                let cell = locals.borrow();
+                let slot = cell.get(*idx).ok_or(VMError::InvariantViolation {
+                    reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+                })?;
+                let value = slot.as_ref().ok_or(VMError::InvariantViolation {
+                    reason: InvariantViolationReason::LocalNotInitialized,
+                })?;
+                if let RuntimeValue::Container(Container::Variant(rc)) = value {
+                    Ok(Rc::clone(rc))
+                } else {
+                    Err(VMError::InvariantViolation {
+                        reason: InvariantViolationReason::TypeMismatchOnStack,
+                    })
+                }
+            }
+            _ => Err(VMError::InvariantViolation {
+                reason: InvariantViolationReason::TypeMismatchOnStack,
+            }),
+        }
+    }
+
+    /// Vector reference helper — read length of the referenced
+    /// vector container.
+    ///
+    /// Used by `Bytecode::VecLen` (whitepaper §6.2.1.4: "Vector
+    /// length"). The reference must be to a `Container::Vector`;
+    /// the verifier's `type_safety` pass guarantees this.
+    pub fn vector_len(&self) -> Result<usize, VMError> {
+        let rc = self.resolve_vector_container()?;
+        let len = rc.borrow().len();
+        Ok(len)
+    }
+
+    /// Vector reference helper — push `value` to the back of the
+    /// referenced vector.
+    ///
+    /// Used by `Bytecode::VecPushBack` (whitepaper §6.2.1.4:
+    /// "Push to the back of a vector").
+    pub fn vector_push_back(&self, value: RuntimeValue) -> Result<(), VMError> {
+        let rc = self.resolve_vector_container()?;
+        rc.borrow_mut().push(value);
+        Ok(())
+    }
+
+    /// Vector reference helper — pop a value from the back of the
+    /// referenced vector.
+    ///
+    /// Used by `Bytecode::VecPopBack` (whitepaper §6.2.1.4:
+    /// "Pop from the back of a vector"). Aborts with
+    /// `IndexOutOfBoundsPostVerification` if the vector is empty;
+    /// the verifier admits the bytecode but does not statically
+    /// validate non-emptiness — the runtime carries the residual
+    /// binding consistent with Sui-VM's `PopV`/`pop_back` semantics
+    /// that surface as a runtime abort on empty vectors.
+    pub fn vector_pop_back(&self) -> Result<RuntimeValue, VMError> {
+        let rc = self.resolve_vector_container()?;
+        let popped = rc.borrow_mut().pop();
+        popped.ok_or(VMError::InvariantViolation {
+            reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+        })
+    }
+
+    /// Vector reference helper — swap elements at indices `i` and
+    /// `j` in the referenced vector.
+    ///
+    /// Used by `Bytecode::VecSwap` (whitepaper §6.2.1.4: "Swap
+    /// two elements in a vector"). Aborts with
+    /// `IndexOutOfBoundsPostVerification` if either index is out
+    /// of range. Same shape as `Vec::swap`'s panic surface,
+    /// surfaced as a typed runtime error rather than a panic.
+    pub fn vector_swap(&self, i: usize, j: usize) -> Result<(), VMError> {
+        let rc = self.resolve_vector_container()?;
+        let mut cell = rc.borrow_mut();
+        if i >= cell.len() || j >= cell.len() {
+            return Err(VMError::InvariantViolation {
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+            });
+        }
+        cell.swap(i, j);
+        Ok(())
+    }
 }
 
 impl Container {
@@ -616,6 +795,36 @@ impl Container {
             type_id,
             fields: Vec::new(),
         })))
+    }
+
+    /// Construct a struct container with the given type id and
+    /// fields. Used by `Bytecode::Pack` after popping field values
+    /// off the operand stack.
+    #[must_use]
+    pub fn from_struct(type_id: TypeId, fields: Vec<RuntimeValue>) -> Self {
+        Self::Struct(Rc::new(RefCell::new(RuntimeStructValue {
+            type_id,
+            fields,
+        })))
+    }
+
+    /// Construct a variant container with the given type id, tag,
+    /// and fields. Used by `Bytecode::PackVariant` after popping
+    /// field values off the operand stack.
+    #[must_use]
+    pub fn from_variant(type_id: TypeId, variant_tag: u16, fields: Vec<RuntimeValue>) -> Self {
+        Self::Variant(Rc::new(RefCell::new(RuntimeVariantValue {
+            type_id,
+            variant_tag,
+            fields,
+        })))
+    }
+
+    /// Construct a vector container from a vector of runtime values.
+    /// Used by `Bytecode::VecPack`.
+    #[must_use]
+    pub fn from_vec(elements: Vec<RuntimeValue>) -> Self {
+        Self::Vector(Rc::new(RefCell::new(elements)))
     }
 }
 

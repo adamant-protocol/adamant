@@ -87,10 +87,15 @@ pub mod state_view;
 #[cfg(test)]
 pub(in crate::runtime) mod test_helpers;
 
+#[cfg(test)]
+mod tests;
+
 pub use error::{ArithmeticErrorReason, InvariantViolationReason, VMError};
 pub use frame::Frame;
 pub use interpreter::{DispatchOutcome, InterpreterState};
-pub use runtime_value::{compare_unsigned, Container, Reference, RuntimeValue};
+pub use runtime_value::{
+    compare_unsigned, Container, Reference, RuntimeStructValue, RuntimeValue, RuntimeVariantValue,
+};
 pub use state_buffer::TransactionStateBuffer;
 pub use state_mutator::{CommitError, StateMutator, TransactionStateChanges};
 pub use state_view::{LoadError, StateView};

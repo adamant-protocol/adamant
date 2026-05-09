@@ -315,6 +315,32 @@ pub enum InvariantViolationReason {
     /// The verifier's `control_flow` pass (§6.2.1.6 inherited
     /// "control-flow integrity") should pre-empt this case.
     BranchTargetOutOfBounds,
+
+    /// `UnpackVariant` / `UnpackVariantImmRef` / `UnpackVariantMutRef`
+    /// (or their generic counterparts) executed against a variant
+    /// value whose runtime tag does not match the static handle's
+    /// variant tag.
+    ///
+    /// The verifier's variant-correlation residual (§6.2.1.6
+    /// inherited "type safety" extended to enums) should pre-empt
+    /// this case at deploy time when the path constraints prove
+    /// only one variant tag is reachable. When the verifier admits
+    /// branches that may produce different tags, the runtime carries
+    /// the residual binding — variant-tag-mismatch surfaces here.
+    VariantTagMismatch,
+
+    /// `VariantSwitch` jump-table lookup tag exceeds the table's
+    /// length. Equivalently, the runtime tag does not appear in the
+    /// `JumpTableInner::Full` jump table.
+    ///
+    /// The verifier's variant-coverage check (§6.2.1.6 inherited
+    /// "control-flow integrity" extended to variant switches)
+    /// should pre-empt this case at deploy time — the verifier
+    /// requires the jump table to fully cover all variants of the
+    /// dispatched enum. Reaching this variant at runtime indicates
+    /// either verifier unsoundness on the variant-coverage
+    /// invariant, or post-deployment bytecode modification.
+    JumpTableTagOutOfRange,
 }
 
 #[cfg(test)]
