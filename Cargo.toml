@@ -109,6 +109,18 @@ ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["zer
 #  - "zeroize"   (opt-in)  — derives ZeroizeOnDrop on signing keys.
 # `pkcs8` is intentionally skipped — we serialise via raw bytes, not PKCS#8.
 ml-dsa = { version = "=0.1.0-rc.9", default-features = false, features = ["rand_core", "alloc", "zeroize"] }
+# ML-KEM-768 post-quantum KEM, per whitepaper §3.7. Same RustCrypto
+# ecosystem as ml-dsa; pinned at the latest crates.io release.
+ml-kem = { version = "=0.3.0", default-features = false, features = ["alloc", "zeroize"] }
+# rand_core 0.10 alias for the ml-kem encapsulate path. ml-kem 0.3
+# binds its `CryptoRng` to rand_core 0.10's trait surface (see
+# ml-kem/src/encapsulation_key.rs); the workspace's rand_core 0.6
+# entry is bound to ed25519-dalek's 2.2 trait generation, distinct
+# from the rand_core 0.10 surface ml-kem uses. The two coexist via
+# package aliasing — same precedent as the getrandom 0.4 dev-dep
+# entry in adamant-crypto/Cargo.toml ("RustCrypto ecosystem skew",
+# documented in SECURITY.md).
+rand_core_0_10 = { package = "rand_core", version = "=0.10.1", default-features = false }
 
 # BLS12-381 signatures, pairing, and threshold encryption (whitepaper 3.4.3, 3.6).
 # blst: pinned to exact patch version. Default features (none) are

@@ -32,8 +32,9 @@
 //! | [`bls`]            | 3.4.3              | BLS12-381 signatures and pairing      |
 //! | [`symmetric`]      | 3.5                | ChaCha20-Poly1305                     |
 //! | [`threshold`]      | 3.6                | BLS-based threshold encryption        |
-//! | [`zk`]             | 3.7.1              | Halo 2 zk-SNARKs                      |
-//! | [`kzg`]            | 3.7.2              | KZG vector and polynomial commitments |
+//! | [`ml_kem`]         | 3.7                | ML-KEM-768 key encapsulation          |
+//! | [`zk`]             | 3.9.1              | Halo 2 zk-SNARKs                      |
+//! | [`kzg`]            | 3.9.2              | KZG vector and polynomial commitments |
 //! | [`domain`]         | 3.3.1              | Centralised domain-tag registry       |
 //!
 //! `hash::poseidon` is rendered as plain text in this map because the
@@ -44,6 +45,7 @@ pub mod bls;
 pub mod domain;
 pub mod hash;
 pub mod kzg;
+pub mod ml_kem;
 pub mod sig_classical;
 pub mod sig_pq;
 pub mod symmetric;

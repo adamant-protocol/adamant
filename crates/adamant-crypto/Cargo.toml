@@ -13,6 +13,10 @@ sha3 = { workspace = true }
 blake3 = { workspace = true }
 ed25519-dalek = { workspace = true }
 ml-dsa = { workspace = true }
+ml-kem = { workspace = true }
+# rand_core 0.10 alias for the ml-kem encapsulate path; see workspace
+# dep entry for the RustCrypto-ecosystem-skew rationale.
+rand_core_0_10 = { workspace = true }
 blst = { workspace = true }
 # Safe Rust API over blst's lower-level operations (pairings,
 # hash-to-curve, scalar arithmetic, G₂ scalar multiplication on a known
