@@ -84,6 +84,7 @@ pub mod module_helpers;
 pub mod module_resolver_adapter;
 pub mod native;
 pub mod runtime_value;
+pub mod scheduler;
 pub mod state_buffer;
 pub mod state_mutator;
 pub mod state_view;
@@ -110,6 +111,7 @@ pub use native::{
 pub use runtime_value::{
     compare_unsigned, Container, Reference, RuntimeStructValue, RuntimeValue, RuntimeVariantValue,
 };
+pub use scheduler::{compute_conflict_graph, greedy_coloring, schedule, ConflictGraph};
 pub use state_buffer::TransactionStateBuffer;
 pub use state_mutator::{CommitError, StateMutator, TransactionStateChanges};
 pub use state_view::{LoadError, StateView};
