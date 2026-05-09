@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Twenty-nine confirmed instances during
+sources before proceeding. Thirty confirmed instances during
 Phases 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -987,6 +987,50 @@ Phases 1, 2, 4, and 5:
   all three instance-24 §7.0 site-enumeration carry-forwards
   in single workstream-session. Bumps Phase 1-5 instance
   count Twenty-eight → Twenty-nine.
+- **§3.9.2 KZG implementation Adamant-native posture**
+  (whitepaper 3.9.2) — Spec-author direction post-prior-
+  batch's WS3 honest-scope flag: extend Adamant-native
+  resistant-proof posture (§6.2.1.8 precedent) from the
+  Sui-Move bytecode-format layer to runtime cryptographic
+  operations. §3.9.2 line 371 originally mandated arkworks
+  ecosystem for KZG implementation. Three foundation gaps
+  surfaced at honest-scope-flag: arkworks ecosystem-skew
+  with existing RustCrypto pin discipline; first arkworks
+  integration in workspace adds audit-story surface;
+  external-dependency reliance contradicted resistant-
+  proof posture. Resolved by §3.9.2 amendment replacing
+  the arkworks mandate with Adamant-native commitment:
+  KZG operations (commit, open, verify) provided over the
+  project's existing `blst`-based BLS12-381 primitive
+  layer in `adamant-crypto`; standard polynomial
+  arithmetic implemented Adamant-native; no external KZG
+  library consumed. Trusted-setup-source language
+  (Ethereum KZG Powers of Tau ceremony output, July 2023
+  per §3.9.2 line 367 + §11.2 line 149) unchanged at this
+  amendment — math implementation is independent of
+  setup-source choice; setup-source amendment is a
+  separate constitutional-impact deliberation (Adamant
+  ceremony vs EthPoT reuse). Spec-vs-spec-inconsistency-
+  resolved-via-amendment 5th canonical instance (operating
+  well beyond rule-of-three threshold; pattern stable).
+  Amendment-mechanical-shape: in-place line replacement
+  (sub-shape 4 reused; existing canonical shape from
+  instance 25 §7.4.2). Three new methodology observations
+  registered: (1) Adamant-native-posture-extension-to-
+  runtime-cryptography 1st canonical instance — sibling
+  pattern to Phase 5/5b.1a/b bytecode-format fork
+  precedent. (2) External-dependency-avoidance
+  methodological consistency for runtime cryptography 1st
+  canonical instance. (3) Constitutional-impact-discipline-
+  shift-codified-in-spec-amendment 1st instance —
+  amendment crystallizes spec-author's project-wide
+  direction (no external networks; bounded ecosystem
+  RustCrypto + blst + workspace utility crates).
+  Companion CLAUDE.md update at this amendment codifies
+  the project-wide Adamant-native commitment going
+  forward (extending §13 resistant-proof posture from
+  Sui-Move-specific to all external dependencies).
+  Bumps Phase 1-5 instance count Twenty-nine → Thirty.
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
