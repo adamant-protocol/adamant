@@ -790,8 +790,7 @@ For clarity, the following are deliberately not specified in this section and ar
 - The recursive proof structure attesting to chain validity: deferred to section 8 (Consensus).
 - The genesis state, including the specific Powers of Tau parameters: deferred to section 11 (Genesis & Constitution).
 
-This section establishes the primitives. Subsequent sections specify how they are composed.
-# 4. Identity & Accounts
+This section establishes the primitives. Subsequent sections specify how they are composed.# 4. Identity & Accounts
 
 This section specifies how identity is represented on Adamant: how accounts are constructed, how keys authorise transactions, how users delegate visibility through view keys, and how recovery from key loss is handled. The design follows directly from the principles in section 2: privacy by default (II), permissionless participation (VII), and the cryptographic primitives in section 3.
 
@@ -995,8 +994,7 @@ Reference wallets `SHOULD` make this configuration achievable in approximately t
 
 This section briefly anticipates section 10 (Economics & Incentives). Account-related operations — creation, key rotation, validation logic invocation — are subject to the protocol's fee mechanism. The fee for account creation is paid by the creator. Validation logic invocation (which occurs for every transaction the account submits) is paid by whichever party the validation logic specifies as fee-payer; this enables sponsored transactions, where an application or paymaster pays fees on behalf of the user.
 
-Section 10 specifies fee structure in detail. The note here is that the smart-account model permits fee abstraction natively: the question of "who pays" is part of the validation logic, not a separate concept.
-# 5. Object Model & State
+Section 10 specifies fee structure in detail. The note here is that the smart-account model permits fee abstraction natively: the question of "who pays" is part of the validation logic, not a separate concept.# 5. Object Model & State
 
 This section specifies how Adamant represents data on the chain. It is the longest technical section in the whitepaper because the object model touches every other component: it determines what transactions can do, what the virtual machine operates on, what the consensus mechanism orders, what the privacy layer shields, and what the recursive verification proves.
 
@@ -1382,8 +1380,7 @@ A transfer transaction reads the sender's balance object, the recipient's balanc
 
 This pattern — global supply object plus per-holder balance objects — is the canonical fungible-token implementation on Adamant. It supports parallel processing (transfers between disjoint pairs of accounts do not conflict), it supports privacy (balances are shielded; transfers use stealth addresses; observers see only that *some* account transferred to *some other* account), and it is verifiable by recursive proofs (the chain's recursive proof attests that all balance changes are well-formed across all token types).
 
-Section 6 (the virtual machine) specifies how this pattern is expressed in the protocol's smart-contract language. Section 7 specifies the privacy mechanisms that shield the contents.
-# 6. Execution & Virtual Machine
+Section 6 (the virtual machine) specifies how this pattern is expressed in the protocol's smart-contract language. Section 7 specifies the privacy mechanisms that shield the contents.# 6. Execution & Virtual Machine
 
 This section specifies how transactions are executed on Adamant: the smart-contract language, the virtual machine, the parallel execution model, and the resource accounting (gas) framework. It builds directly on the object model of section 5 and is the layer at which user-defined logic interacts with chain state.
 
@@ -2099,7 +2096,17 @@ Smart contracts on Adamant are organised into *modules*, the same unit of code o
 
 Module deployment is a transaction whose effect is to create a new `Module` object on the chain. The `Module` object's `mutability` field is the module's declared mutability (from the `#[mutability(...)]` annotation, section 6.1.2). The module's bytecode is stored in the `contents` field.
 
-After deployment, contracts and other modules can reference the deployed module by its `ObjectId`, invoke its public functions, and read its public types.
+The `Module` object's fields are constructed as follows:
+
+- **`id`** — derived per section 5.1.1 from the deploying transaction's `TxHash` and the deployment's index within the transaction (transactions may deploy multiple modules atomically; the index disambiguates).
+- **`type_id`** — the genesis-fixed `TypeId` for `adamant::module::Module`, computed per section 5.1.2 over the canonical type identifier `(adamant_address, "module", "Module")` where `adamant_address` is the protocol-reserved address `0x1` (section 5.1.2's address-keyed namespace; `0x1` is the genesis-fixed address of the `adamant::*` standard library, parallel to Sui-Move's `0x1`/`0x2` system-address convention adapted for Adamant).
+- **`owner`** — `Ownership::Address(deploying_account)` taken from the transaction's `authorising_account` field. Modules are owned by the account that deployed them; the owner's authority over the module is bounded by the module's declared mutability (section 6.1.2). Stdlib modules deployed at genesis carry `Ownership::Shared` since they are not owned by any account.
+- **`mutability`** — the module's declared mutability, BCS-decoded from the `b"adamant.mutability"` metadata entry per section 6.2.1.3 and validated by validator Rule 1 (section 6.2.1.6).
+- **`lifecycle`** — `Active`. Modules use the standard object lifecycle (section 5.1.7); `Frozen` arises only via explicit `adamant::module::freeze` for `UpgradeableUntilFrozen` modules; `Archived` and `Destroyed` are the standard object-lifecycle states.
+- **`contents`** — the canonical Adamant Move bytecode of the module, byte-identical to the bytes that were validated by the deploy-time bytecode validator (section 6.2.1.6). Re-serialization of the validated `CompiledModule` and byte-comparison against the input is part of the validator's canonicality round-trip; the same bytes flow into `contents`.
+- **`metadata`** — the standard `ObjectMetadata` per section 5.1.6, with `creator` set to the deploying account and `proof_commitment` derived per the module-deployment commitment construction (deferred to section 7 for shielded deployments; transparent deployments commit to the bytecode hash).
+
+After deployment, contracts and other modules can reference the deployed module by its `ObjectId`, invoke its public functions, and read its public types. The `(deploying_address, module_name)` pair is also globally unique per the Move module-namespacing rule (section 6.2.1.3); the validator's `duplication_checker` pass rejects deployments that would create a name collision under the same deploying address.
 
 ### 6.4.2 Upgrade
 
@@ -2128,7 +2135,9 @@ For cases where breaking changes are desired, the standard pattern is to deploy 
 The protocol provides a standard library of modules, deployed at genesis with `Immutable` mutability. The standard library includes:
 
 - `adamant::primitives` — basic types (vectors, options, strings, etc.) and operations
-- `adamant::object` — object manipulation primitives
+- `adamant::module` — module deployment, upgrade, and freeze primitives invoked by the transaction format per section 6.0.2 line 97 (`adamant::module::deploy`) and section 6.4.2 (upgrade and freeze)
+- `adamant::tx_context` — transaction-context accessors (sender address, transaction hash, gas budget remaining) made available to executing bytecode by the runtime per section 6.2.2
+- `adamant::object` — object manipulation primitives (transfer, freeze, share, archive, restore)
 - `adamant::address` — address arithmetic and validation
 - `adamant::hash` — SHA-3 and BLAKE3 wrappers
 - `adamant::signature` — Ed25519 and ML-DSA verification
@@ -2139,6 +2148,8 @@ The protocol provides a standard library of modules, deployed at genesis with `I
 - `adamant::recovery` — social-recovery helpers for accounts
 
 Modules in the standard library are accessible from any contract without separate deployment. They are `Immutable` and cannot be modified post-genesis. A future hard fork may extend the standard library; existing standard-library modules are permanent.
+
+The `adamant::module`, `adamant::tx_context`, `adamant::object`, `adamant::hash`, `adamant::signature`, and `adamant::privacy` modules expose protocol-level operations that require runtime-side execution beyond what ordinary Adamant Move bytecode can express (chain-state mutation, cryptographic primitives, view-key release, etc.). Function calls to these modules' functions are dispatched by the runtime to native Rust handlers per the AVM's execution model (section 6.2.2). The dispatch is byte-identical from the caller's perspective to a normal `Call` instruction; the difference is internal to the runtime and consensus-binding via the genesis-fixed mapping from `(module_id, function_id)` to native handler. Adding or removing a native-dispatched stdlib function is a hard fork.
 
 The standard library is deliberately conservative. It provides the primitives applications need without prescribing application architectures. Higher-level patterns (decentralised exchange logic, lending protocols, identity systems, etc.) are expected to be implemented as user-deployed modules, not bundled into the standard library.
 
@@ -2726,8 +2737,7 @@ The privacy layer is constructed from peer-reviewed primitives composed in well-
 - **Encrypted memos** using ML-KEM-768 for sender-to-recipient context, post-quantum-secure
 - **Prover markets** for optional outsourcing of proof generation
 
-The contribution is the integration: a system where these primitives compose cleanly with the object model, the smart-contract language, and the consensus mechanism (specified in section 8 next), to deliver a chain that is genuinely private by default, post-quantum-secure at the privacy-relevant key-agreement surfaces, and genuinely usable.
-# 8. Consensus
+The contribution is the integration: a system where these primitives compose cleanly with the object model, the smart-contract language, and the consensus mechanism (specified in section 8 next), to deliver a chain that is genuinely private by default, post-quantum-secure at the privacy-relevant key-agreement surfaces, and genuinely usable.# 8. Consensus
 
 This section specifies how Adamant's validators agree on the order of transactions, the state of the chain, and the validity of each state transition. It is the longest technical section in this whitepaper because consensus is where the protocol's correctness, performance, and credible-neutrality properties are simultaneously realised.
 
