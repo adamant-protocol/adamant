@@ -180,6 +180,19 @@ pub enum VMError {
         /// The specific invariant that was violated.
         reason: InvariantViolationReason,
     },
+
+    /// `adamant::module::deploy` rejected the bytecode it was
+    /// asked to deploy. The wrapped
+    /// [`crate::validator::AdamantValidationError`] carries the
+    /// validator's specific rejection reason.
+    ///
+    /// Boxed because [`crate::validator::AdamantValidationError`]
+    /// is a large enum (66 variants per Phase 5/5b.5 closure);
+    /// boxing keeps `VMError`'s discriminant size small.
+    ModuleDeploymentFailed {
+        /// The validator's rejection reason, boxed for size.
+        error: Box<crate::validator::AdamantValidationError>,
+    },
 }
 
 impl From<LoadError> for VMError {
@@ -383,6 +396,33 @@ pub enum InvariantViolationReason {
     /// forward-compatibility with future state-mutating handlers
     /// (`adamant::module::deploy`, `adamant::object::*`).
     NativeHandlerMutatedFrameStack,
+
+    /// A native-dispatched stdlib handler that requires a
+    /// [`crate::runtime::native::TransactionContext`] was invoked
+    /// without one.
+    ///
+    /// Pure-function handlers (`hash`, `signature`, `address`)
+    /// don't need a transaction context. Chain-state-mutating
+    /// handlers (`adamant::tx_context::*`,
+    /// `adamant::module::deploy`, `adamant::object::*`) do.
+    /// Reaching this variant indicates a handler invoked outside
+    /// a top-level executor context — only legitimate during unit
+    /// tests of pure-function handlers, where the dispatch path
+    /// shouldn't reach this branch.
+    NativeContextMissingTxContext,
+
+    /// A native-dispatched stdlib handler reached an
+    /// `AccountRef::Shielded(StealthCommitment)` authorising
+    /// account, but the cleartext-address resolution for shielded
+    /// accounts depends on §7 (privacy layer).
+    ///
+    /// Specifically, `adamant::tx_context::sender` for shielded
+    /// transactions returns the recipient's stealth address (or
+    /// the de-shielded sender, depending on view-key context); §7
+    /// pins the resolution. Until §7 lands, shielded sender
+    /// resolution is not implementable, and this variant signals
+    /// the boundary.
+    ShieldedSenderRequiresPrivacyLayer,
 }
 
 /// Closed sub-reason enum for [`VMError::AbortError`].

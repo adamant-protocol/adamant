@@ -103,7 +103,7 @@ pub use interpreter::{DispatchOutcome, InterpreterState};
 pub use module_resolver_adapter::{LoadedModulesResolver, MalformedSelfHandle};
 pub use native::{
     native_key_from_handle, NativeContext, NativeFunction, NativeKey, NativeRegistry,
-    STDLIB_ADDRESS,
+    TransactionContext, STDLIB_ADDRESS,
 };
 pub use runtime_value::{
     compare_unsigned, Container, Reference, RuntimeStructValue, RuntimeValue, RuntimeVariantValue,

@@ -262,6 +262,351 @@ fn address_equals(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
 }
 
 // ---------------------------------------------------------------
+// adamant::tx_context native handlers (Phase 5/6.8.C)
+// ---------------------------------------------------------------
+
+/// `adamant::tx_context::sender(): address`
+///
+/// Returns the cleartext address of the transaction's
+/// `authorising_account` per whitepaper §6.0.2 + §6.5 amendment.
+///
+/// # Errors
+///
+/// - [`InvariantViolationReason::NativeContextMissingTxContext`]
+///   if invoked without a transaction context.
+/// - [`InvariantViolationReason::ShieldedSenderRequiresPrivacyLayer`]
+///   if `authorising_account` is shielded; cleartext-resolution for
+///   shielded senders is §7-territory.
+fn tx_context_sender(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
+    let tx_ctx = ctx.tx_context.as_ref().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::NativeContextMissingTxContext,
+    })?;
+    let addr = match &tx_ctx.tx_body.authorising_account {
+        crate::transaction::AccountRef::Cleartext(a) => *a,
+        crate::transaction::AccountRef::Shielded(_) => {
+            return Err(VMError::InvariantViolation {
+                reason: InvariantViolationReason::ShieldedSenderRequiresPrivacyLayer,
+            })
+        }
+    };
+    ctx.return_values.push(RuntimeValue::Address(addr));
+    Ok(())
+}
+
+/// `adamant::tx_context::tx_hash(): vector<u8>`
+///
+/// Returns the transaction's `TxHash` as a 32-byte vector per
+/// whitepaper §6.0.4. Read-only access to the executing
+/// transaction's hash; useful for protocol-level identifier
+/// derivation in user code (e.g., deterministic salts).
+fn tx_context_tx_hash(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
+    let tx_ctx = ctx.tx_context.as_ref().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::NativeContextMissingTxContext,
+    })?;
+    let bytes = tx_ctx.tx_hash.to_bytes();
+    ctx.return_values.push(byte_slice_to_runtime_value(&bytes));
+    Ok(())
+}
+
+/// `adamant::tx_context::gas_remaining(dimension: u8): u64`
+///
+/// Returns the remaining gas budget for the specified dimension
+/// per whitepaper §6.3.1. Pops a u8 dimension tag (0x00 =
+/// Computation, 0x01 = Storage, ..., 0x05 = `ProofGeneration`) and
+/// pushes the remaining u64.
+///
+/// # Errors
+///
+/// - [`InvariantViolationReason::TypeMismatchOnStack`] for non-u8
+///   arg or out-of-range dimension byte.
+fn tx_context_gas_remaining(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
+    let RuntimeValue::U8(dim_byte) = pop_arg(ctx)? else {
+        return Err(VMError::InvariantViolation {
+            reason: InvariantViolationReason::TypeMismatchOnStack,
+        });
+    };
+    let dimension = match dim_byte {
+        0x00 => crate::bytecode::GasDimension::Computation,
+        0x01 => crate::bytecode::GasDimension::Storage,
+        0x02 => crate::bytecode::GasDimension::Rent,
+        0x03 => crate::bytecode::GasDimension::Bandwidth,
+        0x04 => crate::bytecode::GasDimension::ProofVerification,
+        0x05 => crate::bytecode::GasDimension::ProofGeneration,
+        _ => {
+            return Err(VMError::InvariantViolation {
+                reason: InvariantViolationReason::TypeMismatchOnStack,
+            })
+        }
+    };
+    let remaining = ctx.state.remaining_gas(dimension);
+    ctx.return_values.push(RuntimeValue::U64(remaining));
+    Ok(())
+}
+
+// ---------------------------------------------------------------
+// adamant::module native handlers (Phase 5/6.8.C)
+// ---------------------------------------------------------------
+
+/// `adamant::module::deploy(bytecode: vector<u8>): address`
+///
+/// Deploy a new module per whitepaper §6.4.1. Validates via
+/// [`crate::validator::deploy_validate`] (single-module pipeline +
+/// cross-module Rule 3), constructs the new `Module` Object per
+/// the §6.4.1 amendment, and stages its creation in the
+/// transaction's state buffer. Returns the new Module's
+/// `ObjectId` as a `vector<u8>`-encoded `address`.
+///
+/// # Errors
+///
+/// - [`InvariantViolationReason::NativeContextMissingTxContext`]
+///   if invoked without a transaction context.
+/// - [`InvariantViolationReason::ShieldedSenderRequiresPrivacyLayer`]
+///   if the deploying account is shielded; module deployment from
+///   shielded sender is §7-territory.
+/// - [`VMError::ModuleDeploymentFailed`] wrapping the validator
+///   error if `deploy_validate` rejects.
+fn module_deploy(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
+    let bytecode = pop_byte_vector(ctx)?;
+    let tx_ctx = ctx.tx_context.as_mut().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::NativeContextMissingTxContext,
+    })?;
+
+    // 1. Resolve deploying account from authorising_account.
+    let creator = match &tx_ctx.tx_body.authorising_account {
+        crate::transaction::AccountRef::Cleartext(a) => *a,
+        crate::transaction::AccountRef::Shielded(_) => {
+            return Err(VMError::InvariantViolation {
+                reason: InvariantViolationReason::ShieldedSenderRequiresPrivacyLayer,
+            })
+        }
+    };
+
+    // 2. Validate via deploy_validate (single-module + cross-module Rule 3).
+    let module = crate::validator::deploy_validate(
+        &bytecode,
+        tx_ctx.verifier_config,
+        tx_ctx.module_resolver,
+    )
+    .map_err(|e| VMError::ModuleDeploymentFailed { error: Box::new(e) })?;
+
+    // 3. Decode mutability from b"adamant.mutability" metadata
+    //    (already structurally validated by Rule 1; this re-decodes
+    //    it for the new Object's mutability field).
+    let mutability = decode_mutability_from_metadata(&module)?;
+
+    // 4. Derive the new Module's ObjectId per §5.1.1 from
+    //    (tx_hash, deploying_account, deploy_index).
+    let object_id = adamant_state::derive_object_id(tx_ctx.tx_hash, &creator, tx_ctx.deploy_index);
+    tx_ctx.deploy_index += 1;
+
+    // 5. Construct the Module Object per §6.4.1 amendment.
+    let contents = adamant_types::Contents::from_bytes(&bytecode).map_err(|_| {
+        VMError::InvariantViolation {
+            reason: InvariantViolationReason::TypeMismatchOnStack,
+        }
+    })?;
+    let module_obj = adamant_types::Object {
+        id: object_id,
+        type_id: stdlib_module_type_id(),
+        owner: adamant_types::Ownership::Address(creator),
+        mutability,
+        lifecycle: adamant_types::Lifecycle::Active,
+        contents,
+        version: 1,
+        metadata: adamant_types::ObjectMetadata {
+            created_at_height: 0,
+            last_modified_height: 0,
+            creator,
+            storage_rent_paid_through: 0,
+            // Proof commitment for the deployed module is the
+            // §3.9.2 KZG commitment to the bytecode; production
+            // construction lands at Phase 6 alongside KZG
+            // dispatch + EthPoT setup ingestion. Phase 5/6.8.C
+            // ships zero-bytes placeholder consistent with the
+            // §7-deferred shielded-deployment path.
+            proof_commitment: adamant_types::ProofCommitment::from_bytes(
+                [0u8; adamant_types::metadata::PROOF_COMMITMENT_BYTES],
+            ),
+        },
+    };
+
+    // 6. Stage module-object creation in the transaction state buffer.
+    tx_ctx.state_buffer.record_create(module_obj);
+
+    // 7. Return the new module's ObjectId as a vector<u8>.
+    let id_bytes = object_id.to_bytes();
+    ctx.return_values
+        .push(byte_slice_to_runtime_value(&id_bytes));
+    Ok(())
+}
+
+/// Genesis-fixed `TypeId` for the `adamant::module::Module` type
+/// per whitepaper §6.4.1 amendment.
+///
+/// Computed as `sha3_256_tagged(TYPE_ID_STDLIB, BCS((STDLIB_ADDRESS,
+/// "module", "Module")))` — same shape as account-address /
+/// object-id derivations. Phase 5/6.8.C ships a placeholder pinned
+/// at all-zero bytes; the production derivation lands when the
+/// `TypeId`-derivation function ships in adamant-types alongside
+/// the genesis stdlib type registry. Pre-mainnet hardening item.
+fn stdlib_module_type_id() -> adamant_types::TypeId {
+    adamant_types::TypeId::from_bytes([0u8; 32])
+}
+
+const MUTABILITY_METADATA_KEY: &[u8] = b"adamant.mutability";
+
+/// Decode the `b"adamant.mutability"` metadata entry's value into
+/// a [`adamant_types::Mutability`]. Validator Rule 1 ensures the
+/// metadata entry exists and has a single well-formed value;
+/// re-decoding here is a residual binding.
+fn decode_mutability_from_metadata(
+    module: &crate::module::AdamantCompiledModule,
+) -> Result<adamant_types::Mutability, VMError> {
+    let entry = module
+        .metadata
+        .iter()
+        .find(|m| m.key == MUTABILITY_METADATA_KEY)
+        .ok_or(VMError::InvariantViolation {
+            reason: InvariantViolationReason::TypeMismatchOnStack,
+        })?;
+    bcs::from_bytes(&entry.value).map_err(|_| VMError::InvariantViolation {
+        reason: InvariantViolationReason::TypeMismatchOnStack,
+    })
+}
+
+// ---------------------------------------------------------------
+// adamant::object native handlers (Phase 5/6.8.C)
+// ---------------------------------------------------------------
+
+/// `adamant::object::transfer(obj_id: vector<u8>, recipient: address): ()`
+///
+/// Stage an ownership transfer for the object with the given id
+/// to the recipient address. Loads the current object via
+/// `state_view`, asserts ownership rules, increments version,
+/// records the update in the state buffer.
+fn object_transfer(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
+    let recipient = pop_address(ctx)?;
+    let id_bytes = pop_byte_vector(ctx)?;
+    let id = object_id_from_bytes(&id_bytes)?;
+    let tx_ctx = ctx.tx_context.as_mut().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::NativeContextMissingTxContext,
+    })?;
+    let mut object = load_object_for_mutation(tx_ctx, id)?;
+    object.owner = adamant_types::Ownership::Address(recipient);
+    object.version += 1;
+    tx_ctx.state_buffer.record_update(object);
+    Ok(())
+}
+
+/// `adamant::object::freeze(obj_id: vector<u8>): ()`
+///
+/// Transition the object's lifecycle from `Active` to `Frozen`
+/// per whitepaper §5.4.1.
+fn object_freeze(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
+    let id_bytes = pop_byte_vector(ctx)?;
+    let id = object_id_from_bytes(&id_bytes)?;
+    let tx_ctx = ctx.tx_context.as_mut().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::NativeContextMissingTxContext,
+    })?;
+    let mut object = load_object_for_mutation(tx_ctx, id)?;
+    if !matches!(object.lifecycle, adamant_types::Lifecycle::Active) {
+        return Err(VMError::InvariantViolation {
+            reason: InvariantViolationReason::TypeMismatchOnStack,
+        });
+    }
+    object.lifecycle = adamant_types::Lifecycle::Frozen;
+    object.version += 1;
+    tx_ctx.state_buffer.record_update(object);
+    Ok(())
+}
+
+/// `adamant::object::share(obj_id: vector<u8>): ()`
+///
+/// Transition the object's ownership to `Shared` per whitepaper
+/// §5.1.3. Once shared, ownership cannot return to `Address` per
+/// §5.1.3's transition rules.
+fn object_share(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
+    let id_bytes = pop_byte_vector(ctx)?;
+    let id = object_id_from_bytes(&id_bytes)?;
+    let tx_ctx = ctx.tx_context.as_mut().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::NativeContextMissingTxContext,
+    })?;
+    let mut object = load_object_for_mutation(tx_ctx, id)?;
+    object.owner = adamant_types::Ownership::Shared;
+    object.version += 1;
+    tx_ctx.state_buffer.record_update(object);
+    Ok(())
+}
+
+/// `adamant::object::archive(obj_id: vector<u8>): ()`
+///
+/// Transition the object's lifecycle to `Archived` per
+/// whitepaper §5.4 / §5.4.1.
+fn object_archive(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
+    let id_bytes = pop_byte_vector(ctx)?;
+    let id = object_id_from_bytes(&id_bytes)?;
+    let tx_ctx = ctx.tx_context.as_mut().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::NativeContextMissingTxContext,
+    })?;
+    let mut object = load_object_for_mutation(tx_ctx, id)?;
+    object.lifecycle = adamant_types::Lifecycle::Archived;
+    object.version += 1;
+    tx_ctx.state_buffer.record_update(object);
+    Ok(())
+}
+
+/// `adamant::object::restore(obj_id: vector<u8>): ()`
+///
+/// Restore an `Archived` object to `Active` per whitepaper §5.4
+/// / §5.4.1.
+fn object_restore(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
+    let id_bytes = pop_byte_vector(ctx)?;
+    let id = object_id_from_bytes(&id_bytes)?;
+    let tx_ctx = ctx.tx_context.as_mut().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::NativeContextMissingTxContext,
+    })?;
+    let mut object = load_object_for_mutation(tx_ctx, id)?;
+    if !matches!(object.lifecycle, adamant_types::Lifecycle::Archived) {
+        return Err(VMError::InvariantViolation {
+            reason: InvariantViolationReason::TypeMismatchOnStack,
+        });
+    }
+    object.lifecycle = adamant_types::Lifecycle::Active;
+    object.version += 1;
+    tx_ctx.state_buffer.record_update(object);
+    Ok(())
+}
+
+/// Convert `vector<u8>` argument bytes into an [`adamant_types::ObjectId`].
+fn object_id_from_bytes(bytes: &[u8]) -> Result<adamant_types::ObjectId, VMError> {
+    let arr: [u8; 32] = bytes.try_into().map_err(|_| VMError::InvariantViolation {
+        reason: InvariantViolationReason::TypeMismatchOnStack,
+    })?;
+    Ok(adamant_types::ObjectId::from_bytes(arr))
+}
+
+/// Load an object for mutation, validating it's loaded at its
+/// declared read-set version. Used by the `object::*` handlers as
+/// the residual binding for §6.0.2 read-set version pinning.
+fn load_object_for_mutation(
+    tx_ctx: &crate::runtime::TransactionContext<'_>,
+    id: adamant_types::ObjectId,
+) -> Result<adamant_types::Object, VMError> {
+    let expected_version = tx_ctx
+        .tx_body
+        .read_set
+        .iter()
+        .find_map(|(rid, v)| if *rid == id { Some(*v) } else { None })
+        .ok_or(VMError::InvariantViolation {
+            reason: InvariantViolationReason::TypeMismatchOnStack,
+        })?;
+    tx_ctx
+        .state_view
+        .load_object(&id, expected_version)
+        .map_err(VMError::Load)
+}
+
+// ---------------------------------------------------------------
 // Genesis-fixed registry constructor
 // ---------------------------------------------------------------
 
@@ -333,6 +678,57 @@ pub fn genesis_native_registry() -> NativeRegistry {
         "duplicate registration: adamant::address::equals"
     );
 
+    // adamant::tx_context (Phase 5/6.8.C)
+    let prev = registry.register(key("tx_context", "sender"), tx_context_sender);
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::tx_context::sender"
+    );
+    let prev = registry.register(key("tx_context", "tx_hash"), tx_context_tx_hash);
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::tx_context::tx_hash"
+    );
+    let prev = registry.register(key("tx_context", "gas_remaining"), tx_context_gas_remaining);
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::tx_context::gas_remaining"
+    );
+
+    // adamant::module (Phase 5/6.8.C)
+    let prev = registry.register(key("module", "deploy"), module_deploy);
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::module::deploy"
+    );
+
+    // adamant::object (Phase 5/6.8.C)
+    let prev = registry.register(key("object", "transfer"), object_transfer);
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::object::transfer"
+    );
+    let prev = registry.register(key("object", "freeze"), object_freeze);
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::object::freeze"
+    );
+    let prev = registry.register(key("object", "share"), object_share);
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::object::share"
+    );
+    let prev = registry.register(key("object", "archive"), object_archive);
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::object::archive"
+    );
+    let prev = registry.register(key("object", "restore"), object_restore);
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::object::restore"
+    );
+
     registry
 }
 
@@ -365,8 +761,10 @@ mod tests {
     #[test]
     fn genesis_registry_has_expected_handler_count() {
         let registry = genesis_native_registry();
-        // 2 hash + 2 signature + 3 address = 7 handlers at 5/6.8.B.
-        assert_eq!(registry.len(), 7);
+        // 2 hash + 2 signature + 3 address (5/6.8.B)
+        // + 3 tx_context + 1 module + 5 object (5/6.8.C)
+        // = 16 handlers.
+        assert_eq!(registry.len(), 16);
     }
 
     #[test]

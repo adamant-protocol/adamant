@@ -87,6 +87,7 @@ version = "0.0.1"
 dependencies = [
  "adamant-bytecode-format",
  "adamant-crypto",
+ "adamant-state",
  "adamant-types",
  "bcs",
  "hex",

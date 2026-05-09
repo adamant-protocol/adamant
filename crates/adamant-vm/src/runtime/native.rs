@@ -149,10 +149,24 @@ pub struct NativeContext<'a> {
     /// Order is `return_values[0]` is the first return, matching
     /// the function's declared return signature.
     pub return_values: Vec<RuntimeValue>,
+    /// Optional transaction-execution context. Populated by the
+    /// top-level executor when it wires §6.2.2 step-5 dispatch.
+    /// Phase 5/6.8.C chain-state-mutating handlers
+    /// (`adamant::tx_context::*`, `adamant::module::deploy`,
+    /// `adamant::object::*`) consult this; pure-function handlers
+    /// (`hash`, `signature`, `address`) ignore it.
+    ///
+    /// `None` for handlers invoked outside a transaction context
+    /// (unit tests of pure-function handlers, REPL-style
+    /// invocations). Chain-state-mutating handlers return
+    /// [`crate::runtime::error::InvariantViolationReason::NativeContextMissingTxContext`]
+    /// when this is `None` but the handler requires it.
+    pub tx_context: Option<&'a mut TransactionContext<'a>>,
 }
 
 impl<'a> NativeContext<'a> {
-    /// Construct a fresh [`NativeContext`].
+    /// Construct a fresh [`NativeContext`] without transaction
+    /// context. Used by pure-function handlers and tests.
     pub fn new(
         state: &'a mut InterpreterState,
         module: &'a AdamantCompiledModule,
@@ -163,8 +177,86 @@ impl<'a> NativeContext<'a> {
             module,
             args,
             return_values: Vec::new(),
+            tx_context: None,
         }
     }
+
+    /// Construct a [`NativeContext`] with full transaction-execution
+    /// context. Used by the top-level executor (Phase 5/6.10) when
+    /// it wires §6.2.2 step-5 dispatch for chain-state-mutating
+    /// handlers.
+    pub fn new_with_tx_context(
+        state: &'a mut InterpreterState,
+        module: &'a AdamantCompiledModule,
+        args: Vec<RuntimeValue>,
+        tx_context: &'a mut TransactionContext<'a>,
+    ) -> Self {
+        Self {
+            state,
+            module,
+            args,
+            return_values: Vec::new(),
+            tx_context: Some(tx_context),
+        }
+    }
+}
+
+/// Transaction-execution context provided to chain-state-mutating
+/// native handlers per whitepaper §6.5 amendment.
+///
+/// Bundles the references that handlers like `adamant::module::deploy`,
+/// `adamant::object::transfer`, and `adamant::tx_context::sender`
+/// need to consult chain state and stage state-changes against the
+/// transaction-local buffer. The top-level executor (Phase 5/6.10)
+/// constructs this once per transaction and threads it through every
+/// dispatched native call.
+///
+/// Pure-function handlers (`hash`, `signature`, `address`) do not
+/// receive a [`TransactionContext`] — they operate purely on the
+/// `args` and `return_values` channels of [`NativeContext`].
+pub struct TransactionContext<'a> {
+    /// The transaction's body — provides `authorising_account`,
+    /// `read_set`, `write_set`, `created_objects`, `gas_budget`,
+    /// `call`, etc. Read by `adamant::tx_context::sender` (returns
+    /// the cleartext authorising account address) and by
+    /// `adamant::module::deploy` (uses the deploying account for
+    /// the new Module object's ownership).
+    pub tx_body: &'a crate::transaction::TxBody,
+    /// The transaction's hash, derived once at top-level executor
+    /// entry per whitepaper §6.0.4. Read by
+    /// `adamant::tx_context::tx_hash` (returns the bytes) and by
+    /// `adamant::module::deploy` (used in the §5.1.1 `ObjectId`
+    /// derivation for the new Module).
+    pub tx_hash: &'a adamant_types::TxHash,
+    /// Read-only view of chain state at the transaction's load
+    /// point. Used by handlers that need to consult already-loaded
+    /// objects (e.g., to look up the current owner before
+    /// validating a transfer authorization).
+    pub state_view: &'a dyn crate::runtime::state_view::StateView,
+    /// Mutable transaction-local state buffer per whitepaper
+    /// §6.2.2 step 5. Chain-state-mutating handlers
+    /// (`adamant::module::deploy`, `adamant::object::transfer`,
+    /// `adamant::object::freeze`, etc.) record their state-changes
+    /// here; the top-level executor's step-7 commit applies the
+    /// buffer atomically on successful execution.
+    pub state_buffer: &'a mut crate::runtime::state_buffer::TransactionStateBuffer,
+    /// Module resolver for cross-module Rule 3 verification at
+    /// `adamant::module::deploy`. Backed by the transaction's
+    /// loaded read-set per [`crate::runtime::LoadedModulesResolver`].
+    pub module_resolver: &'a dyn crate::validator::ModuleResolver,
+    /// Verifier configuration (genesis-fixed structural limits)
+    /// passed to `validator::deploy_validate` from
+    /// `adamant::module::deploy`. Held as a reference so the
+    /// top-level executor's caller controls the configuration.
+    pub verifier_config: &'a crate::validator::AdamantVerifierConfig,
+    /// Monotonic deploy-counter per whitepaper §5.1.1 / §6.4.1
+    /// amendment. Each `adamant::module::deploy` call within a
+    /// single transaction reads the current value, derives the new
+    /// Module's `ObjectId` from `(tx_hash, deploying_account, *index)`,
+    /// then increments. Same shape as
+    /// [`crate::transaction::TxBody::created_objects`]'s implicit
+    /// per-creation index.
+    pub deploy_index: u64,
 }
 
 /// Function pointer signature for a native-dispatched handler.
