@@ -70,6 +70,7 @@ dependencies = [
  "hex",
  "hex-literal",
  "pasta_curves",
+ "rand_core 0.10.1",
  "serde",
  "serde-big-array",
  "subtle",

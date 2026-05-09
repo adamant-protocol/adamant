@@ -287,6 +287,47 @@ pub static NULLIFIER_KEY_DERIVATION: DomainTag =
 pub static STEALTH_SHARED_SCALAR: DomainTag =
     DomainTag::new(b"ADAMANT-v1-stealth-shared-scalar");
 
+/// `EncryptedNote` symmetric-key derivation domain tag, per
+/// whitepaper section 7.3.1.1 (`domain_tag_note_key`). The exact
+/// byte string `b"ADAMANT-v1-note-key"` is pinned by the spec.
+///
+/// Used as the salt input to HKDF-SHA3-256 for `note_key`
+/// derivation:
+///
+/// ```text
+/// note_key = HKDF-SHA3(
+///     salt = NOTE_KEY_tag_bytes,
+///     ikm  = ss,
+///     info = note_position_bytes,
+///     L    = 32
+/// )
+/// ```
+///
+/// where `ss` is the per-note ML-KEM-768 shared secret per
+/// §7.2.2 and `note_position_bytes` is the 8-byte little-endian
+/// note position in the global note commitment tree per §7.1.3.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 6.7.
+pub static NOTE_KEY: DomainTag = DomainTag::new(b"ADAMANT-v1-note-key");
+
+/// `EncryptedNote` nonce derivation domain tag, per whitepaper
+/// section 7.3.1.1 (`domain_tag_note_nonce`). The exact byte
+/// string `b"ADAMANT-v1-note-nonce"` is pinned by the spec.
+///
+/// Used in `note_nonce = SHA3_256(ss || domain_tag_note_nonce)[0..12]`
+/// where `ss` is the per-note ML-KEM-768 shared secret. The
+/// 12-byte truncation matches ChaCha20-Poly1305's 96-bit nonce
+/// width per §3.5. Composition uses the BIP-340 tagged-SHA3-256
+/// construction ([`crate::hash::sha3_256_tagged`]).
+///
+/// Distinct from [`MEMO_NONCE`] so the note-payload nonce and
+/// memo nonce derived from the same `ss` cannot collide.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 6.7.
+pub static NOTE_NONCE: DomainTag = DomainTag::new(b"ADAMANT-v1-note-nonce");
+
 /// Memo-key derivation domain tag, per whitepaper section 7.6.1
 /// (`domain_tag_memo`).
 ///

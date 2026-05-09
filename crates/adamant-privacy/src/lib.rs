@@ -41,6 +41,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod encrypted_note;
 pub mod gnct;
 pub mod memo;
 pub mod note;
@@ -49,6 +50,11 @@ pub mod poseidon;
 pub mod stealth;
 pub mod view_key;
 
+pub use encrypted_note::{
+    decapsulate_for_recipient, decrypt_note_for_recipient, encapsulate_for_recipient,
+    encrypt_note_for_recipient, EncryptedNote, NoteDecryptError, AUTH_TAG_BYTES,
+    ML_KEM_CIPHERTEXT_BYTES,
+};
 pub use gnct::{
     verify_membership, GlobalNoteCommitmentTree, MerklePath, MerkleRoot, TreeFull, GNCT_DEPTH,
     GNCT_MAX_LEAVES, GNCT_RECENT_ROOTS_WINDOW,
