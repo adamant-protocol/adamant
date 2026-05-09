@@ -186,9 +186,8 @@ impl KzgSetup {
     ///
     /// # Panics
     ///
-    /// Panics if `tau` is zero (degenerate setup) or if
-    /// `max_degree == 0` would still be a valid setup but is
-    /// disallowed for clarity.
+    /// Panics if `tau` is zero (degenerate setup — every `g^{τ^i}`
+    /// for `i ≥ 1` would collapse to the identity).
     #[cfg(test)]
     pub(crate) fn generate_for_testing(tau: &Scalar, max_degree: usize) -> Self {
         assert!(*tau != Scalar::zero(), "τ must be non-zero");
@@ -229,9 +228,9 @@ pub enum KzgError {
 impl core::fmt::Display for KzgError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::DegreeExceedsSetup => f.write_str(
-                "polynomial degree exceeds trusted-setup maximum supported degree",
-            ),
+            Self::DegreeExceedsSetup => {
+                f.write_str("polynomial degree exceeds trusted-setup maximum supported degree")
+            }
         }
     }
 }
@@ -315,11 +314,7 @@ pub fn open(
 /// `p(x) − y = (x − z)·q(x)`, which expands to
 /// `b_{n-1} = c_n`, `b_{i-1} = c_i + z·b_i` for `i = n-1..1`.
 /// The constant `c_0 − y + z·b_0` equals zero by construction.
-fn quotient_polynomial(
-    polynomial: &Polynomial,
-    z: &Scalar,
-    evaluation: &Scalar,
-) -> Polynomial {
+fn quotient_polynomial(polynomial: &Polynomial, z: &Scalar, evaluation: &Scalar) -> Polynomial {
     let coeffs = &polynomial.coefficients;
     if coeffs.is_empty() {
         // Zero polynomial: quotient is also zero.

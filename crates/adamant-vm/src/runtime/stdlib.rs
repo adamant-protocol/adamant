@@ -7,15 +7,15 @@
 //!
 //! Per whitepaper §6.5 amendment, the runtime-dispatched stdlib
 //! modules are: `adamant::module`, `adamant::tx_context`,
-//! `adamant::object`, `adamant::hash`, `adamant::signature`, and
-//! `adamant::privacy`. The remainder (`adamant::primitives`,
-//! `adamant::address`, `adamant::token`, `adamant::nft`,
+//! `adamant::object`, `adamant::hash`, `adamant::signature`,
+//! `adamant::privacy`, and `adamant::address`. The remainder
+//! (`adamant::primitives`, `adamant::token`, `adamant::nft`,
 //! `adamant::governance`, `adamant::recovery`) are application-
 //! level Move modules. Phase 5/6.8 ships handlers for the
-//! pure-function subset (hash + signature + basic address
-//! accessors); the chain-state-mutating handlers
-//! (`adamant::module::deploy`, `adamant::object::transfer/freeze/
-//! share`, `adamant::tx_context::sender`) require additional
+//! pure-function subset (hash + signature + address); the chain-
+//! state-mutating handlers (`adamant::module::deploy`,
+//! `adamant::object::transfer/freeze/share`,
+//! `adamant::tx_context::sender`) require additional
 //! [`crate::runtime::NativeContext`] extensions and ship in
 //! follow-up sub-arcs.
 //!
@@ -266,9 +266,8 @@ fn address_equals(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
 // ---------------------------------------------------------------
 
 fn ident(s: &str) -> Identifier {
-    Identifier::new(s).unwrap_or_else(|_| {
-        panic!("stdlib identifier `{s}` must be a valid Adamant identifier")
-    })
+    Identifier::new(s)
+        .unwrap_or_else(|_| panic!("stdlib identifier `{s}` must be a valid Adamant identifier"))
 }
 
 fn key(module: &str, function: &str) -> NativeKey {
@@ -292,9 +291,15 @@ pub fn genesis_native_registry() -> NativeRegistry {
 
     // adamant::hash
     let prev = registry.register(key("hash", "sha3_256"), hash_sha3_256);
-    debug_assert!(prev.is_none(), "duplicate registration: adamant::hash::sha3_256");
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::hash::sha3_256"
+    );
     let prev = registry.register(key("hash", "blake3"), hash_blake3);
-    debug_assert!(prev.is_none(), "duplicate registration: adamant::hash::blake3");
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::hash::blake3"
+    );
 
     // adamant::signature
     let prev = registry.register(key("signature", "verify_ed25519"), signature_verify_ed25519);
@@ -313,11 +318,20 @@ pub fn genesis_native_registry() -> NativeRegistry {
 
     // adamant::address
     let prev = registry.register(key("address", "to_bytes"), address_to_bytes);
-    debug_assert!(prev.is_none(), "duplicate registration: adamant::address::to_bytes");
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::address::to_bytes"
+    );
     let prev = registry.register(key("address", "from_bytes"), address_from_bytes);
-    debug_assert!(prev.is_none(), "duplicate registration: adamant::address::from_bytes");
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::address::from_bytes"
+    );
     let prev = registry.register(key("address", "equals"), address_equals);
-    debug_assert!(prev.is_none(), "duplicate registration: adamant::address::equals");
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::address::equals"
+    );
 
     registry
 }

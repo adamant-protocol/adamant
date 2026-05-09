@@ -2455,9 +2455,7 @@ mod tests {
     /// Pushes the sentinel `0xCAFE` value onto the caller's stack
     /// via the [`NativeContext`] return-values channel.
     #[allow(clippy::unnecessary_wraps, reason = "match NativeFunction signature")]
-    fn native_probe_handler(
-        ctx: &mut crate::runtime::NativeContext<'_>,
-    ) -> Result<(), VMError> {
+    fn native_probe_handler(ctx: &mut crate::runtime::NativeContext<'_>) -> Result<(), VMError> {
         ctx.return_values.push(RuntimeValue::U64(0xCAFE));
         Ok(())
     }
@@ -3960,11 +3958,11 @@ mod tests {
     /// return values appear on the caller frame's stack.
     #[test]
     fn run_invokes_native_handler_when_registered() {
+        use crate::runtime::{NativeFunction, NativeKey, NativeRegistry, STDLIB_ADDRESS};
         use adamant_bytecode_format::{
             AddressIdentifierIndex, FunctionHandle, IdentifierIndex, ModuleHandle,
             ModuleHandleIndex, Signature, SignatureIndex,
         };
-        use crate::runtime::{NativeFunction, NativeKey, NativeRegistry, STDLIB_ADDRESS};
 
         let mut module = empty_module();
         // Wire a stdlib function handle for `0x1::probe::native`.
@@ -4012,7 +4010,9 @@ mod tests {
                     None
                 } else {
                     fired.set(true);
-                    Some(BytecodeInstruction::Inherited(Bytecode::Call(target_handle)))
+                    Some(BytecodeInstruction::Inherited(Bytecode::Call(
+                        target_handle,
+                    )))
                 }
             },
             Some(&registry),

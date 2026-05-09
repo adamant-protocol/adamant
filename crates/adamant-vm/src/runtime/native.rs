@@ -361,10 +361,16 @@ mod tests {
             ident("module"),
             ident("deploy"),
         );
-        assert_ne!(key_a, key_other_addr, "different address means distinct key");
+        assert_ne!(
+            key_a, key_other_addr,
+            "different address means distinct key"
+        );
 
         let key_other_module = NativeKey::new(STDLIB_ADDRESS, ident("hash"), ident("deploy"));
-        assert_ne!(key_a, key_other_module, "different module means distinct key");
+        assert_ne!(
+            key_a, key_other_module,
+            "different module means distinct key"
+        );
 
         let key_other_fn = NativeKey::new(STDLIB_ADDRESS, ident("module"), ident("upgrade"));
         assert_ne!(key_a, key_other_fn, "different function means distinct key");

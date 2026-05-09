@@ -1608,7 +1608,10 @@ mod tests {
         let resolver = InMemoryModuleResolver::new();
         let result = deploy_validate(&bytes, &config, &resolver);
         assert!(
-            matches!(result, Err(AdamantValidationError::MissingMutabilityMetadata)),
+            matches!(
+                result,
+                Err(AdamantValidationError::MissingMutabilityMetadata)
+            ),
             "deploy_validate must surface single-module errors verbatim; got {result:?}"
         );
     }

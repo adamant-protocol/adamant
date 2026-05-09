@@ -69,13 +69,13 @@
 
 use blst::{
     blst_fp12, blst_fr, blst_fr_add, blst_fr_from_scalar, blst_fr_from_uint64, blst_fr_inverse,
-    blst_fr_mul, blst_fr_sub, blst_hash_to_g1, blst_lendian_from_scalar, blst_p1, blst_p1_add,
-    blst_p1_affine, blst_p1_affine_compress, blst_p1_affine_in_g1, blst_p1_cneg,
-    blst_p1_from_affine, blst_p1_generator, blst_p1_mult, blst_p1_to_affine, blst_p1_uncompress,
-    blst_p2, blst_p2_add, blst_p2_affine, blst_p2_affine_compress, blst_p2_affine_in_g2,
-    blst_p2_cneg, blst_p2_from_affine, blst_p2_mult, blst_p2_to_affine, blst_p2_uncompress,
-    blst_scalar, blst_scalar_fr_check, blst_scalar_from_bendian, blst_scalar_from_fr,
-    BLS12_381_G2, BLST_ERROR,
+    blst_fr_mul, blst_fr_sub, blst_hash_to_g1, blst_lendian_from_scalar, blst_p1,
+    blst_p1_add_or_double, blst_p1_affine, blst_p1_affine_compress, blst_p1_affine_in_g1,
+    blst_p1_cneg, blst_p1_from_affine, blst_p1_generator, blst_p1_mult, blst_p1_to_affine,
+    blst_p1_uncompress, blst_p2, blst_p2_add_or_double, blst_p2_affine, blst_p2_affine_compress,
+    blst_p2_affine_in_g2, blst_p2_cneg, blst_p2_from_affine, blst_p2_mult, blst_p2_to_affine,
+    blst_p2_uncompress, blst_scalar, blst_scalar_fr_check, blst_scalar_from_bendian,
+    blst_scalar_from_fr, BLS12_381_G2, BLST_ERROR,
 };
 
 /// G₁ compressed encoding length: 48 bytes.
@@ -308,6 +308,13 @@ impl G1Point {
     }
 
     /// Add two G₁ points.
+    ///
+    /// Uses `blst_p1_add_or_double` (not `blst_p1_add`) so the
+    /// addition is correct in every case including the doubling
+    /// case (`a == b`) and the inverse case (`a == −b`, where the
+    /// result is the identity point at infinity). KZG verification
+    /// (whitepaper §3.9.2) hits the inverse case for constant
+    /// polynomials where `commitment − y·g = identity`.
     #[must_use]
     pub fn add(&self, other: &Self) -> Self {
         let mut a_jac = blst_p1::default();
@@ -315,12 +322,13 @@ impl G1Point {
         let mut sum_jac = blst_p1::default();
         let mut sum_aff = blst_p1_affine::default();
         // SAFETY: each call reads from owned local values and writes
-        // to owned local values. blst_p1_add handles the Jacobian
-        // addition; blst_p1_to_affine converts the result.
+        // to owned local values. blst_p1_add_or_double handles the
+        // doubling (`a == b`) and identity (`a == −b`) edge cases
+        // that blst_p1_add does not.
         unsafe {
             blst_p1_from_affine(&raw mut a_jac, &raw const self.0);
             blst_p1_from_affine(&raw mut b_jac, &raw const other.0);
-            blst_p1_add(&raw mut sum_jac, &raw const a_jac, &raw const b_jac);
+            blst_p1_add_or_double(&raw mut sum_jac, &raw const a_jac, &raw const b_jac);
             blst_p1_to_affine(&raw mut sum_aff, &raw const sum_jac);
         }
         Self(sum_aff)
@@ -402,6 +410,10 @@ impl G2Point {
     }
 
     /// Add two G₂ points.
+    ///
+    /// Uses `blst_p2_add_or_double` for the same correctness reason
+    /// as [`G1Point::add`] — handles doubling and identity edge
+    /// cases that the simple `blst_p2_add` does not.
     #[must_use]
     pub fn add(&self, other: &Self) -> Self {
         let mut a_jac = blst_p2::default();
@@ -409,11 +421,12 @@ impl G2Point {
         let mut sum_jac = blst_p2::default();
         let mut sum_aff = blst_p2_affine::default();
         // SAFETY: each call reads from owned local values and writes
-        // to owned local values.
+        // to owned local values. blst_p2_add_or_double handles the
+        // doubling and identity edge cases.
         unsafe {
             blst_p2_from_affine(&raw mut a_jac, &raw const self.0);
             blst_p2_from_affine(&raw mut b_jac, &raw const other.0);
-            blst_p2_add(&raw mut sum_jac, &raw const a_jac, &raw const b_jac);
+            blst_p2_add_or_double(&raw mut sum_jac, &raw const a_jac, &raw const b_jac);
             blst_p2_to_affine(&raw mut sum_aff, &raw const sum_jac);
         }
         Self(sum_aff)
@@ -855,5 +868,85 @@ mod tests {
         let gt = pairing(&p1, &g2);
         let bytes = gt.to_bytes();
         assert_eq!(bytes.len(), GT_BYTES);
+    }
+
+    // ---------- G1 / G2 add edge cases (Phase 5/6.9 audit) ----------
+    //
+    // blst_p1_add / blst_p2_add (the simple add) fail on the
+    // doubling and identity cases. Audit replaced them with
+    // blst_p1_add_or_double / blst_p2_add_or_double; these tests
+    // pin the edge-case correctness against regression.
+
+    #[test]
+    fn g1_add_inverse_yields_pairing_with_identity_semantics() {
+        // p + (-p) ≡ identity in G₁. Pairing the identity with any
+        // G₂ point yields the GT identity (1 in F_p^12). We verify
+        // by comparing the LHS pairing against an independently-
+        // constructed RHS (pairing of identity built by 0 · g).
+        let p = G1Point::hash_to_curve(b"add-inverse-test", b"DST");
+        let neg_p = p.negate();
+        let identity = p.add(&neg_p);
+        // 0 · g should also produce the identity.
+        let zero_times_g = G1Point::generator().mul_scalar(&Scalar::zero());
+        let g2 = G2Point::generator();
+        assert_eq!(
+            pairing(&identity, &g2).to_bytes(),
+            pairing(&zero_times_g, &g2).to_bytes(),
+            "p + (-p) must equal 0·g via pairing equality"
+        );
+    }
+
+    #[test]
+    fn g1_add_self_doubles_via_pairing() {
+        // p + p == 2 · p. Pairing-side check.
+        let p = G1Point::hash_to_curve(b"double-test", b"DST");
+        let doubled_via_add = p.add(&p);
+        let doubled_via_scalar = p.mul_scalar(&Scalar::from_u32(2));
+        let g2 = G2Point::generator();
+        assert_eq!(
+            pairing(&doubled_via_add, &g2).to_bytes(),
+            pairing(&doubled_via_scalar, &g2).to_bytes(),
+            "p + p must equal 2 · p"
+        );
+    }
+
+    #[test]
+    fn g2_add_inverse_yields_pairing_with_identity_semantics() {
+        let q = G2Point::generator().mul_scalar(&Scalar::from_u32(11));
+        let neg_q = q.negate();
+        let identity = q.add(&neg_q);
+        let zero_times_g2 = G2Point::generator().mul_scalar(&Scalar::zero());
+        let g1 = G1Point::generator();
+        assert_eq!(
+            pairing(&g1, &identity).to_bytes(),
+            pairing(&g1, &zero_times_g2).to_bytes(),
+            "q + (-q) must equal 0 · g₂ via pairing equality"
+        );
+    }
+
+    #[test]
+    fn g2_add_self_doubles_via_pairing() {
+        let q = G2Point::generator().mul_scalar(&Scalar::from_u32(7));
+        let doubled_via_add = q.add(&q);
+        let doubled_via_scalar = q.mul_scalar(&Scalar::from_u32(2));
+        let g1 = G1Point::generator();
+        assert_eq!(
+            pairing(&g1, &doubled_via_add).to_bytes(),
+            pairing(&g1, &doubled_via_scalar).to_bytes(),
+            "q + q must equal 2 · q"
+        );
+    }
+
+    #[test]
+    fn g1_sub_returns_inverse_under_pairing() {
+        // p − p == identity.
+        let p = G1Point::hash_to_curve(b"sub-test", b"DST");
+        let zero_p = p.sub(&p);
+        let zero_times_g = G1Point::generator().mul_scalar(&Scalar::zero());
+        let g2 = G2Point::generator();
+        assert_eq!(
+            pairing(&zero_p, &g2).to_bytes(),
+            pairing(&zero_times_g, &g2).to_bytes(),
+        );
     }
 }

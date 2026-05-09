@@ -83,11 +83,11 @@ pub mod interpreter;
 pub mod module_helpers;
 pub mod module_resolver_adapter;
 pub mod native;
-pub mod stdlib;
 pub mod runtime_value;
 pub mod state_buffer;
 pub mod state_mutator;
 pub mod state_view;
+pub mod stdlib;
 
 #[cfg(test)]
 pub(in crate::runtime) mod test_helpers;
@@ -105,10 +105,10 @@ pub use native::{
     native_key_from_handle, NativeContext, NativeFunction, NativeKey, NativeRegistry,
     STDLIB_ADDRESS,
 };
-pub use stdlib::genesis_native_registry;
 pub use runtime_value::{
     compare_unsigned, Container, Reference, RuntimeStructValue, RuntimeValue, RuntimeVariantValue,
 };
 pub use state_buffer::TransactionStateBuffer;
 pub use state_mutator::{CommitError, StateMutator, TransactionStateChanges};
 pub use state_view::{LoadError, StateView};
+pub use stdlib::genesis_native_registry;
