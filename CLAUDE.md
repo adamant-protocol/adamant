@@ -267,6 +267,7 @@ This order is deliberate. Cryptography first because everything depends on it. T
 - Catch contradictions between the whitepaper and proposed code. Surface them clearly.
 - Run `cargo fmt`, `cargo clippy`, and `cargo test` before declaring work done.
 - Show diffs before committing. Commit with clear messages tied to the whitepaper section being implemented.
+- build everything in adamant native focus
 
 ### Should not
 
@@ -280,6 +281,7 @@ This order is deliberate. Cryptography first because everything depends on it. T
 - Commit without showing the user the diff first.
 - Use `unwrap()` outside tests. Use `expect()` with a helpful message, or proper error handling, or `?`.
 - Skip writing tests because the code "obviously works."
+- use any other networks or projects work - causing major problems implement adamant native propertys only
 
 ---
 
