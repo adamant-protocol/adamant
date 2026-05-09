@@ -420,6 +420,58 @@ pub static SUBVIEW_DERIVE: DomainTag = DomainTag::new(b"ADAMANT-v1-subview-deriv
 /// Phase 6.4.
 pub static STEALTH_VIEW_TAG: DomainTag = DomainTag::new(b"ADAMANT-v1-stealth-view-tag");
 
+/// Value-commitment asset-specific generator domain tag, per
+/// whitepaper section 7.3.1.2 (post-amendment instance 33).
+///
+/// Used as the domain prefix for the `pasta_curves::pallas`
+/// `Point::hash_to_curve` construction that derives the per-
+/// asset-type value generator `V_τ`:
+///
+/// `V_τ = HashToCurve("ADAMANT-v1-vc-base", τ_bytes)`
+///
+/// where `τ_bytes` is the 32-byte canonical encoding of the
+/// asset type (a `TypeId` per §5.1.2). Each asset type has an
+/// independent generator on Pallas; the per-asset-type
+/// independence is what makes the §7.3.2 statement 4
+/// homomorphic balance check resolve per asset.
+///
+/// Distinct from [`VALUE_COMMITMENT_RANDOMNESS`] so the per-
+/// asset-type generators and the universal randomness
+/// generator are independent (no known discrete-log relation
+/// between any `V_τ` and `R`).
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 6.8b.4d-2 as part of the §7.3
+/// value-commitment-scheme amendment (instance 33).
+pub static VALUE_COMMITMENT_BASE: DomainTag = DomainTag::new(b"ADAMANT-v1-vc-base");
+
+/// Value-commitment universal randomness generator domain tag,
+/// per whitepaper section 7.3.1.2 (post-amendment instance 33).
+///
+/// Used as the domain prefix for the `pasta_curves::pallas`
+/// `Point::hash_to_curve` construction that derives the
+/// universal randomness generator `R`:
+///
+/// `R = HashToCurve("ADAMANT-v1-vc-randomness", b"")`
+///
+/// `R` is a single fixed Pallas point shared across every
+/// value commitment in the protocol. The empty input ensures
+/// the derivation is unique: there is exactly one `R`,
+/// independent of any asset type or transaction context.
+/// Implementations cache `R` after first derivation per the
+/// §7.3.1.2 wallet-implementation note.
+///
+/// Distinct from [`VALUE_COMMITMENT_BASE`] so the discrete log
+/// of `R` with respect to any per-asset-type generator `V_τ`
+/// is unknown to all parties (computational binding for
+/// value commitments).
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 6.8b.4d-2 as part of the §7.3
+/// value-commitment-scheme amendment (instance 33).
+pub static VALUE_COMMITMENT_RANDOMNESS: DomainTag =
+    DomainTag::new(b"ADAMANT-v1-vc-randomness");
+
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and
 /// test-vector regressions.

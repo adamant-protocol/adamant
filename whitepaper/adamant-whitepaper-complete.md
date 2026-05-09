@@ -2406,16 +2406,20 @@ A shielded transaction comprises:
 
 ```
 ShieldedTransaction {
-    nullifiers:        Vec<Nullifier>,        // notes being spent
-    output_commitments: Vec<NoteCommitment>,  // notes being created
-    encrypted_outputs:  Vec<EncryptedNote>,   // for recipient delivery
-    public_inputs:     PublicInputs,          // explicit transaction parameters
-    proof:             Halo2Proof,            // attests to validity
-    binding_signature: Signature,             // ties the proof to the transaction
+    nullifiers:               Vec<Nullifier>,         // notes being spent
+    input_value_commitments:  Vec<ValueCommitment>,   // hiding commitments for input values (one per nullifier, same order)
+    output_commitments:       Vec<NoteCommitment>,    // notes being created
+    output_value_commitments: Vec<ValueCommitment>,   // hiding commitments for output values (one per output_commitment, same order)
+    encrypted_outputs:        Vec<EncryptedNote>,     // for recipient delivery
+    public_inputs:            PublicInputs,           // explicit transaction parameters
+    proof:                    Halo2Proof,             // attests to validity
+    binding_signature:        Signature,              // ties the proof to the transaction
 }
 ```
 
-Public inputs include the nullifiers, the output commitments, the GNCT root being spent against, the asset types involved (which may be partially disclosed for compliance), and any explicit fees. Everything else is hidden.
+Public inputs include the nullifiers, the output commitments, the input and output value commitments, the GNCT root being spent against, the asset types involved (which may be partially disclosed for compliance), and any explicit fees. Everything else is hidden.
+
+The `input_value_commitments` array is parallel to `nullifiers` (index `i` of one corresponds to index `i` of the other); the `output_value_commitments` array is parallel to `output_commitments`. The two sequences let validators perform the homomorphic balance check at consensus time without learning the underlying values; see §7.3.1.2 for the construction and §7.3.2 statement 4 for the balance constraint.
 
 #### 7.3.1.1 EncryptedNote construction
 
@@ -2440,6 +2444,33 @@ The recipient decrypts by ML-KEM decapsulation against `sk_v_kem`, derives the s
 
 **Probabilistic property satisfied per §7.0.** Per-note ML-KEM encapsulation produces a fresh `ss` per FIPS 203 §6.3 (randomized encapsulation); the derived `note_key` + `note_nonce` are per-note unique; ciphertexts are uncorrelated across notes even for byte-equal note payloads.
 
+#### 7.3.1.2 Value commitments
+
+A `ValueCommitment` is a 32-byte Pedersen-style commitment on the Pallas curve that hides a note's value while remaining additively homomorphic, so the chain can verify per-asset-type value conservation (§7.3.2 statement 4) without learning any individual value.
+
+**Construction.** For a note with value `v: u64`, asset type `τ: TypeId`, and per-commitment randomness `r ∈ Pallas scalar field`:
+
+```
+vc = v · V_τ + r · R   (a Pallas point)
+```
+
+where:
+
+- `V_τ` is the asset-specific value generator: `V_τ = HashToCurve("ADAMANT-v1-vc-base", τ_bytes)` — a Pallas point derived deterministically from the 32-byte canonical encoding of the asset type via the `pasta_curves` `Point::hash_to_curve` construction (Simplified SWU map per IRTF `draft-irtf-cfrg-hash-to-curve`).
+- `R` is the universal randomness generator: a single fixed Pallas point derived once via `R = HashToCurve("ADAMANT-v1-vc-randomness", b"")`. `R` is independent of every `V_τ` (different domain tag); the discrete log of `R` with respect to any `V_τ` is unknown to all parties (genuinely random Pallas point).
+- The on-chain encoding of `vc` is the 32-byte canonical compressed Pallas point form (x-coordinate plus 1-bit y-sign per pasta_curves' `GroupEncoding`), matching the `recipient` stealth-address encoding in §7.2.2.
+
+**Properties.**
+
+- **Hiding.** The `r · R` term blinds the value; without knowing `r`, an observer cannot recover `v` (computational hiding under the discrete-log assumption on Pallas).
+- **Asset-type hiding.** The randomness blinding extends to the asset-specific component: an observer cannot determine `τ` from `vc` alone (cannot distinguish `(v_1, τ_1, r_1)` from `(v_2, τ_2, r_2)` without solving multi-discrete-log).
+- **Binding.** Given `vc`, the opening `(v, τ, r)` is computationally unique under the discrete-log assumption (a different opening would reveal a discrete-log relation between `V_τ` and `R`).
+- **Additively homomorphic.** `vc(v_1, τ, r_1) + vc(v_2, τ, r_2) = vc(v_1 + v_2, τ, r_1 + r_2)` (point addition on Pallas, per-asset-type group). Cross-asset addition does NOT preserve commitment shape (the `V_{τ_1}` and `V_{τ_2}` generators are independent), which is exactly what makes the per-asset-type balance check work.
+
+**Per-input vs per-output randomness.** Each input note's `vc_in` carries a randomness `r_in_i` known to the spender; each output note's `vc_out` carries a randomness `r_out_j` known to the sender. The §7.3.2 statement 4 balance equation requires the randomness sums to cancel: `Σ r_in - Σ r_out = r_balance`, where `r_balance` is committed to by the [`binding_signature`] (§7.3.1) — the binding signature is over a transcript that includes `Σ vc_in - Σ vc_out` and is signed under the key `r_balance · R`. This is the standard Sapling-style binding-signature pattern (Hopwood / Bowe / Hornby / Wilcox 2020); a successful binding signature attests both that the spender chose a randomness assignment such that the per-asset-type values balance AND that the full transaction (proof + commitments) is bound to a single coherent randomness sum.
+
+**Construction of `R` and `V_τ`.** Genesis-fixed; the byte tags `b"ADAMANT-v1-vc-base"` and `b"ADAMANT-v1-vc-randomness"` are part of the consensus rules per §3.3.1 (changing them is a hard fork). Wallet implementations MUST derive `R` lazily once at startup and cache it; `V_τ` is derived per asset type the wallet handles.
+
 ### 7.3.2 The validity circuit
 
 The Halo 2 circuit that proves validity asserts the following statements:
@@ -2451,6 +2482,14 @@ The Halo 2 circuit that proves validity asserts the following statements:
 3. **Output note well-formedness.** Each output commitment is correctly computed from valid inputs (a recipient stealth address, a value, an asset type, randomness).
 
 4. **Value conservation.** The sum of input values equals the sum of output values plus the explicit fees, *per asset type*. This is the property that prevents inflation: a shielded transaction cannot create value from nothing or destroy value silently.
+
+   Enforced via the homomorphic value commitments of §7.3.1.2. The validity circuit attests that each per-input and per-output value commitment is correctly constructed (the prover knows `(v, τ, r)` openings consistent with the corresponding note commitment). The chain-level balance check is then a single point equation evaluated on public data:
+
+   ```
+   Σ vc_in − Σ vc_out − Σ_τ (fee_τ · V_τ) = r_balance · R
+   ```
+
+   Validators verify this equation and the binding signature over the same transcript (§7.3.1.2). Both checks are public-data-only — no zero-knowledge proof is needed for the balance equation itself; the proof is needed only for the per-commitment opening attestation. The balance check is per-asset-type implicitly: because `V_τ` is independent across asset types (§7.3.1.2 hash-to-curve construction), the balance equation can hold only if for every τ in the transaction, `Σ_in v_τ = Σ_out v_τ + fee_τ` (otherwise the `V_τ` term would not cancel).
 
 5. **Range proofs.** Every value in the transaction lies in `[0, 2^64)`. Without this, an attacker could create notes with negative values that nominally satisfy value conservation while creating value.
 

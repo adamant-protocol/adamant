@@ -1129,6 +1129,81 @@ Phases 1, 2, 4, and 5:
   privacy layer's note-commitment ↔ stealth-address ↔ Halo 2
   validity-circuit composition. Phase 6.4 (stealth-address
   construction) ships next under the amended §7.2.2.
+- **§7.3 value commitments** (whitepaper 7.3.1 + new 7.3.1.2 +
+  7.3.2 statement 4) — Phase 6.8b.4 in-circuit work surfaced
+  the value-commitment-scheme gap during the §7.3.2 statement 4
+  (value conservation) implementation investigation. The
+  current §7.1 note commitment is `Poseidon(value, asset_type,
+  recipient, randomness, metadata_hash)` — non-homomorphic. To
+  enforce per-asset-type conservation in a multi-value
+  shielded transaction, the proof needs to reason about value
+  sums across multiple notes, which requires either
+  (a) homomorphic value commitments alongside the note's
+  Poseidon commitment (Zcash Sapling/Orchard precedent), or
+  (b) a polynomial-IOP / multiset approach (more novel, less
+  audit history). The §7.3 spec did not pin a scheme; without
+  one, the §7.3.2 statement 4 in-circuit constraint had no
+  realisable construction.
+
+  Resolved by amending §7.3 along path (a). Added
+  `input_value_commitments` and `output_value_commitments`
+  fields to the §7.3.1 `ShieldedTransaction` structure (parallel
+  to nullifiers and output_commitments). Added new §7.3.1.2
+  "Value commitments" specifying the Pedersen-on-Pallas
+  construction with asset-specific value bases:
+
+  ```
+  vc = v · V_τ + r · R
+  V_τ = HashToCurve("ADAMANT-v1-vc-base", τ_bytes)
+  R   = HashToCurve("ADAMANT-v1-vc-randomness", b"")
+  ```
+
+  Two new genesis-fixed byte tags (`b"ADAMANT-v1-vc-base"` and
+  `b"ADAMANT-v1-vc-randomness"`) per §3.3.1's domain-tag
+  registry discipline. Refined §7.3.2 statement 4 to reference
+  the new homomorphic-balance check at the chain layer, with
+  the validity circuit attesting per-commitment openings and
+  the consensus layer verifying the public point equation
+  `Σ vc_in − Σ vc_out − Σ_τ (fee_τ · V_τ) = r_balance · R`
+  alongside the binding signature.
+
+  Reasoning behind path (a) over path (b): Pedersen
+  commitments on Pallas are well-trodden ZK primitives with
+  Zcash Sapling/Orchard production deployment + audit history;
+  the construction layers naturally on the Pallas curve we
+  already use for Poseidon (§3.3.3) and stealth addresses
+  (§7.2.2 amended); per-asset-type V_τ via hash-to-curve is
+  the same pattern Zcash ZSAs / Orchard ZSA use for multi-
+  asset shielded transactions. The asset-specific value-base
+  approach makes the per-asset-type balance check fall out of
+  a single point equation by the independence of V_τ across
+  asset types — no per-type partition logic needed in the
+  circuit. Path (b) (multiset / polynomial-IOP) was rejected
+  because it has substantially less audit history at this
+  scale and would require novel constructions where path (a)
+  reuses existing primitives.
+
+  The asset-specific V_τ is not standardised in any FIPS / RFC /
+  IETF spec; this is a Zcash-ecosystem-canonical pattern that
+  Adamant adopts as Cat C bridge-layer construction per
+  CLAUDE.md §14.1. The implementation is Adamant-authored
+  (§3.9.2 KZG precedent: standard mathematics, Adamant-native
+  code).
+
+  Spec-vs-spec-inconsistency-resolved-via-amendment 8th
+  canonical instance (pattern stable). Pre-implementation-gap
+  resolution sub-pattern 1st instance (different from prior
+  in-implementation-discovery shape: this gap was surfaced at
+  the §7.3.2 statement 4 implementation-investigation stage
+  before any in-circuit code was written, rather than mid-
+  implementation as instances 31 / 32 were). Bumps Phase 1-5
+  instance count Thirty-two → Thirty-three.
+
+  Instance 33 unblocks Phase 6.8b.4d-2 (value-conservation
+  circuit) and Phase 6.8b.4e-3 (full ValidityCircuit
+  composition). Phase 6.8b.4 ships the in-circuit
+  value-commitment construction + the chain-level homomorphic
+  balance check next under the amended §7.3.
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
