@@ -28,17 +28,16 @@
 //!
 //! - `adamant-crypto` — for SHA3 / BLAKE3 / HKDF / ML-KEM /
 //!   Ed25519 / ML-DSA / BLS / KZG / threshold-encryption.
-//! - `halo2_gadgets` — for Poseidon (§3.3.3) out-of-circuit
-//!   primitive surface. Phase 6.0–6.7 + 6.8a + 6.9a consume this
-//!   dep at the smallest Cat C-equivalent footprint (Poseidon
-//!   only). The §14.4 Decision 1 posture is resolved as **Path C2**
-//!   (fork `halo2_gadgets` + necessary `halo2_proofs` subset
-//!   into a new `adamant-halo2` crate with `PROVENANCE.md`,
-//!   mirroring Phase 5/5b.1a/b's Sui-Move precedent). The fork
-//!   lands at Phase 6.8b alongside the §7.3.2 validity-circuit
-//!   work; production-binary independence is enforced by a
-//!   build-system check (`tests/no_upstream_halo2_in_production_deps.rs`,
-//!   landing with the fork).
+//! - `adamant-halo2` — Adamant's fork of the Halo 2 ecosystem
+//!   per CLAUDE.md §14.4 Decision 1 (resolved as Path C2). At
+//!   Phase 6.8b.0, the fork ships the out-of-circuit Poseidon
+//!   primitives (§3.3.3) — the smallest Cat C-equivalent
+//!   surface. Subsequent Phase 6.8b sub-arcs extend the fork
+//!   to the in-circuit `Pow5Chip`, ECC chips for Pallas, and
+//!   the §7.3.2 validity-circuit gadgets. Production-binary
+//!   independence from upstream `halo2_*` crates is enforced
+//!   mechanically via `tests/no_upstream_halo2_in_production_deps.rs`
+//!   at the workspace root.
 //!
 //! No new external dependencies beyond the workspace's already-
 //! locked set.

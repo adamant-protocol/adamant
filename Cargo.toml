@@ -17,6 +17,7 @@ members = [
     "crates/adamant-bytecode-format",
     "crates/adamant-crypto",
     "crates/adamant-crypto-blst-extra",
+    "crates/adamant-halo2",
     "crates/adamant-privacy",
     "crates/adamant-state",
     "crates/adamant-types",

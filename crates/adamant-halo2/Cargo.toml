@@ -1,0 +1,61 @@
+[package]
+name = "adamant-halo2"
+description = "Adamant-owned fork of the Halo 2 ecosystem (Zcash variant) per CLAUDE.md §14.4 Decision 1 (resolved as Path C2). Forking-over-vendoring discipline applied: production-binary dependency graph contains no upstream halo2_* crates."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+# Sub-arc map (filled in as the fork grows):
+#
+# | Sub-arc       | Surface                    | Status      |
+# |---------------|----------------------------|-------------|
+# | 6.8b.0        | poseidon (out-of-circuit)  | THIS SUB-ARC |
+# | 6.8b.1+       | halo2_proofs subset        | pending     |
+# | 6.8b.2+       | poseidon::Pow5Chip         | pending     |
+# | 6.8b.3+       | ECC chips for Pallas       | pending     |
+# | 6.8b.4+       | §7.3.2 validity-circuit    | pending     |
+# | 6.9b          | recursive proof composition| pending     |
+#
+# Phase 6.8b.0 vendors `halo2_poseidon 0.1.0` as the smallest
+# production-side surface — exercises the fork mechanics and
+# replaces adamant-privacy's existing `halo2_gadgets::poseidon::primitives`
+# import with an Adamant-owned path. See `PROVENANCE.md`.
+
+[dependencies]
+# Pasta cycle (Pallas / Vesta) — already a workspace bounded-
+# ecosystem crate; transitively pulled by the upstream
+# `halo2_poseidon` source we forked.
+pasta_curves = { workspace = true }
+# `ff` and `group` are upstream's public-trait surface
+# (`ff::PrimeField`, `group::Group`); both are pulled
+# transitively by `pasta_curves` already and re-exposed via the
+# `pasta_curves::group::ff` path. Direct entries here pin them
+# at the workspace level.
+ff = { version = "0.13", default-features = false }
+group = { version = "0.13" }
+# Random-bit generator for round-constant generation
+# (Grain LFSR). Required by `poseidon::grain`.
+bitvec = { version = "1", default-features = false }
+
+[features]
+# Mirrors upstream `halo2_poseidon`'s `test-dependencies` feature
+# gating the `poseidon::test_vectors` module. Adamant uses this
+# feature in cross-validation tests against the upstream tag.
+test-dependencies = []
+
+# Lint posture for forked upstream code, mirroring the Phase
+# 5/5b.1a/b precedent for vendored Sui-Move crates (see
+# `vendor/move-binary-format/Cargo.toml`). Running our strict
+# workspace clippy posture against byte-identical upstream code
+# produces noise rather than signal — style lints belong in
+# upstream's process; we trust the tagged version. The
+# `unsafe_code = forbid` line matches upstream's own
+# `#![deny(unsafe_code)]` in `halo2_poseidon`'s lib.rs.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "allow"

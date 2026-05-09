@@ -6,7 +6,7 @@
 //! §7.1.3 (GNCT Merkle hashes). Phase 6.8's validity-circuit work
 //! consumes the same parameter set in-circuit; the out-of-circuit
 //! and in-circuit hashes are byte-identical by construction (both
-//! invoke the `halo2_gadgets::poseidon::primitives::Hash` surface
+//! invoke the `adamant_halo2::poseidon::Hash` surface
 //! with identical specification).
 //!
 //! # Spec basis
@@ -23,6 +23,14 @@
 //!
 //! > **Library.** The reference implementation uses the Poseidon
 //! > implementation from `halo2_gadgets` (zcash variant),
+//!
+//! Adamant consumes the Poseidon implementation through
+//! [`adamant_halo2::poseidon`] — Adamant's fork of upstream
+//! `halo2_poseidon 0.1.0` per CLAUDE.md §14.4 Decision 1
+//! (resolved as Path C2). The algorithmic surface is byte-
+//! identical to upstream; behavioural changes are limited to
+//! `no_std → std` shape adjustments documented in
+//! `crates/adamant-halo2/PROVENANCE.md`.
 //! > specifically the `P128Pow5T3` specification with
 //! > `ConstantLength` domain — the same parameters deployed by
 //! > Zcash Orchard in production.
@@ -55,7 +63,7 @@
 //! convert SHA3-256 outputs / scalars / etc. to field elements
 //! via the constructors below.
 
-use halo2_gadgets::poseidon::primitives::{ConstantLength, Hash, P128Pow5T3};
+use adamant_halo2::poseidon::{ConstantLength, Hash, P128Pow5T3};
 use pasta_curves::group::ff::PrimeField;
 use pasta_curves::pallas;
 use serde::{Deserialize, Serialize};
@@ -215,7 +223,7 @@ pub fn poseidon_hash<const L: usize>(inputs: [FieldBytes; L]) -> FieldBytes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use halo2_gadgets::poseidon::primitives::Spec;
+    use adamant_halo2::poseidon::Spec;
 
     /// Returns `true` iff the [`P128Pow5T3`] specification's
     /// full-round count and partial-round count match the §3.3.3
@@ -237,7 +245,7 @@ mod tests {
 
     /// Whitepaper §3.3.3 (post-amendment): "8 full rounds and 57
     /// partial rounds." Pin the upstream library's spec against
-    /// the spec text. If `halo2_gadgets`'s `P128Pow5T3` ever
+    /// the spec text. If `adamant-halo2`'s `P128Pow5T3` ever
     /// drifts (e.g., via dep upgrade), this test fails loudly.
     #[test]
     fn p128pow5t3_matches_amended_spec_3_3_3() {

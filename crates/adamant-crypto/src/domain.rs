@@ -284,8 +284,7 @@ pub static NULLIFIER_KEY_DERIVATION: DomainTag =
 ///
 /// Per §3.3.1, adding/renaming domain tags is a hard fork.
 /// Registered at Phase 6.4.
-pub static STEALTH_SHARED_SCALAR: DomainTag =
-    DomainTag::new(b"ADAMANT-v1-stealth-shared-scalar");
+pub static STEALTH_SHARED_SCALAR: DomainTag = DomainTag::new(b"ADAMANT-v1-stealth-shared-scalar");
 
 /// `EncryptedNote` symmetric-key derivation domain tag, per
 /// whitepaper section 7.3.1.1 (`domain_tag_note_key`). The exact
