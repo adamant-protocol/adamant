@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Twenty-six confirmed instances during
+sources before proceeding. Twenty-seven confirmed instances during
 Phases 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -931,6 +931,19 @@ Phases 1, 2, 4, and 5:
   closes; ReleaseSubViewKey real implementation now blocked
   only on adamant-crypto HKDF-SHA3 helper + ML-KEM KeyGen-from-
   seed exposure (5/6.4.b sub-arc).
+- **§7.6.1 memo nonce derivation specification** (whitepaper
+  7.6.1) — Closes one of three §7.0 instance-24 carry-forwards.
+  §7.6.1 specified the memo_key derivation but left the
+  ChaCha20-Poly1305 nonce derivation unspecified, an
+  incompleteness flagged at instance 24 §7.0 amendment.
+  Resolved by appending nonce-derivation specification:
+  `nonce = SHA3_256(s || domain_tag_memo_nonce)[0..12]` where
+  `domain_tag_memo_nonce = b"ADAMANT-v1-memo-nonce"`. The
+  12-byte truncation matches ChaCha20-Poly1305's 96-bit nonce
+  width per §3.5. Nonce non-reuse follows from per-note `s`
+  + domain-tag separation; satisfies §7.0 probabilistic-only
+  posture. Bumps Phase 1-5 instance count Twenty-six →
+  Twenty-seven.
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol

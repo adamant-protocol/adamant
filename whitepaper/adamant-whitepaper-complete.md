@@ -2557,6 +2557,16 @@ memo_key = HashToKey(s || domain_tag_memo)
 encrypted_memo = ChaCha20Poly1305(memo_key, nonce, memo_plaintext)
 ```
 
+The nonce is derived deterministically from the per-note shared secret to ensure non-reuse:
+
+```
+nonce = SHA3_256(s || domain_tag_memo_nonce)[0..12]
+```
+
+where `s` is the per-note ML-KEM shared secret per §7.2.2 and `domain_tag_memo_nonce = b"ADAMANT-v1-memo-nonce"`. The 12-byte truncation matches ChaCha20-Poly1305's 96-bit nonce width per §3.5.
+
+Nonce non-reuse follows from `s` being per-note (each note has fresh ML-KEM encapsulation per §7.2.2) and the domain tag preventing cross-protocol nonce collision. The construction satisfies the §7.0 encryption-posture probabilistic-only requirement: equal memo plaintexts under different notes encrypt under different `(memo_key, nonce)` pairs and produce uncorrelated ciphertexts.
+
 The recipient decrypts using their derived shared secret.
 
 ### 7.6.2 Memo policies
