@@ -25,37 +25,102 @@ publish.workspace = true
 # import with an Adamant-owned path. See `PROVENANCE.md`.
 
 [dependencies]
-# Pasta cycle (Pallas / Vesta) — already a workspace bounded-
-# ecosystem crate; transitively pulled by the upstream
-# `halo2_poseidon` source we forked.
+# Pasta cycle (Pallas / Vesta) — workspace bounded-ecosystem
+# crate; consumed by both forked sub-modules `poseidon` and
+# `proofs`.
 pasta_curves = { workspace = true }
-# `ff` and `group` are upstream's public-trait surface
-# (`ff::PrimeField`, `group::Group`); both are pulled
-# transitively by `pasta_curves` already and re-exposed via the
-# `pasta_curves::group::ff` path. Direct entries here pin them
-# at the workspace level.
-ff = { version = "0.13", default-features = false }
+# `ff` and `group` are the upstream forks' public-trait surface
+# (`ff::PrimeField`, `group::Group`). Pinned at the workspace
+# level via direct entries.
+ff = { version = "0.13", default-features = false, features = ["alloc"] }
 group = { version = "0.13" }
-# Random-bit generator for round-constant generation
+# `indexmap` 1.x is the version pinned by upstream halo2_proofs
+# 0.3.2; used by `proofs::dev` failure-emitter and a few `plonk`
+# code paths. The 1.x major matches the workspace bound that
+# upstream's Cargo.toml resolves to.
+indexmap = "1"
+# Random-bit generator for Poseidon round-constant generation
 # (Grain LFSR). Required by `poseidon::grain`.
 bitvec = { version = "1", default-features = false }
+# RNG trait surface used by `proofs::transcript` and `proofs::plonk`.
+# `rand_core` 0.6 matches the upstream halo2_proofs 0.3.2 trait
+# version.
+rand_core = { workspace = true }
+# Hash function used by `proofs::transcript`'s default Blake2b
+# transcript. Upstream halo2_proofs 0.3.2 dep.
+blake2b_simd = "1"
+# Sorting algorithm used by `proofs::poly::commitment::msm` for
+# deterministic-order multi-scalar-multiplication preprocessing.
+# Upstream halo2_proofs 0.3.2 dep.
+halo2_legacy_pdqsort = "0.1.0"
+# Optional rayon-backed parallelism wrapper. Upstream uses
+# `maybe-rayon` to make multicore an optional feature; we
+# inherit the same shape and gate it behind our `multicore`
+# feature.
+maybe-rayon = { version = "0.1.0", default-features = false }
+# Tracing for upstream's logging surface. Used by
+# `proofs::dev` and a few `proofs::plonk` trace points.
+tracing = "0.1"
+
+[dev-dependencies]
+# Dev-only deps used by upstream `halo2_proofs 0.3.2`'s test
+# modules. Mirrors upstream's `[dev-dependencies]` list at the
+# subset our forked tests reference.
+assert_matches = "1.5"
+proptest = { workspace = true }
+# `rand_core::OsRng` is gated by the `getrandom` feature.
+rand_core = { workspace = true, features = ["getrandom"] }
 
 [features]
 # Mirrors upstream `halo2_poseidon`'s `test-dependencies` feature
 # gating the `poseidon::test_vectors` module. Adamant uses this
 # feature in cross-validation tests against the upstream tag.
 test-dependencies = []
+# Multicore parallelism in `proofs` via `maybe-rayon`. Off by
+# default (matches upstream's optional posture).
+multicore = ["maybe-rayon/threads"]
 
 # Lint posture for forked upstream code, mirroring the Phase
 # 5/5b.1a/b precedent for vendored Sui-Move crates (see
 # `vendor/move-binary-format/Cargo.toml`). Running our strict
 # workspace clippy posture against byte-identical upstream code
 # produces noise rather than signal — style lints belong in
-# upstream's process; we trust the tagged version. The
-# `unsafe_code = forbid` line matches upstream's own
-# `#![deny(unsafe_code)]` in `halo2_poseidon`'s lib.rs.
+# upstream's process; we trust the tagged version.
+#
+# `unsafe_code = forbid` matches upstream's own
+# `#![deny(unsafe_code)]` in both `halo2_poseidon`'s and
+# `halo2_proofs`'s lib.rs.
+#
+# Additional `allow` entries below catch rustc-level warnings
+# that fire against the vendored sources but are not present
+# (or are filtered) in upstream's own CI configuration.
 [lints.rust]
 unsafe_code = "forbid"
+# Upstream `halo2_proofs` references several `#[cfg(feature =
+# "...")]` gates for features Adamant has not enabled (e.g.,
+# `batch`, `dev-graph`, `floor-planner-v1-legacy-pdqsort`).
+# Suppressing here avoids forcing a feature-flag decision before
+# the §7.3.2 validity-circuit work scopes which features
+# Adamant actually needs.
+unexpected_cfgs = "allow"
+# Upstream test modules carry helper structs/traits that aren't
+# used in the subset of tests Adamant exercises. Allowing keeps
+# the fork byte-identical.
+dead_code = "allow"
+# Upstream `proofs::poly::commitment` carries an elided-lifetime
+# pattern current rustc flags as confusing. Upstream-style.
+elided_lifetimes_in_paths = "allow"
+mismatched_lifetime_syntaxes = "allow"
+# Upstream `proofs` test imports include rayon traits behind
+# feature gates that may or may not be active.
+unused_imports = "allow"
+# Upstream `proofs::dev::cost` uses doc-comments on expression-
+# field positions where rustdoc doesn't generate output.
+unused_doc_comments = "allow"
 
 [lints.clippy]
 all = "allow"
+pedantic = "allow"
+# `style` and `complexity` are sub-groups of `all` already
+# allowed above, but listing explicitly makes the posture
+# unambiguous on inspection.

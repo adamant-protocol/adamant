@@ -26,13 +26,21 @@
 use std::collections::HashMap;
 use std::process::Command;
 
-/// Crate-name prefix the resistant-proof posture forbids in the
-/// production dependency graph. All upstream Halo 2 crates
-/// (Zcash / Electric Coin Company ecosystem) share this prefix:
-/// `halo2_proofs`, `halo2_gadgets`, `halo2_poseidon`, plus any
-/// future upstream addition. Adamant's own fork crate
-/// `adamant-halo2` does not match this prefix and is permitted.
-const FORBIDDEN_PREFIX: &str = "halo2_";
+/// Upstream Halo 2 ZK proving-system crates (Zcash / Electric
+/// Coin Company ecosystem) the resistant-proof posture forbids
+/// in the production dependency graph.
+///
+/// `halo2_legacy_pdqsort` is intentionally NOT in this list —
+/// despite the misleading `halo2_` prefix, it is a generic
+/// sorting-algorithm crate (a `pdqsort` fork that happened to be
+/// created under the halo2 project umbrella) with no ZK content.
+/// Phase 6.8b.1 transitively pulls it in via `proofs::poly`.
+///
+/// If a future upstream crate joins the Halo 2 ecosystem
+/// (e.g., a new `halo2_*` proving-system surface), add it to
+/// this list with a brief justification in
+/// `crates/adamant-halo2/PROVENANCE.md`.
+const FORBIDDEN_CRATES: &[&str] = &["halo2_proofs", "halo2_gadgets", "halo2_poseidon"];
 
 /// Crate name whose production dependency tree this test walks.
 const TARGET_CRATE: &str = "adamant-privacy";
@@ -56,15 +64,17 @@ fn adamant_privacy_production_deps_contain_no_upstream_halo2_crates() {
     let forbidden: Vec<String> = reachable
         .iter()
         .filter_map(|id| id_to_name.get(id).cloned())
-        .filter(|name| name.starts_with(FORBIDDEN_PREFIX))
+        .filter(|name| FORBIDDEN_CRATES.contains(&name.as_str()))
         .collect();
     assert!(
         forbidden.is_empty(),
         "`{TARGET_CRATE}` production dependency graph contains forbidden upstream Halo 2 \
          crate(s) (CLAUDE.md §14.4 Decision 1 resistant-proof posture violated):\n  {forbidden:?}\n\
-         Upstream `halo2_*` crates must appear only in [dev-dependencies] or [build-dependencies], \
-         never in [dependencies]. Production-side Halo 2 surface flows through `adamant-halo2` \
-         (Adamant's fork). See `crates/adamant-halo2/PROVENANCE.md` for the fork posture."
+         Upstream Halo 2 ZK proving-system crates must appear only in [dev-dependencies] or \
+         [build-dependencies], never in [dependencies]. Production-side Halo 2 surface flows \
+         through `adamant-halo2` (Adamant's fork). See `crates/adamant-halo2/PROVENANCE.md` \
+         for the fork posture and the `FORBIDDEN_CRATES` list at the top of this file for the \
+         exact crate names blocked."
     );
 }
 

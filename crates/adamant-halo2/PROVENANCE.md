@@ -87,6 +87,80 @@ Algorithm-level review reduces to upstream `halo2_poseidon
 specific review reduces to confirming the three behavioural
 changes do not alter the algorithmic surface.
 
+### Sub-arc 6.8b.1 — `halo2_proofs` 0.3.2
+
+**Source.** `halo2_proofs` crate at version `0.3.2`, sourced
+from `https://crates.io/crates/halo2_proofs` (upstream repo
+`https://github.com/zcash/halo2`, MIT OR Apache-2.0
+dual-licensed).
+
+**Variant choice (IPA-vs-KZG).** Settled by the upstream-tag
+choice itself: `halo2_proofs 0.3.2` (Zcash variant) is
+**IPA-only** — the polynomial commitment scheme is Inner
+Product Arguments, with no `kzg/` subdirectory anywhere in
+upstream's `src/poly/`. This is consistent with whitepaper
+§3.9 ("Halo 2 (PLONKish, no trusted setup)") — the no-trusted-
+setup property comes from IPA. The KZG variant lives in a
+separate upstream branch (PSE / privacy-scaling-explorations);
+Adamant does not consume it.
+
+**Vendored files.** 52 source files copied verbatim from the
+upstream `src/` into `crates/adamant-halo2/src/proofs/`:
+
+| Upstream tree     | Adamant location                | LOC    |
+|-------------------|---------------------------------|--------|
+| `src/lib.rs`      | `src/proofs/mod.rs`             | ~30    |
+| `src/arithmetic.rs` + `src/multicore.rs` + `src/helpers.rs` + `src/transcript.rs` | (parallel) | ~1500 |
+| `src/circuit/` + `circuit.rs` (4 files)   | `src/proofs/circuit/` + `circuit.rs` | ~3000 |
+| `src/dev/` + `dev.rs` (8 files)           | `src/proofs/dev/` + `dev.rs`         | ~3500 |
+| `src/plonk/` + `plonk.rs` (24 files)      | `src/proofs/plonk/` + `plonk.rs`     | ~7500 |
+| `src/poly/` + `poly.rs` (8 files; IPA-only) | `src/proofs/poly/` + `poly.rs`       | ~3000 |
+|                   | **Total**                       | ~18382 |
+
+**Behavioural changes from upstream.** Limited to mechanical
+adaptations required to ship the upstream source as a
+sub-module of `adamant-halo2` rather than as a free-standing
+crate. No algorithmic deviation.
+
+1. **Crate-level attributes removed** at `mod.rs` level. The
+   upstream `src/lib.rs` carried `#![cfg_attr(docsrs, ...)]`,
+   `#![allow(clippy::*)]`, `#![deny(rustdoc::*)]`,
+   `#![deny(missing_*)]`, and `#![deny(unsafe_code)]` —
+   none can appear inside `mod.rs`. The parent crate's
+   `Cargo.toml` already sets `unsafe_code = "forbid"` at the
+   `lints.rust` level, which is stronger than upstream's
+   `#![deny(unsafe_code)]`.
+2. **`crate::*` paths inside the forked tree rewritten to
+   `crate::proofs::*`.** Upstream code's `crate::` always
+   referred to its own root (the upstream `lib.rs`); after
+   forking under `crate::proofs::`, every internal reference
+   shifts one level. Bulk-applied via `sed` to all `*.rs`
+   files under `crates/adamant-halo2/src/proofs/`. The rewrite
+   is correct everywhere because no upstream `crate::*` reference
+   could refer to anything outside the upstream crate.
+
+**Cross-validation.** A future test under `tests/cross_validation.rs`
+will exercise selected proof / verify round-trips and compare
+against upstream `halo2_proofs 0.3.2`'s outputs to confirm
+byte-identical behaviour. Lands at the natural cross-validation
+sub-arc (parallel to the Phase 5/5c discipline established for
+the bytecode verifier).
+
+**Upstream tests preserved.** All 32 of upstream's own
+`#[test]` functions across `proofs::arithmetic`,
+`proofs::plonk::*`, `proofs::poly::commitment`,
+`proofs::poly::multiopen`, `proofs::dev::*`, etc., compile
+and pass against the fork verbatim. Combined with the 7
+`poseidon` tests from sub-arc 6.8b.0, `adamant-halo2`'s
+test count is 39 at this sub-arc closure.
+
+**Audit posture.** Algorithm-level review reduces to upstream
+`halo2_proofs 0.3.2`'s audit history (Zcash production
+deployment + Aztec usage); fork-specific review reduces to
+confirming the two behavioural-change classes above
+(crate-attribute removal + `crate::` → `crate::proofs::`
+rewrite) do not alter the algorithmic surface.
+
 ## Refresh policy
 
 Upstream `halo2_poseidon` (and the broader Halo 2 ecosystem)
