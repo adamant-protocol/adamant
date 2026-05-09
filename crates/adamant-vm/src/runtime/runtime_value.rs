@@ -116,47 +116,95 @@ pub enum RuntimeValue {
     Reference(Reference),
 }
 
+/// Runtime-only struct value with [`RuntimeValue`] fields.
+///
+/// Distinct from BCS [`StructValue`] (which has `Vec<Value>`
+/// fields). At runtime, struct fields can themselves be runtime-
+/// only values like [`Container`] (nested structs / vectors with
+/// their own `Rc-RefCell` wrappers, enabling composed borrows
+/// per Phase 5/6.2c.1.b's foundation correction).
+///
+/// Conversion to/from BCS [`StructValue`] happens at the encoding
+/// boundary via [`RuntimeValue::from_value`] / [`RuntimeValue::to_value`].
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RuntimeStructValue {
+    /// Identifier of the struct's type definition (whitepaper
+    /// section 5.1.2).
+    pub type_id: TypeId,
+    /// Field values in canonical declaration order. Fields can
+    /// be primitive [`RuntimeValue`] variants or
+    /// [`RuntimeValue::Container`] (for nested structs / vectors).
+    pub fields: Vec<RuntimeValue>,
+}
+
 /// Heap-allocated runtime container with shared mutable interior.
 ///
 /// Containers wrap their interior in `Rc<RefCell<...>>` to
-/// support references-with-mutation: a [`Reference`] into a
-/// container holds an `Rc::clone(&container.0)` plus an
-/// index/path, and mutation through the reference invokes
-/// `RefCell::borrow_mut` on the shared interior.
+/// support references-with-mutation + composed borrows: a
+/// [`Reference`] into a container holds an `Rc::clone` of the
+/// container plus an index/path; mutation through the reference
+/// invokes `RefCell::borrow_mut` on the shared interior. Nested
+/// containers (a struct field that is itself a struct, or a
+/// vector element that is itself a vector) have their own
+/// `Rc-RefCell` wrappers, allowing composed borrows like
+/// `&mut s.f1.f2` to descend through the container chain.
 ///
 /// Two variants:
 ///
 /// - [`Container::Vector`]: a heap-allocated vector of
 ///   [`RuntimeValue`]s. The polymorphic element type is encoded
-///   per-position (each element is a tagged [`RuntimeValue`]).
+///   per-position.
 /// - [`Container::Struct`]: a heap-allocated struct value with
-///   typed fields. The struct's fields are stored as a
-///   [`StructValue`] inside the cell; conversion to BCS
-///   [`Value::Struct`] is a clone-out at the encoding boundary.
+///   [`RuntimeValue`] fields (per [`RuntimeStructValue`]).
 #[derive(Debug, Clone)]
 pub enum Container {
     /// Vector container.
     Vector(Rc<RefCell<Vec<RuntimeValue>>>),
-    /// Struct container with typed fields.
-    Struct(Rc<RefCell<StructValue>>),
+    /// Struct container with [`RuntimeValue`] fields.
+    Struct(Rc<RefCell<RuntimeStructValue>>),
 }
 
-/// Runtime reference to a local, struct field, or vector element.
+/// Runtime reference — three variants per Phase 5/6.2c.1.b's
+/// composed-borrow design (Sui-VM-aligned).
 ///
 /// References are runtime-only values — they never appear in
 /// BCS-encoded data. The [`crate::validator::function_pass::reference_safety`]
-/// pass at deploy time statically validates that all references
-/// satisfy Move's borrow rules (no two mut refs to the same
-/// location alive simultaneously; ref does not outlive the
-/// referenced value); the runtime trusts these guarantees and
-/// performs no aliasing checks on its own. `RefCell::borrow` /
-/// `borrow_mut` panics are therefore unreachable under correct
-/// operation; if one fires, the verifier was unsound for the
-/// inherited subset, indicating a verifier-residual binding case
-/// per [`InvariantViolationReason`].
+/// pass at deploy time statically validates Move's borrow rules
+/// (no two mut refs to the same location alive simultaneously;
+/// ref does not outlive the referenced value); the runtime
+/// trusts these guarantees. `RefCell::borrow` / `borrow_mut`
+/// panics are unreachable under correct operation.
+///
+/// # Variant taxonomy
+///
+/// - [`Reference::Local`] — reference to a slot in a frame's
+///   locals storage. `locals[idx]` is `Option<RuntimeValue>`;
+///   `read_ref` clones the value (must be `Some`); `write_ref`
+///   replaces the slot.
+/// - [`Reference::Container`] — direct reference to a heap-
+///   allocated container (struct or vector). Used when borrowing
+///   a container-typed local or a container-typed field.
+///   `borrow_field` / `borrow_element` descend further into the
+///   container.
+/// - [`Reference::Indexed`] — reference to a primitive value at
+///   index `idx` within a container. `read_ref` clones the
+///   primitive at the index; `write_ref` overwrites the slot.
+///
+/// # Composed-borrow chain shape
+///
+/// A composed borrow `&mut s.f1.f2` produces:
+/// 1. `BorrowLoc(s)` → `Reference::Container(struct_s)`
+/// 2. `BorrowField(.f1)` on container → if f1 is a container,
+///    `Reference::Container(struct_f1)`; otherwise
+///    `Reference::Indexed { container: struct_s, idx: f1_idx }`
+/// 3. `BorrowField(.f2)` continues from there
+///
+/// Each container in the chain has its own `Rc-RefCell` wrapper;
+/// the reference holds an `Rc::clone` so it remains valid for
+/// the borrow lifetime the verifier proved.
 #[derive(Debug, Clone)]
 pub enum Reference {
-    /// Reference to a local in a frame's locals slot.
+    /// Reference to a slot in a frame's locals storage.
     ///
     /// `locals` is the frame's [`Rc<RefCell<Vec<Option<RuntimeValue>>>>`]
     /// shared with the frame; the reference holds an `Rc::clone`
@@ -168,23 +216,21 @@ pub enum Reference {
         /// Index of the local within the frame's locals array.
         idx: usize,
     },
-    /// Reference to a field of a struct value.
-    ///
-    /// The reference holds an `Rc::clone` of the struct's
-    /// container so mutation through the reference (`WriteRef`
-    /// after `MutBorrowField`) can apply to the underlying struct.
-    StructField {
-        /// Shared ownership of the struct container.
-        container: Rc<RefCell<StructValue>>,
-        /// Index of the field within the struct's `fields` array
-        /// (canonical declaration order per [`StructValue`]).
-        field_idx: usize,
-    },
-    /// Reference to an element of a vector.
-    VectorElement {
-        /// Shared ownership of the vector container.
-        container: Rc<RefCell<Vec<RuntimeValue>>>,
-        /// Index of the element within the vector.
+    /// Direct reference to a heap-allocated container (struct
+    /// or vector). Used when the borrow target is a container-
+    /// typed value; further `borrow_field` / `borrow_element`
+    /// descends through the container chain.
+    Container(Container),
+    /// Indexed reference to a primitive value at position `idx`
+    /// within a container. Used when the borrow target is a
+    /// primitive-typed field or vector element.
+    Indexed {
+        /// Shared ownership of the container holding the
+        /// primitive value.
+        container: Container,
+        /// Position of the primitive within the container's
+        /// underlying storage (struct field index or vector
+        /// element index).
         idx: usize,
     },
 }
@@ -212,13 +258,23 @@ impl RuntimeValue {
                 Self::Container(Container::Vector(Rc::new(RefCell::new(runtime_elements))))
             }
             Value::Struct(struct_value) => {
-                // A runtime struct's fields are stored as `Value`
-                // (BCS-shape) inside the cell to simplify round-
-                // tripping at the encoding boundary. References
-                // INTO struct fields dereference the cell and
-                // clone-out the referenced field, then re-write
-                // through `borrow_mut` for `WriteRef`.
-                Self::Container(Container::Struct(Rc::new(RefCell::new(struct_value))))
+                // Per Phase 5/6.2c.1.b composed-borrow fix:
+                // recursively convert struct fields to
+                // RuntimeValue. Nested struct fields become
+                // RuntimeValue::Container(Container::Struct(rc))
+                // — each level has its own Rc-RefCell wrapper so
+                // composed borrows (`&mut s.f1.f2`) can descend
+                // through the container chain.
+                let runtime_fields: Vec<RuntimeValue> = struct_value
+                    .fields
+                    .into_iter()
+                    .map(RuntimeValue::from_value)
+                    .collect();
+                let runtime_struct = RuntimeStructValue {
+                    type_id: struct_value.type_id,
+                    fields: runtime_fields,
+                };
+                Self::Container(Container::Struct(Rc::new(RefCell::new(runtime_struct))))
             }
         }
     }
@@ -252,9 +308,21 @@ impl RuntimeValue {
                 Some(Value::Vector(bcs_elements))
             }
             Self::Container(Container::Struct(rc)) => {
-                let struct_value =
+                let runtime_struct =
                     Rc::try_unwrap(rc).map_or_else(|rc| rc.borrow().clone(), RefCell::into_inner);
-                Some(Value::Struct(struct_value))
+                // Recursively convert each RuntimeValue field
+                // back to BCS Value. Nested-struct fields became
+                // RuntimeValue::Container variants at from_value
+                // time; round-trip back through to_value per
+                // Phase 5/6.2c.1.b composed-borrow fix.
+                let mut bcs_fields = Vec::with_capacity(runtime_struct.fields.len());
+                for f in runtime_struct.fields {
+                    bcs_fields.push(f.to_value()?);
+                }
+                Some(Value::Struct(StructValue {
+                    type_id: runtime_struct.type_id,
+                    fields: bcs_fields,
+                }))
             }
             Self::Reference(_) => None,
         }
@@ -308,39 +376,52 @@ impl Reference {
     /// whose type carries the `copy` ability (the verifier's
     /// `type_safety` pass enforces this). At runtime, the
     /// referenced value is cloned out — for primitives this is
-    /// trivial; for containers (`Vector` / `Struct`), this clones
-    /// the underlying storage (not the `Rc` pointer).
+    /// trivial; for containers, this clones the container's
+    /// contents (note: the `Rc` clone semantics on `Container`
+    /// actually share the `Rc` pointer; clone-by-content for
+    /// `ReadRef` is currently delegated to the `Clone` impl on
+    /// [`RuntimeValue`] which wraps `Container` and increments
+    /// the `Rc`).
     pub fn read_ref(&self) -> Result<RuntimeValue, VMError> {
         match self {
             Self::Local { locals, idx } => {
                 let cell = locals.borrow();
                 let slot = cell.get(*idx).ok_or(VMError::InvariantViolation {
-                    reason: InvariantViolationReason::LocalIndexOutOfBounds,
+                    reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
                 })?;
                 slot.clone().ok_or(VMError::InvariantViolation {
                     reason: InvariantViolationReason::LocalNotInitialized,
                 })
             }
-            Self::StructField {
-                container,
-                field_idx,
-            } => {
-                let cell = container.borrow();
-                let field = cell
-                    .fields
-                    .get(*field_idx)
-                    .ok_or(VMError::InvariantViolation {
-                        reason: InvariantViolationReason::LocalIndexOutOfBounds,
+            Self::Container(c) => {
+                // ReadRef on a container reference clones the
+                // RuntimeValue wrapper; the Container's `Rc` is
+                // cloned by reference (shared interior). Per Move
+                // semantics, types with the `copy` ability that
+                // are containers structurally have value semantics
+                // for ReadRef — this reflects the current Sui-VM
+                // alignment posture. Deep-vs-shallow ReadRef
+                // semantics for containers is a Phase 5/6.X
+                // refinement carry-forward if profiling surfaces
+                // it as a concern.
+                Ok(RuntimeValue::Container(c.clone()))
+            }
+            Self::Indexed { container, idx } => match container {
+                Container::Struct(rc) => {
+                    let cell = rc.borrow();
+                    let field = cell.fields.get(*idx).ok_or(VMError::InvariantViolation {
+                        reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
                     })?;
-                Ok(RuntimeValue::from_value(field.clone()))
-            }
-            Self::VectorElement { container, idx } => {
-                let cell = container.borrow();
-                let element = cell.get(*idx).ok_or(VMError::InvariantViolation {
-                    reason: InvariantViolationReason::LocalIndexOutOfBounds,
-                })?;
-                Ok(element.clone())
-            }
+                    Ok(field.clone())
+                }
+                Container::Vector(rc) => {
+                    let cell = rc.borrow();
+                    let element = cell.get(*idx).ok_or(VMError::InvariantViolation {
+                        reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+                    })?;
+                    Ok(element.clone())
+                }
+            },
         }
     }
 
@@ -356,36 +437,173 @@ impl Reference {
             Self::Local { locals, idx } => {
                 let mut cell = locals.borrow_mut();
                 let slot = cell.get_mut(*idx).ok_or(VMError::InvariantViolation {
-                    reason: InvariantViolationReason::LocalIndexOutOfBounds,
+                    reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
                 })?;
                 *slot = Some(value);
                 Ok(())
             }
-            Self::StructField {
-                container,
-                field_idx,
-            } => {
-                let mut cell = container.borrow_mut();
-                let field = cell
-                    .fields
-                    .get_mut(*field_idx)
-                    .ok_or(VMError::InvariantViolation {
-                        reason: InvariantViolationReason::LocalIndexOutOfBounds,
+            Self::Container(c) => {
+                // WriteRef on a container reference replaces the
+                // container's interior. For Struct: replace
+                // RuntimeStructValue. For Vector: replace Vec
+                // contents. The new `value` is expected to be a
+                // RuntimeValue::Container of the matching kind;
+                // the verifier's type_safety pass guarantees
+                // this. Type-mismatch surfaces as
+                // TypeMismatchOnStack per residual binding.
+                match (c, value) {
+                    (
+                        Container::Struct(target_rc),
+                        RuntimeValue::Container(Container::Struct(source_rc)),
+                    ) => {
+                        let new_struct = source_rc.borrow().clone();
+                        *target_rc.borrow_mut() = new_struct;
+                        Ok(())
+                    }
+                    (
+                        Container::Vector(target_rc),
+                        RuntimeValue::Container(Container::Vector(source_rc)),
+                    ) => {
+                        let new_vec = source_rc.borrow().clone();
+                        *target_rc.borrow_mut() = new_vec;
+                        Ok(())
+                    }
+                    _ => Err(VMError::InvariantViolation {
+                        reason: InvariantViolationReason::TypeMismatchOnStack,
+                    }),
+                }
+            }
+            Self::Indexed { container, idx } => match container {
+                Container::Struct(rc) => {
+                    let mut cell = rc.borrow_mut();
+                    let slot = cell
+                        .fields
+                        .get_mut(*idx)
+                        .ok_or(VMError::InvariantViolation {
+                            reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+                        })?;
+                    *slot = value;
+                    Ok(())
+                }
+                Container::Vector(rc) => {
+                    let mut cell = rc.borrow_mut();
+                    let slot = cell.get_mut(*idx).ok_or(VMError::InvariantViolation {
+                        reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
                     })?;
-                let bcs_value = value.to_value().ok_or(VMError::InvariantViolation {
-                    reason: InvariantViolationReason::TypeMismatchOnStack,
+                    *slot = value;
+                    Ok(())
+                }
+            },
+        }
+    }
+
+    /// Descend into a struct field of the referenced container.
+    ///
+    /// Used by `MutBorrowField` / `ImmBorrowField` handlers.
+    /// Per Move semantics, the operand must be a reference to a
+    /// struct; the verifier's `type_safety` pass guarantees this.
+    /// The returned reference points to the named field —
+    /// `Reference::Container` if the field is itself a container,
+    /// `Reference::Indexed` if the field is primitive.
+    pub fn borrow_field(&self, field_idx: usize) -> Result<Reference, VMError> {
+        // First obtain the underlying struct container, dereferencing
+        // through Local references as needed.
+        let struct_container_rc = self.resolve_struct_container()?;
+        let cell = struct_container_rc.borrow();
+        let field = cell
+            .fields
+            .get(field_idx)
+            .ok_or(VMError::InvariantViolation {
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+            })?;
+        match field {
+            // Field is itself a container — return a Container
+            // reference pointing to the inner container's
+            // shared Rc, enabling further composed borrows.
+            RuntimeValue::Container(inner_c) => Ok(Reference::Container(inner_c.clone())),
+            // Field is primitive — return an Indexed reference
+            // with the parent struct container.
+            _ => Ok(Reference::Indexed {
+                container: Container::Struct(Rc::clone(&struct_container_rc)),
+                idx: field_idx,
+            }),
+        }
+    }
+
+    /// Descend into a vector element of the referenced container.
+    ///
+    /// Used by `VecImmBorrow` / `VecMutBorrow` handlers.
+    /// Analogous to [`Self::borrow_field`] for vector elements.
+    pub fn borrow_element(&self, idx: usize) -> Result<Reference, VMError> {
+        let vec_container_rc = self.resolve_vector_container()?;
+        let cell = vec_container_rc.borrow();
+        let element = cell.get(idx).ok_or(VMError::InvariantViolation {
+            reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+        })?;
+        match element {
+            RuntimeValue::Container(inner_c) => Ok(Reference::Container(inner_c.clone())),
+            _ => Ok(Reference::Indexed {
+                container: Container::Vector(Rc::clone(&vec_container_rc)),
+                idx,
+            }),
+        }
+    }
+
+    /// Resolve a reference to the underlying struct container
+    /// `Rc<RefCell<RuntimeStructValue>>`.
+    ///
+    /// Internal helper for [`Self::borrow_field`]. Returns the
+    /// `Rc` clone of the struct container; the caller can then
+    /// `borrow` / `borrow_mut` for field access.
+    fn resolve_struct_container(&self) -> Result<Rc<RefCell<RuntimeStructValue>>, VMError> {
+        match self {
+            Self::Container(Container::Struct(rc)) => Ok(Rc::clone(rc)),
+            Self::Local { locals, idx } => {
+                let cell = locals.borrow();
+                let slot = cell.get(*idx).ok_or(VMError::InvariantViolation {
+                    reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
                 })?;
-                *field = bcs_value;
-                Ok(())
-            }
-            Self::VectorElement { container, idx } => {
-                let mut cell = container.borrow_mut();
-                let slot = cell.get_mut(*idx).ok_or(VMError::InvariantViolation {
-                    reason: InvariantViolationReason::LocalIndexOutOfBounds,
+                let value = slot.as_ref().ok_or(VMError::InvariantViolation {
+                    reason: InvariantViolationReason::LocalNotInitialized,
                 })?;
-                *slot = value;
-                Ok(())
+                if let RuntimeValue::Container(Container::Struct(rc)) = value {
+                    Ok(Rc::clone(rc))
+                } else {
+                    Err(VMError::InvariantViolation {
+                        reason: InvariantViolationReason::TypeMismatchOnStack,
+                    })
+                }
             }
+            _ => Err(VMError::InvariantViolation {
+                reason: InvariantViolationReason::TypeMismatchOnStack,
+            }),
+        }
+    }
+
+    /// Resolve a reference to the underlying vector container.
+    /// Analogous to [`Self::resolve_struct_container`].
+    fn resolve_vector_container(&self) -> Result<Rc<RefCell<Vec<RuntimeValue>>>, VMError> {
+        match self {
+            Self::Container(Container::Vector(rc)) => Ok(Rc::clone(rc)),
+            Self::Local { locals, idx } => {
+                let cell = locals.borrow();
+                let slot = cell.get(*idx).ok_or(VMError::InvariantViolation {
+                    reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+                })?;
+                let value = slot.as_ref().ok_or(VMError::InvariantViolation {
+                    reason: InvariantViolationReason::LocalNotInitialized,
+                })?;
+                if let RuntimeValue::Container(Container::Vector(rc)) = value {
+                    Ok(Rc::clone(rc))
+                } else {
+                    Err(VMError::InvariantViolation {
+                        reason: InvariantViolationReason::TypeMismatchOnStack,
+                    })
+                }
+            }
+            _ => Err(VMError::InvariantViolation {
+                reason: InvariantViolationReason::TypeMismatchOnStack,
+            }),
         }
     }
 }
@@ -394,7 +612,7 @@ impl Container {
     /// Construct an empty struct container with the given type id.
     #[must_use]
     pub fn empty_struct(type_id: TypeId) -> Self {
-        Self::Struct(Rc::new(RefCell::new(StructValue {
+        Self::Struct(Rc::new(RefCell::new(RuntimeStructValue {
             type_id,
             fields: Vec::new(),
         })))
@@ -426,6 +644,11 @@ pub fn compare_unsigned(lhs: &RuntimeValue, rhs: &RuntimeValue) -> Option<Orderi
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::manual_let_else,
+    clippy::doc_markdown,
+    reason = "test fixture patterns + verbatim spec quotes; same posture as Phase 5/6.2b interpreter.rs::tests"
+)]
 mod tests {
     //! Verbatim-spec-quote-grounds-runtime-fixture discipline.
 
@@ -516,37 +739,159 @@ mod tests {
         assert_eq!(locals.borrow()[0], Some(RuntimeValue::U64(99)));
     }
 
-    /// Vector-element reference read/write round-trip.
+    /// Vector-element reference read/write round-trip via
+    /// Reference::Indexed.
     #[test]
     fn vector_element_ref_round_trip() {
-        let container = Rc::new(RefCell::new(vec![
+        let rc = Rc::new(RefCell::new(vec![
             RuntimeValue::U64(1),
             RuntimeValue::U64(2),
             RuntimeValue::U64(3),
         ]));
-        let r = Reference::VectorElement {
-            container: Rc::clone(&container),
+        let r = Reference::Indexed {
+            container: Container::Vector(Rc::clone(&rc)),
             idx: 1,
         };
         assert_eq!(r.read_ref().expect("ok"), RuntimeValue::U64(2));
         r.write_ref(RuntimeValue::U64(99)).expect("ok");
-        assert_eq!(container.borrow()[1], RuntimeValue::U64(99));
+        assert_eq!(rc.borrow()[1], RuntimeValue::U64(99));
     }
 
-    /// Struct-field reference read/write round-trip.
+    /// Struct-field reference read/write round-trip via
+    /// Reference::Indexed.
     #[test]
     fn struct_field_ref_round_trip() {
-        let container = Rc::new(RefCell::new(StructValue {
+        let rc = Rc::new(RefCell::new(RuntimeStructValue {
             type_id: TypeId::from_bytes([0x33; 32]),
-            fields: vec![Value::U64(7), Value::Bool(true)],
+            fields: vec![RuntimeValue::U64(7), RuntimeValue::Bool(true)],
         }));
-        let r = Reference::StructField {
-            container: Rc::clone(&container),
-            field_idx: 0,
+        let r = Reference::Indexed {
+            container: Container::Struct(Rc::clone(&rc)),
+            idx: 0,
         };
         assert_eq!(r.read_ref().expect("ok"), RuntimeValue::U64(7));
         r.write_ref(RuntimeValue::U64(99)).expect("ok");
-        assert_eq!(container.borrow().fields[0], Value::U64(99));
+        assert_eq!(rc.borrow().fields[0], RuntimeValue::U64(99));
+    }
+
+    // ---------- Composed-borrow tests (5/6.2c.1.b foundation correction) ----------
+
+    /// Whitepaper §6.2.1.4 (verbatim): "Load a mutable reference
+    /// to a struct field." Composed-borrow case: `&mut s.f1.f2`
+    /// where `f1` is itself a struct field.
+    ///
+    /// At from_value time, nested struct fields become
+    /// RuntimeValue::Container variants with their own Rc-RefCell
+    /// wrappers. borrow_field on a Reference::Container struct
+    /// where the field is itself a container returns
+    /// Reference::Container(inner_container) — enabling
+    /// composed access to deeply-nested fields.
+    #[test]
+    fn composed_borrow_struct_in_struct_round_trip() {
+        // Construct: outer = { inner: { value: 7 } }
+        let original = Value::Struct(StructValue {
+            type_id: TypeId::from_bytes([0x01; 32]),
+            fields: vec![Value::Struct(StructValue {
+                type_id: TypeId::from_bytes([0x02; 32]),
+                fields: vec![Value::U64(7)],
+            })],
+        });
+        let runtime = RuntimeValue::from_value(original.clone());
+        // Outer container.
+        let outer_c = match runtime {
+            RuntimeValue::Container(ref c) => c.clone(),
+            _ => panic!("expected container"),
+        };
+        let outer_ref = Reference::Container(outer_c);
+        // Borrow outer.fields[0] — that's the inner struct.
+        let inner_ref = outer_ref.borrow_field(0).expect("ok");
+        // Borrow inner.fields[0] — that's the U64 primitive.
+        let value_ref = inner_ref.borrow_field(0).expect("ok");
+        // Read the primitive.
+        assert_eq!(value_ref.read_ref().expect("ok"), RuntimeValue::U64(7));
+        // Write through the composed reference.
+        value_ref.write_ref(RuntimeValue::U64(99)).expect("ok");
+        // Round-trip back to BCS Value and verify the inner
+        // primitive was updated through the composed-reference
+        // chain.
+        let post = runtime.to_value().expect("no refs");
+        let expected_post = Value::Struct(StructValue {
+            type_id: TypeId::from_bytes([0x01; 32]),
+            fields: vec![Value::Struct(StructValue {
+                type_id: TypeId::from_bytes([0x02; 32]),
+                fields: vec![Value::U64(99)],
+            })],
+        });
+        assert_eq!(post, expected_post);
+    }
+
+    /// Composed borrow into a vector of vectors: `&mut v[0][1]`.
+    #[test]
+    fn composed_borrow_vector_in_vector_round_trip() {
+        let original = Value::Vector(vec![
+            Value::Vector(vec![Value::U64(10), Value::U64(20), Value::U64(30)]),
+            Value::Vector(vec![Value::U64(40), Value::U64(50)]),
+        ]);
+        let runtime = RuntimeValue::from_value(original.clone());
+        let outer_c = match runtime {
+            RuntimeValue::Container(ref c) => c.clone(),
+            _ => panic!("expected container"),
+        };
+        let outer_ref = Reference::Container(outer_c);
+        // Borrow outer[0] — that's the inner vector.
+        let inner_ref = outer_ref.borrow_element(0).expect("ok");
+        // Borrow inner[1] — that's the U64 primitive (value 20).
+        let value_ref = inner_ref.borrow_element(1).expect("ok");
+        assert_eq!(value_ref.read_ref().expect("ok"), RuntimeValue::U64(20));
+        // Write through the composed reference.
+        value_ref.write_ref(RuntimeValue::U64(99)).expect("ok");
+        // Round-trip back.
+        let post = runtime.to_value().expect("no refs");
+        let expected_post = Value::Vector(vec![
+            Value::Vector(vec![Value::U64(10), Value::U64(99), Value::U64(30)]),
+            Value::Vector(vec![Value::U64(40), Value::U64(50)]),
+        ]);
+        assert_eq!(post, expected_post);
+    }
+
+    /// borrow_field on Reference::Container where field is
+    /// itself a container returns Reference::Container.
+    #[test]
+    fn borrow_field_returns_container_for_container_field() {
+        let original = Value::Struct(StructValue {
+            type_id: TypeId::from_bytes([0x01; 32]),
+            fields: vec![Value::Struct(StructValue {
+                type_id: TypeId::from_bytes([0x02; 32]),
+                fields: vec![Value::U64(7)],
+            })],
+        });
+        let runtime = RuntimeValue::from_value(original);
+        let outer_c = match runtime {
+            RuntimeValue::Container(c) => c,
+            _ => panic!("expected container"),
+        };
+        let outer_ref = Reference::Container(outer_c);
+        let inner_ref = outer_ref.borrow_field(0).expect("ok");
+        assert!(matches!(inner_ref, Reference::Container(_)));
+    }
+
+    /// borrow_field on Reference::Container where field is
+    /// primitive returns Reference::Indexed.
+    #[test]
+    fn borrow_field_returns_indexed_for_primitive_field() {
+        let original = Value::Struct(StructValue {
+            type_id: TypeId::from_bytes([0x01; 32]),
+            fields: vec![Value::U64(42)],
+        });
+        let runtime = RuntimeValue::from_value(original);
+        let outer_c = match runtime {
+            RuntimeValue::Container(c) => c,
+            _ => panic!("expected container"),
+        };
+        let outer_ref = Reference::Container(outer_c);
+        let field_ref = outer_ref.borrow_field(0).expect("ok");
+        assert!(matches!(field_ref, Reference::Indexed { .. }));
+        assert_eq!(field_ref.read_ref().expect("ok"), RuntimeValue::U64(42));
     }
 
     /// Whitepaper §6.2.1.9 (verbatim): "All integer comparisons

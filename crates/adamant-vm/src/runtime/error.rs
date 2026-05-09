@@ -282,12 +282,24 @@ pub enum InvariantViolationReason {
     /// "Type safety") should pre-empt this case.
     TypeMismatchOnStack,
 
-    /// Local-variable index out of bounds for the executing
-    /// frame's locals array.
+    /// Index out of bounds for a verifier-validated index access.
     ///
-    /// The verifier's `bounds_checker` pass (§6.2.1.6 inherited
-    /// "bounds checking") should pre-empt this case.
-    LocalIndexOutOfBounds,
+    /// Covers all index-shape verifier residuals: local-variable
+    /// index, function-handle index, struct-definition index,
+    /// field-handle index, constant-pool index, variant-handle
+    /// index, struct-field index within a struct's fields array,
+    /// vector-element index within a vector's elements. The
+    /// verifier's `bounds_checker` pass (§6.2.1.6 inherited
+    /// "bounds checking") + per-pool index validation should
+    /// pre-empt all such cases at deploy time.
+    ///
+    /// Renamed at Phase 5/6.2c.1.b from `LocalIndexOutOfBounds`
+    /// to generalize across all index-shape residuals — module-
+    /// access handlers (5/6.2c.2) reuse this variant for handle/
+    /// pool indices alongside locals/field/element indices.
+    /// Variant-naming-generalization-as-refactor discipline 1st
+    /// instance.
+    IndexOutOfBoundsPostVerification,
 
     /// Local-variable slot is unoccupied (the local has been
     /// moved out via `MoveLoc` or has not been written yet) when

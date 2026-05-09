@@ -1577,7 +1577,7 @@ mod tests {
         assert!(matches!(
             err,
             VMError::InvariantViolation {
-                reason: InvariantViolationReason::LocalIndexOutOfBounds,
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
             }
         ));
     }
@@ -2244,7 +2244,7 @@ mod tests {
         ));
     }
 
-    /// InvariantViolationReason::LocalIndexOutOfBounds.
+    /// InvariantViolationReason::IndexOutOfBoundsPostVerification.
     #[test]
     fn variant_audit_invariant_local_index_out_of_bounds() {
         let mut state = state_with_frame(2);
@@ -2252,7 +2252,7 @@ mod tests {
         assert!(matches!(
             err,
             VMError::InvariantViolation {
-                reason: InvariantViolationReason::LocalIndexOutOfBounds,
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
             }
         ));
     }

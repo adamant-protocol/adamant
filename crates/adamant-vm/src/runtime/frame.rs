@@ -25,7 +25,6 @@ use adamant_types::Address;
 
 use crate::runtime::error::{InvariantViolationReason, VMError};
 use crate::runtime::runtime_value::{Container, RuntimeValue};
-use crate::value::StructValue;
 
 /// Shared, mutably-borrowable storage for a frame's locals.
 /// References into the frame's locals (per the
@@ -215,12 +214,14 @@ impl Frame {
     }
 
     /// Pop a struct container from the operand stack. Returns
-    /// the `Rc<RefCell<StructValue>>` shared interior; callers
-    /// can `borrow` / `borrow_mut` for read/write access.
+    /// the `Rc<RefCell<RuntimeStructValue>>` shared interior;
+    /// callers can `borrow` / `borrow_mut` for read/write access.
     ///
     /// Helper present for 5/6.2c.2 handler integration. 5/6.2c.1
     /// foundation work does not consume this method.
-    pub fn pop_struct(&mut self) -> Result<Rc<RefCell<StructValue>>, VMError> {
+    pub fn pop_struct(
+        &mut self,
+    ) -> Result<Rc<RefCell<crate::runtime::runtime_value::RuntimeStructValue>>, VMError> {
         match self.pop_value()? {
             RuntimeValue::Container(Container::Struct(rc)) => Ok(rc),
             _ => Err(VMError::InvariantViolation {
@@ -265,7 +266,7 @@ impl Frame {
     pub fn copy_loc(&self, idx: LocalIndex) -> Result<RuntimeValue, VMError> {
         let cell = self.locals.borrow();
         let slot = cell.get(idx as usize).ok_or(VMError::InvariantViolation {
-            reason: InvariantViolationReason::LocalIndexOutOfBounds,
+            reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
         })?;
         slot.clone().ok_or(VMError::InvariantViolation {
             reason: InvariantViolationReason::LocalNotInitialized,
@@ -279,7 +280,7 @@ impl Frame {
         let slot = cell
             .get_mut(idx as usize)
             .ok_or(VMError::InvariantViolation {
-                reason: InvariantViolationReason::LocalIndexOutOfBounds,
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
             })?;
         slot.take().ok_or(VMError::InvariantViolation {
             reason: InvariantViolationReason::LocalNotInitialized,
@@ -300,7 +301,7 @@ impl Frame {
         let slot = cell
             .get_mut(idx as usize)
             .ok_or(VMError::InvariantViolation {
-                reason: InvariantViolationReason::LocalIndexOutOfBounds,
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
             })?;
         *slot = Some(value);
         Ok(())
@@ -322,7 +323,7 @@ impl Frame {
         let cell = self.locals.borrow();
         if (idx as usize) >= cell.len() {
             return Err(VMError::InvariantViolation {
-                reason: InvariantViolationReason::LocalIndexOutOfBounds,
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
             });
         }
         Ok(crate::runtime::Reference::Local {

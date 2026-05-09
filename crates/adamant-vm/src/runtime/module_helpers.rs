@@ -59,7 +59,7 @@ pub fn resolve_function_def(
     let handle_idx = handle.0 as usize;
     if handle_idx >= module.function_handles.len() {
         return Err(VMError::InvariantViolation {
-            reason: InvariantViolationReason::LocalIndexOutOfBounds,
+            reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
         });
     }
     // Find the function_def whose `function` field references
@@ -72,7 +72,7 @@ pub fn resolve_function_def(
         .iter()
         .find(|def| def.function.0 as usize == handle_idx)
         .ok_or(VMError::InvariantViolation {
-            reason: InvariantViolationReason::LocalIndexOutOfBounds,
+            reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
         })
 }
 
@@ -89,7 +89,7 @@ pub fn resolve_struct_field_count(
         .struct_defs
         .get(idx.0 as usize)
         .ok_or(VMError::InvariantViolation {
-            reason: InvariantViolationReason::LocalIndexOutOfBounds,
+            reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
         })?;
     // `fields()` returns `Option<&[FieldDefinition]>`; native
     // structs return None, regular structs return Some(slice).
@@ -111,7 +111,7 @@ pub fn resolve_field_offset(
             .field_handles
             .get(handle.0 as usize)
             .ok_or(VMError::InvariantViolation {
-                reason: InvariantViolationReason::LocalIndexOutOfBounds,
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
             })?;
     // FieldHandle.field is MemberCount (= u16); convert to usize
     // for use as a field index within the struct's fields array.
@@ -134,7 +134,7 @@ pub fn resolve_constant(
         .constant_pool
         .get(idx.0 as usize)
         .ok_or(VMError::InvariantViolation {
-            reason: InvariantViolationReason::LocalIndexOutOfBounds,
+            reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
         })
 }
 
@@ -153,7 +153,7 @@ pub fn resolve_variant_handle(
             .variant_handles
             .get(handle.0 as usize)
             .ok_or(VMError::InvariantViolation {
-                reason: InvariantViolationReason::LocalIndexOutOfBounds,
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
             })?;
     // VariantHandle.variant is VariantTag (= u16).
     Ok((variant_handle.enum_def.0 as usize, variant_handle.variant))
