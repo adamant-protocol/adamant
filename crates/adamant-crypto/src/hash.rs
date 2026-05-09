@@ -166,6 +166,30 @@ pub fn blake3(input: &[u8]) -> [u8; 32] {
     *::blake3::hash(input).as_bytes()
 }
 
+/// HKDF-SHA3-256 per RFC 5869 with SHA3-256 as the underlying
+/// hash. Used by §7.4.2 sub-view-key derivation (instance 26
+/// Path 1 amendment) and §7.2.5 spending-key derivation framing.
+///
+/// Returns `output_len` bytes derived from `(salt, ikm, info)`
+/// per RFC 5869. The output length must satisfy the RFC 5869
+/// bound `output_len <= 255 * HashLen` (= 255 * 32 = 8160 bytes
+/// for SHA3-256); inputs exceeding this bound return `None`.
+///
+/// # Panics
+///
+/// The internal HKDF construction's `expand` may produce a
+/// fallible result for output lengths beyond the RFC bound.
+/// Callers passing `output_len <= 8160` will not encounter
+/// failures; this wrapper returns `None` rather than panicking
+/// to keep the API total.
+#[must_use]
+pub fn hkdf_sha3_256(salt: &[u8], ikm: &[u8], info: &[u8], output_len: usize) -> Option<Vec<u8>> {
+    let hkdf = hkdf::Hkdf::<sha3::Sha3_256>::new(Some(salt), ikm);
+    let mut out = vec![0u8; output_len];
+    hkdf.expand(info, &mut out).ok()?;
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

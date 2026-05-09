@@ -10,6 +10,10 @@ publish.workspace = true
 
 [dependencies]
 sha3 = { workspace = true }
+# HKDF-SHA3-256 backing the §7.4.2 sub-view-key derivation
+# (whitepaper 7.4.2 Path 1 amendment).
+hmac = { workspace = true }
+hkdf = { workspace = true }
 blake3 = { workspace = true }
 ed25519-dalek = { workspace = true }
 ml-dsa = { workspace = true }

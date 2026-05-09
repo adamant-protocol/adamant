@@ -671,16 +671,103 @@ fn deferred_recursive_verify_surfaces_invalid_instruction() {
     assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
 }
 
-/// Privacy-circuit handler `ReleaseSubViewKey` deferred to Phase 6
-/// `adamant-privacy` (or potentially a 5/6.4.b sub-arc if §7.4.2
-/// `G_aux` pinning lands as a spec-first verification 25th instance
-/// + adamant-crypto-blst-extra hash-to-scalar helper expansion).
+// (Note: deferred_release_sub_view_key_surfaces_invalid_instruction
+// was removed at Phase 5/6.4.b — ReleaseSubViewKey is now a real
+// handler per instance-26 §7.4.2 Path 1 amendment ratification.
+// See real handler tests below.)
+
+// =====================================================================
+// ReleaseSubViewKey (Phase 5/6.4.b — post-instance-26 amendment)
+// =====================================================================
+
+/// Whitepaper §7.4.2 (instance 26 Path 1 verbatim): "sub_seed_S =
+/// HKDF-SHA3(salt = domain_tag_subview, ikm = sk_v_kem_seed,
+/// info = BCS(S), L = 64)".
+///
+/// Round-trip determinism: same parent seed + same scope produces
+/// the same derived seed.
 #[test]
-fn deferred_release_sub_view_key_surfaces_invalid_instruction() {
+fn release_sub_view_key_is_deterministic() {
+    let module = empty_module();
+    let parent_seed: Vec<u8> = (0..64u8).collect();
+    let scope: Vec<u8> = b"scope-A".to_vec();
+
+    let mut state_a = state_with_transparent_frame(0);
+    push_stack(&mut state_a, vec![vec_u8(&parent_seed), vec_u8(&scope)]);
+    dispatch_adamant(&mut state_a, AdamantBytecode::ReleaseSubViewKey, &module).expect("ok");
+    let derived_a = extract_vec_u8(&top(&state_a));
+
+    let mut state_b = state_with_transparent_frame(0);
+    push_stack(&mut state_b, vec![vec_u8(&parent_seed), vec_u8(&scope)]);
+    dispatch_adamant(&mut state_b, AdamantBytecode::ReleaseSubViewKey, &module).expect("ok");
+    let derived_b = extract_vec_u8(&top(&state_b));
+
+    assert_eq!(derived_a, derived_b);
+    assert_eq!(derived_a.len(), 64);
+}
+
+/// Different scopes produce different derived seeds.
+#[test]
+fn release_sub_view_key_distinct_scopes_produce_distinct_seeds() {
+    let module = empty_module();
+    let parent_seed: Vec<u8> = (0..64u8).collect();
+
+    let mut state_a = state_with_transparent_frame(0);
+    push_stack(&mut state_a, vec![vec_u8(&parent_seed), vec_u8(b"scope-A")]);
+    dispatch_adamant(&mut state_a, AdamantBytecode::ReleaseSubViewKey, &module).expect("ok");
+    let derived_a = extract_vec_u8(&top(&state_a));
+
+    let mut state_b = state_with_transparent_frame(0);
+    push_stack(&mut state_b, vec![vec_u8(&parent_seed), vec_u8(b"scope-B")]);
+    dispatch_adamant(&mut state_b, AdamantBytecode::ReleaseSubViewKey, &module).expect("ok");
+    let derived_b = extract_vec_u8(&top(&state_b));
+
+    assert_ne!(derived_a, derived_b);
+}
+
+/// Different parent seeds produce different derived seeds.
+#[test]
+fn release_sub_view_key_distinct_parent_seeds_produce_distinct_seeds() {
+    let module = empty_module();
+    let scope: Vec<u8> = b"shared-scope".to_vec();
+
+    let mut state_a = state_with_transparent_frame(0);
+    push_stack(&mut state_a, vec![vec_u8(&[0xAA; 64]), vec_u8(&scope)]);
+    dispatch_adamant(&mut state_a, AdamantBytecode::ReleaseSubViewKey, &module).expect("ok");
+    let derived_a = extract_vec_u8(&top(&state_a));
+
+    let mut state_b = state_with_transparent_frame(0);
+    push_stack(&mut state_b, vec![vec_u8(&[0xBB; 64]), vec_u8(&scope)]);
+    dispatch_adamant(&mut state_b, AdamantBytecode::ReleaseSubViewKey, &module).expect("ok");
+    let derived_b = extract_vec_u8(&top(&state_b));
+
+    assert_ne!(derived_a, derived_b);
+}
+
+/// Wrong-size parent seed surfaces type mismatch.
+#[test]
+fn release_sub_view_key_wrong_parent_seed_size_surfaces_type_mismatch() {
     let module = empty_module();
     let mut state = state_with_transparent_frame(0);
+    push_stack(&mut state, vec![vec_u8(&[0u8; 32]), vec_u8(b"scope")]);
     let result = dispatch_adamant(&mut state, AdamantBytecode::ReleaseSubViewKey, &module);
-    assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
+    assert!(matches!(
+        result,
+        Err(VMError::InvariantViolation {
+            reason: InvariantViolationReason::TypeMismatchOnStack
+        })
+    ));
+}
+
+/// Empty scope is admissible and produces a deterministic seed.
+#[test]
+fn release_sub_view_key_empty_scope_is_admissible() {
+    let module = empty_module();
+    let mut state = state_with_transparent_frame(0);
+    push_stack(&mut state, vec![vec_u8(&[0xCC; 64]), vec_u8(b"")]);
+    dispatch_adamant(&mut state, AdamantBytecode::ReleaseSubViewKey, &module).expect("ok");
+    let derived = extract_vec_u8(&top(&state));
+    assert_eq!(derived.len(), 64);
 }
 
 // (Note: deferred_charge_gas_surfaces_invalid_instruction was

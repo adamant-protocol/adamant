@@ -83,6 +83,11 @@ module_name_repetitions = "allow"
 # sha3 pinned to exact patch version: this dependency carries every
 # consensus-critical hash. Bumps go through SECURITY.md review.
 sha3 = { version = "=0.10.9", default-features = false }
+# HKDF-SHA3-256 for §7.4.2 sub-view-key derivation (instance 26
+# Path 1 amendment). hmac + hkdf pinned at the digest 0.10
+# generation matching sha3 0.10.9.
+hmac = { version = "=0.12.1", default-features = false }
+hkdf = { version = "=0.12.4", default-features = false }
 # blake3: pinned to exact patch version on first use. SIMD backends are
 # integral to BLAKE3's performance rationale (whitepaper 3.3.2) so default
 # features are kept; the runtime CPU-feature dispatch is documented in

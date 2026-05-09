@@ -323,13 +323,15 @@ fn dispatch_adamant(
         AB::RemainingGas(dim) => dispatch_remaining_gas(state, *dim),
         AB::OutOfGas => dispatch_out_of_gas(state),
 
+        // ---------- Sub-view-key derivation (Phase 5/6.4.b) ----------
+        AB::ReleaseSubViewKey => dispatch_release_sub_view_key(state),
+
         // ---------- Deferred handlers ----------
         AB::KzgCommit
         | AB::KzgVerify
         | AB::GenerateProof(_)
         | AB::VerifyProof(_)
-        | AB::RecursiveVerify
-        | AB::ReleaseSubViewKey => {
+        | AB::RecursiveVerify => {
             let frame = state
                 .top_frame()
                 .expect("dispatch_adamant caller-contract: call stack non-empty");
@@ -2012,6 +2014,64 @@ fn dispatch_remaining_gas(
     let remaining = state.gas_tracker.remaining(dim);
     let frame = top_frame_mut(state)?;
     frame.push_value(RuntimeValue::U64(remaining));
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::Adamant(ReleaseSubViewKey)` handler — Phase 5/6.4.b.
+///
+/// Per whitepaper §7.4.2 (instance 26 Path 1 amendment): derives a
+/// 64-byte ML-KEM-768 sub-view-key seed from the parent viewing-
+/// keypair seed via HKDF-SHA3:
+///
+/// ```text
+/// sub_seed_S = HKDF-SHA3(
+///     salt = b"ADAMANT-v1-subview-derive",
+///     ikm  = sk_v_kem_seed,
+///     info = BCS(S),
+///     L    = 64
+/// )
+/// ```
+///
+/// Stack input: pops `vector<u8>` parent seed (64 bytes) followed
+/// by `vector<u8>` BCS-encoded scope descriptor `S`. Top of stack
+/// is the scope descriptor; bottom is the parent seed.
+///
+/// Stack output: pushes `vector<u8>` derived sub-view-key seed
+/// (64 bytes).
+///
+/// Per §7.4.2 Path 1 amendment: "the runtime does not need to
+/// materialise the keypair; only the seed is exposed via
+/// `ReleaseSubViewKey`." `ML-KEM-768.KeyGen` from the derived seed
+/// is performed by the wallet outside shielded execution.
+fn dispatch_release_sub_view_key(state: &mut InterpreterState) -> Result<DispatchOutcome, VMError> {
+    const DOMAIN_TAG_SUBVIEW: &[u8] = b"ADAMANT-v1-subview-derive";
+    const PARENT_SEED_LEN: usize = 64;
+    const DERIVED_SEED_LEN: usize = 64;
+
+    let frame = top_frame_mut(state)?;
+    let scope_bcs = frame.pop_vec_u8()?;
+    let parent_seed = frame.pop_vec_u8()?;
+
+    if parent_seed.len() != PARENT_SEED_LEN {
+        return Err(VMError::InvariantViolation {
+            reason: InvariantViolationReason::TypeMismatchOnStack,
+        });
+    }
+
+    let derived = adamant_crypto::hash::hkdf_sha3_256(
+        DOMAIN_TAG_SUBVIEW,
+        &parent_seed,
+        &scope_bcs,
+        DERIVED_SEED_LEN,
+    )
+    .ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::TypeMismatchOnStack,
+    })?;
+
+    let elements: Vec<RuntimeValue> = derived.into_iter().map(RuntimeValue::U8).collect();
+    let container = crate::runtime::runtime_value::Container::from_vec(elements);
+    frame.push_value(RuntimeValue::Container(container));
     advance_pc(frame);
     Ok(DispatchOutcome::Continue)
 }
