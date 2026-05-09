@@ -448,6 +448,11 @@ impl<'a> StackUsageVerifier<'a> {
             AdamantBytecode::Ed25519Verify => (3, 1),
             AdamantBytecode::MlDsaVerify65 => (3, 1),
             AdamantBytecode::BlsVerify => (3, 1),
+            // ML-KEM-768 per §6.2.1.4 lines 419-420.
+            // Encapsulate: pop pk; push (ct, ss) — stack effect (1, 2).
+            // Decapsulate: pop sk + ct; push ss — stack effect (2, 1).
+            AdamantBytecode::MlKemEncapsulate => (1, 2),
+            AdamantBytecode::MlKemDecapsulate => (2, 1),
             AdamantBytecode::ChargeGas(_) => (1, 0),
             AdamantBytecode::RemainingGas(_) => (0, 1),
             // OutOfGas aborts at runtime per spec line 423;

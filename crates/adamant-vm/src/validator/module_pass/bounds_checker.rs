@@ -1260,7 +1260,7 @@ fn check_adamant_bytecode(
         // out-of-range bytes at parse time.
         AdamantBytecode::ChargeGas(_) | AdamantBytecode::RemainingGas(_) => Ok(()),
 
-        // --- Zero-operand extensions (11 of 17) ---
+        // --- Zero-operand extensions (13 of 18) ---
         AdamantBytecode::ReleaseSubViewKey
         | AdamantBytecode::KzgCommit
         | AdamantBytecode::KzgVerify
@@ -1270,6 +1270,8 @@ fn check_adamant_bytecode(
         | AdamantBytecode::Ed25519Verify
         | AdamantBytecode::MlDsaVerify65
         | AdamantBytecode::BlsVerify
+        | AdamantBytecode::MlKemEncapsulate
+        | AdamantBytecode::MlKemDecapsulate
         | AdamantBytecode::OutOfGas => Ok(()),
     }
 }

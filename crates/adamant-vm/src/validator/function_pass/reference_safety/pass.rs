@@ -796,6 +796,31 @@ fn execute_adamant_instr(
 
         // Category A: OutOfGas — no stack effect.
         AdamantBytecode::OutOfGas => {}
+
+        // Category A: MlKemEncapsulate — pop one NonReference
+        // (pubkey bytes); push two NonReference (ciphertext + ss).
+        AdamantBytecode::MlKemEncapsulate => {
+            let popped = verifier.pop();
+            debug_assert!(
+                popped.is_value(),
+                "{STACK_INVARIANT_THREE_ANCHOR_STEM}. MlKemEncapsulate popped non-value"
+            );
+            verifier.push(AbstractValue::NonReference);
+            verifier.push(AbstractValue::NonReference);
+        }
+
+        // Category A: MlKemDecapsulate — pop two NonReference
+        // (sk, ct); push one NonReference (ss).
+        AdamantBytecode::MlKemDecapsulate => {
+            for _ in 0..2 {
+                let popped = verifier.pop();
+                debug_assert!(
+                    popped.is_value(),
+                    "{STACK_INVARIANT_THREE_ANCHOR_STEM}. MlKemDecapsulate popped non-value"
+                );
+            }
+            verifier.push(AbstractValue::NonReference);
+        }
     }
     Ok(())
 }

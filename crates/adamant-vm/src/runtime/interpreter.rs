@@ -327,11 +327,22 @@ fn dispatch_adamant(
         AB::ReleaseSubViewKey => dispatch_release_sub_view_key(state),
 
         // ---------- Deferred handlers ----------
+        // KzgCommit / KzgVerify defer to a follow-up Phase 5/6.X
+        // sub-arc (the math is shipped in `adamant-crypto::kzg`;
+        // wiring the Move-bytecode dispatch is a separate
+        // concern). GenerateProof / VerifyProof / RecursiveVerify
+        // defer to Phase 6 alongside §7's `CircuitId` resolution.
+        // MlKemEncapsulate / MlKemDecapsulate defer to Phase 6
+        // alongside §7's privacy-circuit deterministic-randomness
+        // sourcing — encapsulation requires randomness whose
+        // source is §7-specified per §6.2.4 determinism.
         AB::KzgCommit
         | AB::KzgVerify
         | AB::GenerateProof(_)
         | AB::VerifyProof(_)
-        | AB::RecursiveVerify => {
+        | AB::RecursiveVerify
+        | AB::MlKemEncapsulate
+        | AB::MlKemDecapsulate => {
             let frame = state
                 .top_frame()
                 .expect("dispatch_adamant caller-contract: call stack non-empty");

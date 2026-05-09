@@ -36,16 +36,20 @@
 //!
 //! # Opcode-byte assignments
 //!
-//! Adamant's reserved range is `0x80..=0x8F` (16 sequential bytes
+//! Adamant's reserved range is `0x80..=0x91` (18 sequential bytes
 //! above Sui's max active opcode `0x56`, leaving 41 free slots
 //! `0x57..=0x7F` for future Sui-Move upstream additions). Opcode
 //! byte `0x90` was reserved for `MlDsaVerify87` prior to whitepaper
 //! §6.2 amendment (commits 80ccd46 + 22b5a8a + 63cbf5c) restricting
 //! the post-quantum signature scheme to ML-DSA-65 per §3.4.2; the
 //! enum's variants are renumbered down by one above the freed slot
-//! at 0x8C. The complete table is pinned by
-//! [`AdamantOpcodeKind::opcode_byte`] and asserted in this module's
-//! tests.
+//! at 0x8C. The post-Phase-5/6 audit pass added two ML-KEM
+//! extension opcodes per whitepaper §6.2.1.4 lines 419-420
+//! (`MlKemEncapsulate = 0x8D`, `MlKemDecapsulate = 0x8E`),
+//! shifting the gas-extension opcodes up by two slots
+//! (`ChargeGas = 0x8F`, `RemainingGas = 0x90`, `OutOfGas = 0x91`).
+//! The complete table is pinned by [`AdamantOpcodeKind::opcode_byte`]
+//! and asserted in this module's tests.
 
 use adamant_bytecode_format::{Bytecode, CodeOffset, FunctionHandleIndex, VariantJumpTable};
 
@@ -109,6 +113,17 @@ pub enum AdamantBytecode {
     MlDsaVerify65,
     /// Verify a BLS12-381 signature (whitepaper §3.4.3).
     BlsVerify,
+    /// Perform ML-KEM-768 encapsulation (whitepaper §3.7). Pops an
+    /// ML-KEM public key (1184 bytes); pushes a `(ciphertext,
+    /// shared_secret)` tuple as `[u8; 1088]` followed by `[u8; 32]`.
+    /// Used by privacy-layer circuits (§7) for stealth-address
+    /// derivation and encrypted memo construction.
+    MlKemEncapsulate,
+    /// Perform ML-KEM-768 decapsulation (whitepaper §3.7). Pops an
+    /// ML-KEM secret key and a 1088-byte ciphertext; pushes the
+    /// recovered 32-byte shared secret. Used by recipient-side
+    /// privacy circuits.
+    MlKemDecapsulate,
     /// Charge gas across one of the six dimensions (per whitepaper
     /// §6.0.7's `GasBudget` and §6.3.1). Pops the amount as `u64`.
     ChargeGas(GasDimension),
@@ -141,6 +156,8 @@ impl AdamantBytecode {
             Self::Ed25519Verify => AdamantOpcodeKind::Ed25519Verify,
             Self::MlDsaVerify65 => AdamantOpcodeKind::MlDsaVerify65,
             Self::BlsVerify => AdamantOpcodeKind::BlsVerify,
+            Self::MlKemEncapsulate => AdamantOpcodeKind::MlKemEncapsulate,
+            Self::MlKemDecapsulate => AdamantOpcodeKind::MlKemDecapsulate,
             Self::ChargeGas(_) => AdamantOpcodeKind::ChargeGas,
             Self::RemainingGas(_) => AdamantOpcodeKind::RemainingGas,
             Self::OutOfGas => AdamantOpcodeKind::OutOfGas,
@@ -196,19 +213,27 @@ pub enum AdamantOpcodeKind {
     /// restricted to ML-DSA-65; the prior `0x8C = MlDsaVerify87`
     /// slot freed and subsequent variants compacted down by one.)
     BlsVerify,
-    /// Opcode byte `0x8D`.
-    ChargeGas,
-    /// Opcode byte `0x8E`.
-    RemainingGas,
+    /// Opcode byte `0x8D` — ML-KEM-768 encapsulation per
+    /// whitepaper §6.2.1.4 line 419 + §3.7.
+    MlKemEncapsulate,
+    /// Opcode byte `0x8E` — ML-KEM-768 decapsulation per
+    /// whitepaper §6.2.1.4 line 420 + §3.7.
+    MlKemDecapsulate,
     /// Opcode byte `0x8F`.
+    ChargeGas,
+    /// Opcode byte `0x90`.
+    RemainingGas,
+    /// Opcode byte `0x91`.
     OutOfGas,
 }
 
 impl AdamantOpcodeKind {
     /// Every Adamant-extension kind, in opcode-byte order. Useful
     /// for iteration in tests and tooling. The slice's length is
-    /// pinned at 16 in tests; accidental variant drift fails the
-    /// suite immediately.
+    /// pinned at 18 in tests; accidental variant drift fails the
+    /// suite immediately. (16 → 18 at the post-Phase-5/6 audit pass
+    /// when `MlKemEncapsulate` + `MlKemDecapsulate` were added per
+    /// whitepaper §6.2.1.4 lines 419-420.)
     pub const ALL: &'static [Self] = &[
         Self::InvokeShielded,
         Self::InvokeTransparent,
@@ -223,6 +248,8 @@ impl AdamantOpcodeKind {
         Self::Ed25519Verify,
         Self::MlDsaVerify65,
         Self::BlsVerify,
+        Self::MlKemEncapsulate,
+        Self::MlKemDecapsulate,
         Self::ChargeGas,
         Self::RemainingGas,
         Self::OutOfGas,
@@ -248,9 +275,11 @@ impl AdamantOpcodeKind {
             Self::Ed25519Verify => 0x8A,
             Self::MlDsaVerify65 => 0x8B,
             Self::BlsVerify => 0x8C,
-            Self::ChargeGas => 0x8D,
-            Self::RemainingGas => 0x8E,
-            Self::OutOfGas => 0x8F,
+            Self::MlKemEncapsulate => 0x8D,
+            Self::MlKemDecapsulate => 0x8E,
+            Self::ChargeGas => 0x8F,
+            Self::RemainingGas => 0x90,
+            Self::OutOfGas => 0x91,
         }
     }
 
@@ -275,9 +304,11 @@ impl AdamantOpcodeKind {
             0x8A => Some(Self::Ed25519Verify),
             0x8B => Some(Self::MlDsaVerify65),
             0x8C => Some(Self::BlsVerify),
-            0x8D => Some(Self::ChargeGas),
-            0x8E => Some(Self::RemainingGas),
-            0x8F => Some(Self::OutOfGas),
+            0x8D => Some(Self::MlKemEncapsulate),
+            0x8E => Some(Self::MlKemDecapsulate),
+            0x8F => Some(Self::ChargeGas),
+            0x90 => Some(Self::RemainingGas),
+            0x91 => Some(Self::OutOfGas),
             _ => None,
         }
     }
@@ -457,7 +488,7 @@ impl BytecodeInstruction {
 mod tests {
     use super::*;
 
-    /// `AdamantOpcodeKind::ALL` enumerates exactly the 16 variants
+    /// `AdamantOpcodeKind::ALL` enumerates exactly the 18 variants
     /// per whitepaper §6.2.1.4. Accidental variant drift (a new
     /// variant added to the enum without an `ALL` entry, or an
     /// `ALL` entry without a corresponding variant) fails this
@@ -466,8 +497,8 @@ mod tests {
     fn adamant_opcode_kind_all_count_matches_spec() {
         assert_eq!(
             AdamantOpcodeKind::ALL.len(),
-            16,
-            "whitepaper §6.2.1.4 specifies 16 Adamant-specific instructions"
+            18,
+            "whitepaper §6.2.1.4 specifies 18 Adamant-specific instructions"
         );
     }
 
@@ -477,7 +508,7 @@ mod tests {
     /// extension — is genesis-fixed").
     #[test]
     fn adamant_opcode_kind_bytes_match_spec() {
-        let cases: [(AdamantOpcodeKind, u8); 16] = [
+        let cases: [(AdamantOpcodeKind, u8); 18] = [
             (AdamantOpcodeKind::InvokeShielded, 0x80),
             (AdamantOpcodeKind::InvokeTransparent, 0x81),
             (AdamantOpcodeKind::GenerateProof, 0x82),
@@ -491,9 +522,11 @@ mod tests {
             (AdamantOpcodeKind::Ed25519Verify, 0x8A),
             (AdamantOpcodeKind::MlDsaVerify65, 0x8B),
             (AdamantOpcodeKind::BlsVerify, 0x8C),
-            (AdamantOpcodeKind::ChargeGas, 0x8D),
-            (AdamantOpcodeKind::RemainingGas, 0x8E),
-            (AdamantOpcodeKind::OutOfGas, 0x8F),
+            (AdamantOpcodeKind::MlKemEncapsulate, 0x8D),
+            (AdamantOpcodeKind::MlKemDecapsulate, 0x8E),
+            (AdamantOpcodeKind::ChargeGas, 0x8F),
+            (AdamantOpcodeKind::RemainingGas, 0x90),
+            (AdamantOpcodeKind::OutOfGas, 0x91),
         ];
         for (kind, expected) in cases {
             assert_eq!(
@@ -519,13 +552,13 @@ mod tests {
     }
 
     /// byte → kind exhaustive over the full `u8` space pins the
-    /// other direction. Every byte in `0x80..=0x8F` parses to
+    /// other direction. Every byte in `0x80..=0x91` parses to
     /// `Some`; every byte outside that range — including all of
     /// Sui's range `0x01..=0x56` — parses to `None`.
     #[test]
     fn try_from_opcode_byte_full_byte_space() {
         for byte in 0u8..=0xFF {
-            let in_range = (0x80..=0x8F).contains(&byte);
+            let in_range = (0x80..=0x91).contains(&byte);
             let parsed = AdamantOpcodeKind::try_from_opcode_byte(byte);
             if in_range {
                 assert!(parsed.is_some(), "byte {byte:#04x} should parse to a kind");

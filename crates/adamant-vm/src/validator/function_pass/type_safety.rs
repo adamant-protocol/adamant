@@ -1126,6 +1126,30 @@ fn verify_adamant_instr(
         // OutOfGas aborts the transaction at runtime per §6.2.1.4
         // line 423; verifier sees no stack effect.
         AdamantBytecode::OutOfGas => {}
+
+        // ML-KEM-768 per §6.2.1.4 lines 419-420.
+        AdamantBytecode::MlKemEncapsulate => {
+            // Pop pubkey (vector<u8>); push (ciphertext, ss) as two
+            // vector<u8> values.
+            let operand = verifier.pop();
+            if operand != vec_u8() {
+                return Err(verifier.type_mismatch(offset, TypeMismatchReason::OperandTypeMismatch));
+            }
+            verifier.push(vec_u8());
+            verifier.push(vec_u8());
+        }
+        AdamantBytecode::MlKemDecapsulate => {
+            // Pop ct (top), sk (bottom); push ss as vector<u8>.
+            for _ in 0..2 {
+                let operand = verifier.pop();
+                if operand != vec_u8() {
+                    return Err(
+                        verifier.type_mismatch(offset, TypeMismatchReason::OperandTypeMismatch)
+                    );
+                }
+            }
+            verifier.push(vec_u8());
+        }
     }
     Ok(())
 }

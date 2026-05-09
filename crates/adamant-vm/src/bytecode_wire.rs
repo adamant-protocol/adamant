@@ -724,6 +724,8 @@ fn serialize_adamant(ext: &AdamantBytecode, out: &mut Vec<u8>) -> Result<(), Ser
         | AdamantBytecode::Ed25519Verify
         | AdamantBytecode::MlDsaVerify65
         | AdamantBytecode::BlsVerify
+        | AdamantBytecode::MlKemEncapsulate
+        | AdamantBytecode::MlKemDecapsulate
         | AdamantBytecode::OutOfGas => {
             // Zero-operand extensions: nothing more to write.
         }
@@ -776,7 +778,7 @@ fn deserialize_instruction(
         return Err(DeserializeError::DeprecatedGlobalStorageOpcode(byte));
     }
 
-    // Adamant extensions occupy 0x80..=0x90.
+    // Adamant extensions occupy 0x80..=0x91.
     if let Some(kind) = AdamantOpcodeKind::try_from_opcode_byte(byte) {
         let ext = match kind {
             AdamantOpcodeKind::InvokeShielded => AdamantBytecode::InvokeShielded(
@@ -800,6 +802,8 @@ fn deserialize_instruction(
             AdamantOpcodeKind::Ed25519Verify => AdamantBytecode::Ed25519Verify,
             AdamantOpcodeKind::MlDsaVerify65 => AdamantBytecode::MlDsaVerify65,
             AdamantOpcodeKind::BlsVerify => AdamantBytecode::BlsVerify,
+            AdamantOpcodeKind::MlKemEncapsulate => AdamantBytecode::MlKemEncapsulate,
+            AdamantOpcodeKind::MlKemDecapsulate => AdamantBytecode::MlKemDecapsulate,
             AdamantOpcodeKind::ChargeGas => {
                 AdamantBytecode::ChargeGas(gas_dimension_from_byte(read_u8(cursor)?, byte)?)
             }
@@ -1350,6 +1354,8 @@ mod tests {
         rt_adamant(AdamantBytecode::Ed25519Verify);
         rt_adamant(AdamantBytecode::MlDsaVerify65);
         rt_adamant(AdamantBytecode::BlsVerify);
+        rt_adamant(AdamantBytecode::MlKemEncapsulate);
+        rt_adamant(AdamantBytecode::MlKemDecapsulate);
         rt_adamant(AdamantBytecode::OutOfGas);
     }
 
@@ -1388,7 +1394,7 @@ mod tests {
     fn deserialize_unknown_opcode() {
         // 0xFF is unassigned in both Sui's range (0x01..=0x56,
         // 0x29..=0x2D, 0x3B..=0x3F) and Adamant's range
-        // (0x80..=0x90).
+        // (0x80..=0x91).
         let bytes = vec![0x01, 0xFF];
         let result = deserialize_function_body(&bytes, &DeserializeConfig::lenient());
         assert_eq!(result, Err(DeserializeError::UnknownOpcode(0xFF)));
@@ -1422,14 +1428,14 @@ mod tests {
 
     #[test]
     fn deserialize_invalid_operand_gas_dimension() {
-        // ChargeGas (0x8D after the §6.2 ML-DSA-87-restriction
-        // amendment renumbered the opcode bytes) followed by 0x06
-        // (out of GasDimension's 0x00..=0x05 range).
+        // ChargeGas (0x8F after the post-Phase-5/6 audit pass added
+        // ML-KEM extension opcodes; previously 0x8D) followed by
+        // 0x06 (out of GasDimension's 0x00..=0x05 range).
         let bytes = vec![0x01, AdamantOpcodeKind::ChargeGas.opcode_byte(), 0x06];
         let result = deserialize_function_body(&bytes, &DeserializeConfig::lenient());
         assert!(matches!(
             result,
-            Err(DeserializeError::InvalidOperand { opcode: 0x8D, .. })
+            Err(DeserializeError::InvalidOperand { opcode: 0x8F, .. })
         ));
     }
 
@@ -1452,7 +1458,7 @@ mod tests {
         let unknown = [
             0x00, // No opcode at 0x00
             0x57, 0x58, 0x5F, 0x60, 0x70, 0x7F, // gap between Sui and Adamant
-            0x91, 0xA0, 0xC0, 0xFE, 0xFF, // above Adamant's range
+            0x92, 0xA0, 0xC0, 0xFE, 0xFF, // above Adamant's range (now 0x80..=0x91)
         ];
         for b in unknown {
             // Length-prefix 1, then the byte. Some of these would
@@ -1543,6 +1549,8 @@ mod tests {
             Just(AdamantBytecode::Ed25519Verify),
             Just(AdamantBytecode::MlDsaVerify65),
             Just(AdamantBytecode::BlsVerify),
+            Just(AdamantBytecode::MlKemEncapsulate),
+            Just(AdamantBytecode::MlKemDecapsulate),
             dim.clone().prop_map(AdamantBytecode::ChargeGas),
             dim.prop_map(AdamantBytecode::RemainingGas),
             Just(AdamantBytecode::OutOfGas),
