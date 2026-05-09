@@ -419,24 +419,107 @@ fn dispatch_inherited(
             Ok(DispatchOutcome::CallGeneric(*idx))
         }
 
-        // ---------- Module-access handlers (defer to 5/6.2c.2.β onward) ----------
+        // ---------- Reference-machinery handlers (Phase 5/6.2c.2.β) ----------
+        Bytecode::ImmBorrowLoc(idx) | Bytecode::MutBorrowLoc(idx) => {
+            // Per whitepaper §6.2.1.4: "Load a [mutable|immutable]
+            // reference to a local." FreezeRef is a runtime no-op
+            // (verifier-validated mut/immut distinction); the
+            // handler shape is identical for both opcodes.
+            let frame = top_frame_mut(state)?;
+            let reference = frame.borrow_loc(*idx)?;
+            frame.push_value(RuntimeValue::Reference(reference));
+            advance_pc(frame);
+            Ok(DispatchOutcome::Continue)
+        }
+        Bytecode::ImmBorrowField(handle_idx) | Bytecode::MutBorrowField(handle_idx) => {
+            let field_offset =
+                crate::runtime::module_helpers::resolve_field_offset(module, *handle_idx)?;
+            let frame = top_frame_mut(state)?;
+            let parent_ref = frame.pop_reference()?;
+            let field_ref = parent_ref.borrow_field(field_offset)?;
+            frame.push_value(RuntimeValue::Reference(field_ref));
+            advance_pc(frame);
+            Ok(DispatchOutcome::Continue)
+        }
+        Bytecode::ImmBorrowFieldGeneric(inst_idx) | Bytecode::MutBorrowFieldGeneric(inst_idx) => {
+            // Resolve through field_instantiations to the underlying
+            // FieldHandleIndex, then use the same path.
+            let inst = module.field_instantiations.get(inst_idx.0 as usize).ok_or(
+                VMError::InvariantViolation {
+                    reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+                },
+            )?;
+            let field_offset =
+                crate::runtime::module_helpers::resolve_field_offset(module, inst.handle)?;
+            let frame = top_frame_mut(state)?;
+            let parent_ref = frame.pop_reference()?;
+            let field_ref = parent_ref.borrow_field(field_offset)?;
+            frame.push_value(RuntimeValue::Reference(field_ref));
+            advance_pc(frame);
+            Ok(DispatchOutcome::Continue)
+        }
+        Bytecode::ReadRef => {
+            let frame = top_frame_mut(state)?;
+            let reference = frame.pop_reference()?;
+            let value = reference.read_ref()?;
+            frame.push_value(value);
+            advance_pc(frame);
+            Ok(DispatchOutcome::Continue)
+        }
+        Bytecode::WriteRef => {
+            // Per Sui-VM stack order: WriteRef pops the reference
+            // (top), then the value (next). Validated against
+            // 5/6.2a F-2 retroactive-promotion fixture shape.
+            let frame = top_frame_mut(state)?;
+            let reference = frame.pop_reference()?;
+            let value = frame.pop_value()?;
+            reference.write_ref(value)?;
+            advance_pc(frame);
+            Ok(DispatchOutcome::Continue)
+        }
+        Bytecode::FreezeRef => {
+            // FreezeRef is a runtime no-op per the Sui-VM source
+            // quote at commit a9a6825eaf6273cc819ee3bcf65fd4909f7624a9
+            // ("FreezeRef should just be a null op as we don't
+            // distinguish between mut and immut ref at runtime").
+            // The verifier statically validates mut/immut
+            // distinctions; the runtime carries no per-reference
+            // mutability tag. Just advance pc.
+            let frame = top_frame_mut(state)?;
+            advance_pc(frame);
+            Ok(DispatchOutcome::Continue)
+        }
+        Bytecode::VecImmBorrow(_sig_idx) | Bytecode::VecMutBorrow(_sig_idx) => {
+            // VecImmBorrow / VecMutBorrow per whitepaper §6.2.1.4:
+            // "Immutable borrow of a vector element" / "Mutable
+            // borrow of a vector element." Pops the index (u64)
+            // and the vector reference; pushes an element
+            // reference. Imm/Mut distinction is verifier-only.
+            let frame = top_frame_mut(state)?;
+            let idx = frame.pop_u64()?;
+            let vec_ref = frame.pop_reference()?;
+            // Convert u64 idx to usize for indexing. On 64-bit
+            // targets the cast is lossless; on 32-bit targets
+            // verifier-validated index bounds keep idx within
+            // u32 range for concrete vectors. Defensive: if
+            // truncation surfaces a wrong index, the borrow_element
+            // bounds check returns IndexOutOfBoundsPostVerification.
+            let idx_usize = usize::try_from(idx).map_err(|_| VMError::InvariantViolation {
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+            })?;
+            let elem_ref = vec_ref.borrow_element(idx_usize)?;
+            frame.push_value(RuntimeValue::Reference(elem_ref));
+            advance_pc(frame);
+            Ok(DispatchOutcome::Continue)
+        }
+
+        // ---------- Module-access handlers (defer to 5/6.2c.2.γ-merged) ----------
         Bytecode::Pack(_)
         | Bytecode::PackGeneric(_)
         | Bytecode::Unpack(_)
         | Bytecode::UnpackGeneric(_)
-        | Bytecode::ReadRef
-        | Bytecode::WriteRef
-        | Bytecode::FreezeRef
-        | Bytecode::MutBorrowLoc(_)
-        | Bytecode::ImmBorrowLoc(_)
-        | Bytecode::MutBorrowField(_)
-        | Bytecode::MutBorrowFieldGeneric(_)
-        | Bytecode::ImmBorrowField(_)
-        | Bytecode::ImmBorrowFieldGeneric(_)
         | Bytecode::VecPack(_, _)
         | Bytecode::VecLen(_)
-        | Bytecode::VecImmBorrow(_)
-        | Bytecode::VecMutBorrow(_)
         | Bytecode::VecPushBack(_)
         | Bytecode::VecPopBack(_)
         | Bytecode::VecUnpack(_, _)
@@ -1355,6 +1438,7 @@ mod tests {
 
     use super::*;
     use crate::bytecode::BytecodeInstruction;
+    use crate::value::{StructValue, Value};
     use adamant_bytecode_format::{Bytecode, ConstantPoolIndex};
 
     // ---------- shared helpers ----------
@@ -2420,12 +2504,268 @@ mod tests {
         assert_eq!(pc(&state), 1);
     }
 
-    /// Reference ops still defer to 5/6.2c.2.β.
+    /// ReadRef on empty stack surfaces StackUnderflow per
+    /// verifier-residual posture (Phase 5/6.2c.2.β implementation).
     #[test]
-    fn read_ref_defers_to_5_6_2c_beta() {
+    fn read_ref_on_empty_stack_invariant_violation() {
         let mut state = state_with_frame(0);
-        let err = dispatch(&mut state, Bytecode::ReadRef).expect_err("defers");
-        assert!(matches!(err, VMError::InvalidInstruction { .. }));
+        let err = dispatch(&mut state, Bytecode::ReadRef).expect_err("err");
+        assert!(matches!(
+            err,
+            VMError::InvariantViolation {
+                reason: InvariantViolationReason::StackUnderflow,
+            }
+        ));
+    }
+
+    // ============================================================
+    // Reference-machinery handler tests (5/6.2c.2.β)
+    // ============================================================
+
+    /// Whitepaper §6.2.1.4 (verbatim): "Load an immutable
+    /// reference to a local."
+    #[test]
+    fn imm_borrow_loc_pushes_local_reference() {
+        let mut state = state_with_frame(2);
+        state
+            .top_frame_mut()
+            .expect("frame")
+            .st_loc(0, RuntimeValue::U64(42))
+            .expect("ok");
+        dispatch(&mut state, Bytecode::ImmBorrowLoc(0)).expect("ok");
+        if let RuntimeValue::Reference(r) = top(&state) {
+            assert_eq!(r.read_ref().expect("ok"), RuntimeValue::U64(42));
+        } else {
+            panic!("expected Reference on stack");
+        }
+    }
+
+    /// Whitepaper §6.2.1.4 (verbatim): "Load a mutable reference
+    /// to a local."
+    #[test]
+    fn mut_borrow_loc_pushes_local_reference() {
+        let mut state = state_with_frame(2);
+        state
+            .top_frame_mut()
+            .expect("frame")
+            .st_loc(0, RuntimeValue::U64(42))
+            .expect("ok");
+        dispatch(&mut state, Bytecode::MutBorrowLoc(0)).expect("ok");
+        // Verify the reference can be written through.
+        if let RuntimeValue::Reference(r) = top(&state) {
+            r.write_ref(RuntimeValue::U64(99)).expect("ok");
+            assert_eq!(
+                state.top_frame().expect("frame").locals.borrow()[0],
+                Some(RuntimeValue::U64(99))
+            );
+        } else {
+            panic!("expected Reference on stack");
+        }
+    }
+
+    /// Whitepaper §6.2.1.4 (verbatim): "Read through a reference.
+    /// The value's type must have `Copy`."
+    #[test]
+    fn read_ref_pops_reference_pushes_value() {
+        let mut state = state_with_frame(1);
+        state
+            .top_frame_mut()
+            .expect("frame")
+            .st_loc(0, RuntimeValue::U64(7))
+            .expect("ok");
+        // Push a Local reference and ReadRef.
+        dispatch(&mut state, Bytecode::ImmBorrowLoc(0)).expect("ok");
+        dispatch(&mut state, Bytecode::ReadRef).expect("ok");
+        assert_eq!(top(&state), RuntimeValue::U64(7));
+    }
+
+    /// Whitepaper §6.2.1.4 (verbatim): "Write through a reference.
+    /// The previous value's type must have `Drop`."
+    ///
+    /// WriteRef pop order: reference (top), value (next).
+    #[test]
+    fn write_ref_writes_through_reference() {
+        let mut state = state_with_frame(1);
+        state
+            .top_frame_mut()
+            .expect("frame")
+            .st_loc(0, RuntimeValue::U64(7))
+            .expect("ok");
+        // Push value (will be below ref on stack).
+        push_stack(&mut state, vec![RuntimeValue::U64(99)]);
+        // Push reference (top of stack).
+        dispatch(&mut state, Bytecode::MutBorrowLoc(0)).expect("ok");
+        // WriteRef pops both.
+        dispatch(&mut state, Bytecode::WriteRef).expect("ok");
+        assert_eq!(stack_len(&state), 0);
+        assert_eq!(
+            state.top_frame().expect("frame").locals.borrow()[0],
+            Some(RuntimeValue::U64(99))
+        );
+    }
+
+    /// FreezeRef is a runtime no-op per Sui-VM source quote at
+    /// commit a9a6825eaf6273cc819ee3bcf65fd4909f7624a9. Verifier
+    /// validates mut/immut distinctions; runtime preserves the
+    /// reference unchanged.
+    #[test]
+    fn freeze_ref_is_runtime_no_op() {
+        let mut state = state_with_frame(1);
+        state
+            .top_frame_mut()
+            .expect("frame")
+            .st_loc(0, RuntimeValue::U64(42))
+            .expect("ok");
+        dispatch(&mut state, Bytecode::MutBorrowLoc(0)).expect("ok");
+        let pre_pc = pc(&state);
+        dispatch(&mut state, Bytecode::FreezeRef).expect("ok");
+        // pc advances; reference is preserved on stack.
+        assert_eq!(pc(&state), pre_pc + 1);
+        assert!(matches!(top(&state), RuntimeValue::Reference(_)));
+    }
+
+    /// Whitepaper §6.2.1.4 (verbatim): "Load a mutable reference
+    /// to a struct field."
+    ///
+    /// Composed-borrow exercise: borrow_field through the
+    /// 5/6.2c.1.b composed-borrow correction.
+    #[test]
+    fn mut_borrow_field_descends_through_composed_borrow() {
+        use adamant_bytecode_format::FieldHandle;
+        use adamant_types::TypeId;
+
+        // Construct outer struct with one field at offset 0 = U64.
+        let outer = Value::Struct(StructValue {
+            type_id: TypeId::from_bytes([0x01; 32]),
+            fields: vec![Value::U64(7)],
+        });
+        let runtime_outer = RuntimeValue::from_value(outer);
+        let mut state = state_with_frame(1);
+        state
+            .top_frame_mut()
+            .expect("frame")
+            .st_loc(0, runtime_outer)
+            .expect("ok");
+
+        // Module needs a FieldHandle at index 0 referencing field 0.
+        let mut module = empty_module();
+        module.field_handles.push(FieldHandle {
+            owner: adamant_bytecode_format::StructDefinitionIndex(0),
+            field: 0, // MemberCount = u16
+        });
+
+        // BorrowLoc(0): pushes Reference::Local pointing at the outer struct.
+        dispatch_instruction(
+            &BytecodeInstruction::Inherited(Bytecode::ImmBorrowLoc(0)),
+            &mut state,
+            &module,
+        )
+        .expect("ok");
+        // BorrowField(handle 0): pops the Local ref, pushes a field reference.
+        dispatch_instruction(
+            &BytecodeInstruction::Inherited(Bytecode::MutBorrowField(
+                adamant_bytecode_format::FieldHandleIndex::new(0),
+            )),
+            &mut state,
+            &module,
+        )
+        .expect("ok");
+        // ReadRef: pops the field ref, pushes the U64 value.
+        dispatch_instruction(
+            &BytecodeInstruction::Inherited(Bytecode::ReadRef),
+            &mut state,
+            &module,
+        )
+        .expect("ok");
+        assert_eq!(top(&state), RuntimeValue::U64(7));
+    }
+
+    /// VecImmBorrow / VecMutBorrow construct an element reference.
+    #[test]
+    fn vec_imm_borrow_pushes_element_reference() {
+        use adamant_bytecode_format::{Signature, SignatureIndex, SignatureToken};
+        let runtime_vec = RuntimeValue::from_value(Value::Vector(vec![
+            Value::U64(10),
+            Value::U64(20),
+            Value::U64(30),
+        ]));
+        let mut state = state_with_frame(1);
+        state
+            .top_frame_mut()
+            .expect("frame")
+            .st_loc(0, runtime_vec)
+            .expect("ok");
+
+        let mut module = empty_module();
+        module.signatures.push(Signature(vec![SignatureToken::U64]));
+
+        // BorrowLoc(0) -> reference to local
+        dispatch_instruction(
+            &BytecodeInstruction::Inherited(Bytecode::ImmBorrowLoc(0)),
+            &mut state,
+            &module,
+        )
+        .expect("ok");
+        // Push index (1).
+        push_stack(&mut state, vec![RuntimeValue::U64(1)]);
+        // Wait — VecImmBorrow expects (vec_ref, idx) on stack with idx on top.
+        // Above I have (ref, idx) — ref is below, idx on top. ✓ shape matches.
+        // But VecImmBorrow takes a SignatureIndex operand for element type.
+        dispatch_instruction(
+            &BytecodeInstruction::Inherited(Bytecode::VecImmBorrow(SignatureIndex(0))),
+            &mut state,
+            &module,
+        )
+        .expect("ok");
+        // Top of stack is element reference; ReadRef gets the element.
+        dispatch_instruction(
+            &BytecodeInstruction::Inherited(Bytecode::ReadRef),
+            &mut state,
+            &module,
+        )
+        .expect("ok");
+        assert_eq!(top(&state), RuntimeValue::U64(20));
+    }
+
+    /// MutBorrowField on out-of-bounds field handle surfaces
+    /// IndexOutOfBoundsPostVerification.
+    #[test]
+    fn mut_borrow_field_handle_out_of_bounds_invariant_violation() {
+        let module = empty_module();
+        let mut state = state_with_frame(1);
+        // Push a Reference::Local first (otherwise StackUnderflow).
+        state
+            .top_frame_mut()
+            .expect("frame")
+            .st_loc(
+                0,
+                RuntimeValue::from_value(Value::Struct(StructValue {
+                    type_id: adamant_types::TypeId::from_bytes([0x01; 32]),
+                    fields: vec![Value::U64(7)],
+                })),
+            )
+            .expect("ok");
+        dispatch_instruction(
+            &BytecodeInstruction::Inherited(Bytecode::ImmBorrowLoc(0)),
+            &mut state,
+            &module,
+        )
+        .expect("ok");
+        // Now try to borrow a field via an out-of-bounds handle.
+        let err = dispatch_instruction(
+            &BytecodeInstruction::Inherited(Bytecode::MutBorrowField(
+                adamant_bytecode_format::FieldHandleIndex::new(99),
+            )),
+            &mut state,
+            &module,
+        )
+        .expect_err("err");
+        assert!(matches!(
+            err,
+            VMError::InvariantViolation {
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+            }
+        ));
     }
 
     // ============================================================
