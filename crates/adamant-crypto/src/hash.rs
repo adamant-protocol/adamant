@@ -175,13 +175,13 @@ pub fn blake3(input: &[u8]) -> [u8; 32] {
 /// bound `output_len <= 255 * HashLen` (= 255 * 32 = 8160 bytes
 /// for SHA3-256); inputs exceeding this bound return `None`.
 ///
-/// # Panics
+/// # Returns `None` when
 ///
-/// The internal HKDF construction's `expand` may produce a
-/// fallible result for output lengths beyond the RFC bound.
-/// Callers passing `output_len <= 8160` will not encounter
-/// failures; this wrapper returns `None` rather than panicking
-/// to keep the API total.
+/// `output_len > 255 * 32 = 8160`. The underlying HKDF construction
+/// rejects oversized requests (RFC 5869 §2.3); this wrapper surfaces
+/// that as a `None` return rather than a panic, keeping the API
+/// total. Callers passing `output_len <= 8160` will always receive
+/// `Some`.
 #[must_use]
 pub fn hkdf_sha3_256(salt: &[u8], ikm: &[u8], info: &[u8], output_len: usize) -> Option<Vec<u8>> {
     let hkdf = hkdf::Hkdf::<sha3::Sha3_256>::new(Some(salt), ikm);

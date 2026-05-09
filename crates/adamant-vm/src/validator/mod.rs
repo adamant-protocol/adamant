@@ -208,6 +208,21 @@ use crate::module_wire::{adamant_deserialize, adamant_serialize};
 /// in chain state). On failure, returns the first
 /// [`AdamantValidationError`] encountered at any pipeline stage.
 ///
+/// # Single-module scope (vs `deploy_validate`)
+///
+/// **This function does NOT perform cross-module Rule 3
+/// enforcement.** A module that passes `verify_module` may still
+/// be rejected by [`deploy_validate`] if its public-function call
+/// graph reaches a privacy-mismatched cross-module target. The
+/// consensus-binding deployment-validation entry point per
+/// whitepaper §6.4.1 + §6.2.1.6 line 477 is [`deploy_validate`],
+/// not `verify_module`. Callers requiring full deployment
+/// validation MUST use [`deploy_validate`] with a
+/// [`ModuleResolver`]; `verify_module` is the single-module-
+/// self-contained verification entry point exposed for tooling
+/// (e.g., compile-time module checks that don't yet have access
+/// to a chain-state-backed resolver).
+///
 /// # Pipeline ordering
 ///
 /// Per §6.2.1.8 five-step ordering:

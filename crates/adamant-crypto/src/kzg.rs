@@ -351,8 +351,8 @@ fn quotient_polynomial(polynomial: &Polynomial, z: &Scalar, evaluation: &Scalar)
 ///
 /// Both sides are computed via the BLS12-381 optimal-Ate pairing
 /// per `adamant_crypto_blst_extra::pairing`. Equality is
-/// byte-equality on the `G_T` outputs (576-byte uncompressed
-/// `blst_fp12`).
+/// equality on the `G_T` outputs (which are byte-canonical post-
+/// final-exponentiation; `GtElement` derives `PartialEq`).
 #[must_use]
 pub fn verify(
     setup: &KzgSetup,
@@ -373,7 +373,7 @@ pub fn verify(
     let g2tau_minus_zg2 = setup.g2_tau.sub(&z_g2);
     let rhs = pairing(&proof.0, &g2tau_minus_zg2);
 
-    lhs.to_bytes() == rhs.to_bytes()
+    lhs == rhs
 }
 
 #[cfg(test)]

@@ -126,8 +126,35 @@ pub struct G2Point(blst_p2_affine);
 pub struct GtElement(blst_fp12);
 
 /// BLS12-381 scalar field element (`Z_r`).
+///
+/// `Scalar` implements [`zeroize::Zeroize`]: callers holding
+/// secret-material scalars (decryption shares in
+/// [`adamant_crypto::threshold`], Lagrange-coefficient intermediates,
+/// the future KZG `τ` secret during ceremony ingestion) can scrub
+/// the underlying 4 × `u64` limbs explicitly via
+/// [`zeroize::Zeroize::zeroize`] before drop. Auto-drop-zeroization
+/// (`ZeroizeOnDrop` + `Drop`) is intentionally NOT implemented
+/// because it conflicts with the [`Copy`] derive — `Copy` is
+/// load-bearing for the arithmetic API ergonomics and the 63+ call
+/// sites that pass `Scalar` by value. Callers handling secret-
+/// material scalars must explicitly invoke
+/// [`zeroize::Zeroize::zeroize`] on drop paths; the project's
+/// existing manual `*coeff = Scalar::zero()` pattern in `threshold.rs`
+/// can be upgraded to `coeff.zeroize()` for compiler-non-eliding
+/// semantics.
 #[derive(Clone, Copy)]
 pub struct Scalar(blst_fr);
+
+impl zeroize::Zeroize for Scalar {
+    fn zeroize(&mut self) {
+        // blst_fr is a `repr(C)` struct holding `[u64; 4]` limbs
+        // (per blst's bindings.rs:50-52). Zeroize the inner limb
+        // array directly via the array's Zeroize impl. The zeroize
+        // crate's array impl uses volatile writes that prevent the
+        // optimiser from eliding the scrub.
+        self.0.l.zeroize();
+    }
+}
 
 impl PartialEq for G1Point {
     fn eq(&self, other: &Self) -> bool {

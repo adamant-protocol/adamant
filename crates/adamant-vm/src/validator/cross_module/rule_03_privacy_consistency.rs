@@ -391,6 +391,21 @@ fn missing_dep_reason_for(
 /// Find the dep module's function-def whose handle's name
 /// matches `target_name`. Returns the dep-side
 /// [`FunctionDefinitionIndex`] or `None` if no match.
+///
+/// # Cross-pass-pipeline-dependency
+///
+/// The dep module was already deploy-validated when it landed on
+/// chain. `module_pass::duplication_checker` enforces that every
+/// `function_def.function` handle's `module` field equals the
+/// dep's `self_module_handle_idx` (i.e., function-defs reference
+/// only handles that point back at their own module — re-export-
+/// style handles are rejected as `UnimplementedHandle`). Audit
+/// pass F-5: defense-in-depth `debug_assert!` confirms this
+/// invariant at lookup time. If a dep module ever slipped through
+/// with a re-export shape (e.g., from an older verifier with a
+/// duplication-checker bug), the assert catches it in debug
+/// builds. Release builds trust the invariant, matching the
+/// existing cross-pass-pipeline-dependency posture.
 fn find_dep_function_def_by_name(
     dep_module: &AdamantCompiledModule,
     target_name: &adamant_bytecode_format::Identifier,
@@ -401,6 +416,12 @@ fn find_dep_function_def_by_name(
             continue;
         }
         let handle = &dep_module.function_handles[handle_idx_usize];
+        debug_assert!(
+            handle.module == dep_module.self_module_handle_idx,
+            "dep function_def at index {def_idx_usize} references a function handle whose \
+             module field is not the dep's self_module_handle_idx — structural invariant from \
+             the dep's deploy-time duplication_checker / UnimplementedHandle pass"
+        );
         let name_idx_usize = handle.name.0 as usize;
         if name_idx_usize >= dep_module.identifiers.len() {
             continue;

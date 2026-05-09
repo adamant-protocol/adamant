@@ -1477,7 +1477,7 @@ fn do_native_call(
     handle: adamant_bytecode_format::FunctionHandleIndex,
     handler: crate::runtime::NativeFunction,
 ) -> Result<(), VMError> {
-    // 1. Resolve parameter signature for arity.
+    // 1. Resolve parameter and return signatures for arity checks.
     let func_handle =
         module
             .function_handles
@@ -1491,7 +1491,14 @@ fn do_native_call(
         .ok_or(VMError::InvariantViolation {
             reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
         })?;
+    let return_sig = module
+        .signatures
+        .get(func_handle.return_.0 as usize)
+        .ok_or(VMError::InvariantViolation {
+            reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+        })?;
     let arg_count = params_sig.0.len();
+    let expected_return_count = return_sig.0.len();
 
     // 2. Pop arguments from caller frame.
     let caller_frame = state.top_frame_mut().ok_or(VMError::InvariantViolation {
@@ -1503,12 +1510,46 @@ fn do_native_call(
     }
     args.reverse();
 
-    // 3. Invoke the handler with the constructed context.
-    let mut ctx = crate::runtime::NativeContext::new(state, module, args);
-    handler(&mut ctx)?;
+    // 3. Capture pre-invocation frame depth for the post-handler
+    //    invariant check (audit-pass F-1: handlers must not mutate
+    //    the call-frame stack).
+    let frame_depth_before = state.frame_depth();
 
-    // 4. Push handler's return values back to the caller frame.
-    let return_values = std::mem::take(&mut ctx.return_values);
+    // 4. Invoke the handler with the constructed context, then
+    //    extract the return values into an owned vec so we can
+    //    drop the NativeContext (and the &mut state borrow it
+    //    holds) before performing the post-invocation invariant
+    //    checks against state.
+    let return_values = {
+        let mut ctx = crate::runtime::NativeContext::new(state, module, args);
+        handler(&mut ctx)?;
+        std::mem::take(&mut ctx.return_values)
+    };
+
+    // 5. Audit-pass F-1: confirm the handler did not push or pop
+    //    frames. The native-dispatch contract is that handlers
+    //    communicate with the caller via `args` + `return_values`
+    //    only; direct frame-stack mutation breaks the dispatch
+    //    loop's pc-already-advanced invariant.
+    if state.frame_depth() != frame_depth_before {
+        return Err(VMError::InvariantViolation {
+            reason: InvariantViolationReason::NativeHandlerMutatedFrameStack,
+        });
+    }
+
+    // 6. Audit-pass F-3: confirm the handler produced the declared
+    //    number of return values. The genesis-fixed
+    //    (module_id, function_id) → native_handler mapping pins
+    //    handler return-arity against stub-bytecode declared
+    //    return signature; reaching the mismatch case indicates
+    //    drift between handler and stub.
+    if return_values.len() != expected_return_count {
+        return Err(VMError::InvariantViolation {
+            reason: InvariantViolationReason::ReturnArityMismatchPostNativeHandler,
+        });
+    }
+
+    // 7. Push handler's return values back to the caller frame.
     let caller_frame = state.top_frame_mut().ok_or(VMError::InvariantViolation {
         reason: InvariantViolationReason::StackUnderflow,
     })?;
@@ -3961,7 +4002,7 @@ mod tests {
         use crate::runtime::{NativeFunction, NativeKey, NativeRegistry, STDLIB_ADDRESS};
         use adamant_bytecode_format::{
             AddressIdentifierIndex, FunctionHandle, IdentifierIndex, ModuleHandle,
-            ModuleHandleIndex, Signature, SignatureIndex,
+            ModuleHandleIndex, Signature, SignatureIndex, SignatureToken,
         };
 
         let mut module = empty_module();
@@ -3977,12 +4018,16 @@ mod tests {
         module
             .identifiers
             .push(adamant_bytecode_format::Identifier::new("native").unwrap());
-        module.signatures.push(Signature(vec![])); // empty params/return
+        // signatures[0]: empty (parameters)
+        module.signatures.push(Signature(vec![]));
+        // signatures[1]: one U64 (return) — matches the handler's
+        // return-value count post-audit-pass F-3 arity check.
+        module.signatures.push(Signature(vec![SignatureToken::U64]));
         module.function_handles.push(FunctionHandle {
             module: ModuleHandleIndex(0),
             name: IdentifierIndex(1),
             parameters: SignatureIndex(0),
-            return_: SignatureIndex(0),
+            return_: SignatureIndex(1),
             type_parameters: vec![],
         });
 
@@ -4027,6 +4072,160 @@ mod tests {
         let frame = state.top_frame().expect("caller frame still present");
         assert_eq!(frame.stack.len(), 1);
         assert!(matches!(frame.stack[0], RuntimeValue::U64(0xCAFE)));
+    }
+
+    /// Audit-pass F-3: a handler that returns more values than
+    /// the function's declared `return_` signature surfaces as
+    /// [`InvariantViolationReason::ReturnArityMismatchPostNativeHandler`].
+    #[test]
+    fn run_native_handler_arity_mismatch_surfaces_invariant_violation() {
+        use crate::runtime::{NativeFunction, NativeKey, NativeRegistry, STDLIB_ADDRESS};
+        use adamant_bytecode_format::{
+            AddressIdentifierIndex, FunctionHandle, IdentifierIndex, ModuleHandle,
+            ModuleHandleIndex, Signature, SignatureIndex,
+        };
+
+        let mut module = empty_module();
+        module.module_handles.push(ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(0),
+        });
+        module.address_identifiers.push(STDLIB_ADDRESS);
+        module
+            .identifiers
+            .push(adamant_bytecode_format::Identifier::new("probe").unwrap());
+        module
+            .identifiers
+            .push(adamant_bytecode_format::Identifier::new("rogue").unwrap());
+        // Empty params + empty return signature.
+        module.signatures.push(Signature(vec![]));
+        module.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(0),
+            type_parameters: vec![],
+        });
+
+        // Handler pushes 1 return value but stub declares 0.
+        let handler_fn: NativeFunction = native_probe_handler;
+        let mut registry = NativeRegistry::new();
+        registry.register(
+            NativeKey::new(
+                STDLIB_ADDRESS,
+                adamant_bytecode_format::Identifier::new("probe").unwrap(),
+                adamant_bytecode_format::Identifier::new("rogue").unwrap(),
+            ),
+            handler_fn,
+        );
+
+        let mut state = state_with_frame(0);
+        let target_handle = adamant_bytecode_format::FunctionHandleIndex(0);
+        let fired = std::cell::Cell::new(false);
+        let result = run(
+            &mut state,
+            &module,
+            |_h, _pc| {
+                if fired.get() {
+                    None
+                } else {
+                    fired.set(true);
+                    Some(BytecodeInstruction::Inherited(Bytecode::Call(
+                        target_handle,
+                    )))
+                }
+            },
+            Some(&registry),
+        );
+        assert!(matches!(
+            result,
+            Err(VMError::InvariantViolation {
+                reason: InvariantViolationReason::ReturnArityMismatchPostNativeHandler,
+            })
+        ));
+    }
+
+    /// Audit-pass F-1: a handler that mutates the call-frame stack
+    /// (pushing a frame) violates the native-dispatch contract;
+    /// the post-handler frame-depth check surfaces this as
+    /// [`InvariantViolationReason::NativeHandlerMutatedFrameStack`].
+    #[test]
+    fn run_native_handler_frame_mutation_surfaces_invariant_violation() {
+        use crate::runtime::{NativeFunction, NativeKey, NativeRegistry, STDLIB_ADDRESS};
+        use adamant_bytecode_format::{
+            AddressIdentifierIndex, FunctionHandle, IdentifierIndex, ModuleHandle,
+            ModuleHandleIndex, Signature, SignatureIndex,
+        };
+
+        // A handler that pushes a fresh frame onto the call stack.
+        // The dispatch loop's contract forbids this.
+        #[allow(clippy::unnecessary_wraps, reason = "match NativeFunction signature")]
+        fn frame_pushing_handler(
+            ctx: &mut crate::runtime::NativeContext<'_>,
+        ) -> Result<(), VMError> {
+            ctx.state.push_frame(Frame::new(
+                adamant_bytecode_format::FunctionHandleIndex(0),
+                0,
+            ));
+            Ok(())
+        }
+
+        let mut module = empty_module();
+        module.module_handles.push(ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(0),
+        });
+        module.address_identifiers.push(STDLIB_ADDRESS);
+        module
+            .identifiers
+            .push(adamant_bytecode_format::Identifier::new("probe").unwrap());
+        module
+            .identifiers
+            .push(adamant_bytecode_format::Identifier::new("misbehaved").unwrap());
+        module.signatures.push(Signature(vec![]));
+        module.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(0),
+            type_parameters: vec![],
+        });
+
+        let handler_fn: NativeFunction = frame_pushing_handler;
+        let mut registry = NativeRegistry::new();
+        registry.register(
+            NativeKey::new(
+                STDLIB_ADDRESS,
+                adamant_bytecode_format::Identifier::new("probe").unwrap(),
+                adamant_bytecode_format::Identifier::new("misbehaved").unwrap(),
+            ),
+            handler_fn,
+        );
+
+        let mut state = state_with_frame(0);
+        let target_handle = adamant_bytecode_format::FunctionHandleIndex(0);
+        let fired = std::cell::Cell::new(false);
+        let result = run(
+            &mut state,
+            &module,
+            |_h, _pc| {
+                if fired.get() {
+                    None
+                } else {
+                    fired.set(true);
+                    Some(BytecodeInstruction::Inherited(Bytecode::Call(
+                        target_handle,
+                    )))
+                }
+            },
+            Some(&registry),
+        );
+        assert!(matches!(
+            result,
+            Err(VMError::InvariantViolation {
+                reason: InvariantViolationReason::NativeHandlerMutatedFrameStack,
+            })
+        ));
     }
 
     /// Phase 5/6.8.A — native dispatch passthrough: when the

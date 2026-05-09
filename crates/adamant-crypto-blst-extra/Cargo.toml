@@ -10,6 +10,14 @@ publish.workspace = true
 
 [dependencies]
 blst = { workspace = true }
+# Zeroize scrubs `Scalar` (the `Z_r` field-element wrapper) on drop.
+# Threshold encryption (`adamant-crypto::threshold`) and the future
+# KZG trusted-setup ingestion layer hold short-lived `Scalar` values
+# that may carry secret material; per CLAUDE.md §4 secret material
+# must zeroize on drop. blst's signature surface zeroizes its own key
+# types upstream; this crate wraps blst's lower-level Z_r surface and
+# therefore takes responsibility for `Scalar` zeroization.
+zeroize = { workspace = true }
 
 # This crate is the workspace's `unsafe` containment boundary. The
 # workspace lint `unsafe_code = "forbid"` is in effect for every other

@@ -55,6 +55,7 @@ name = "adamant-crypto-blst-extra"
 version = "0.0.1"
 dependencies = [
  "blst",
+ "zeroize",
 ]
 
 [[package]]

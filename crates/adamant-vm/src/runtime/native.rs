@@ -126,10 +126,23 @@ pub struct NativeContext<'a> {
     /// handle resolution at dispatch time.
     pub module: &'a AdamantCompiledModule,
     /// Arguments popped from the caller's stack before the
-    /// native-handler invocation. Order is `args[0]` is the first
-    /// parameter, matching [`crate::runtime::Frame`] parameter
-    /// layout. Sized to the function's declared parameter
-    /// signature.
+    /// native-handler invocation. Order is `args[0]` is the FIRST
+    /// declared parameter, matching [`crate::runtime::Frame`]
+    /// parameter layout. Sized to the function's declared
+    /// parameter signature.
+    ///
+    /// # Pop-order convention
+    ///
+    /// Handlers using `Vec::pop` (or the `pop_arg` helper in
+    /// `runtime::stdlib`) consume arguments in **REVERSE
+    /// declaration order** — the LAST parameter pops first. For
+    /// example, a function declared as
+    /// `verify_ed25519(sig, msg, pk)` lays out
+    /// `args = [sig, msg, pk]`, and successive `pop_arg` calls
+    /// yield `pk` (first pop), `msg` (second), `sig` (third).
+    /// Handlers that index directly via `args[i]` see declaration
+    /// order. Both shapes are correct; pick one and stay
+    /// consistent within a handler.
     pub args: Vec<RuntimeValue>,
     /// Return values the handler populates. Pushed onto the
     /// caller's stack after the handler returns successfully.

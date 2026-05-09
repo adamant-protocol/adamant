@@ -342,6 +342,47 @@ pub enum InvariantViolationReason {
     /// either verifier unsoundness on the variant-coverage
     /// invariant, or post-deployment bytecode modification.
     JumpTableTagOutOfRange,
+
+    /// A native-dispatched stdlib function (whitepaper §6.5)
+    /// produced a different number of return values than the
+    /// function's declared `return_` signature in the deployed
+    /// stub bytecode.
+    ///
+    /// This is the runtime-residual binding for the genesis-fixed
+    /// `(module_id, function_id) → native_handler` mapping per
+    /// §6.5 amendment: the registered native handler's actual
+    /// return-value count must match the declared `return_` arity
+    /// of the stub function. The mismatch is policed at genesis-
+    /// registry construction (handlers and stub-bytecode arities
+    /// are pinned together); reaching this variant at runtime
+    /// indicates either drift between the registered handler and
+    /// the stub's declared signature, or a handler-implementation
+    /// bug that pushes the wrong number of return values.
+    ///
+    /// Registered at the post-Phase-5/6.9 audit pass to plug a
+    /// latent-bug hole in [`super::interpreter`]'s `do_native_call`
+    /// path: without this residual check, a mismatched handler
+    /// would corrupt the caller frame's stack invariant and
+    /// silently misalign every downstream pop.
+    ReturnArityMismatchPostNativeHandler,
+
+    /// A native-dispatched stdlib handler mutated the call-frame
+    /// stack (pushed or popped frames) during its execution,
+    /// violating the contract that natives run in the caller's
+    /// frame without pushing a new bytecode frame.
+    ///
+    /// Per [`super::native::NativeContext`]'s contract, native
+    /// handlers communicate with the caller exclusively via
+    /// `args` (popped pre-invocation) and `return_values`
+    /// (pushed post-invocation). Direct frame-stack mutation
+    /// would break the dispatch loop's pc-already-advanced
+    /// invariant. Reaching this variant indicates a handler
+    /// implementation bug.
+    ///
+    /// Registered at the post-Phase-5/6.9 audit pass for
+    /// forward-compatibility with future state-mutating handlers
+    /// (`adamant::module::deploy`, `adamant::object::*`).
+    NativeHandlerMutatedFrameStack,
 }
 
 /// Closed sub-reason enum for [`VMError::AbortError`].

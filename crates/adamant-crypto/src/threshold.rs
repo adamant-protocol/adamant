@@ -439,13 +439,14 @@ impl TrustedDealerShares {
     /// # Zeroization
     ///
     /// Intermediate values containing the master secret and the
-    /// random polynomial coefficients are best-effort overwritten
-    /// before drop. [`Scalar`] does not implement [`zeroize::Zeroize`]
-    /// (its inner `blst_fr` representation is opaque); the overwrite
-    /// is a manual `*coeff = Scalar::zero()` rather than a
-    /// `Zeroize::zeroize` call, and the compiler may elide it. This
-    /// is acceptable because the function is **test-only**; production
-    /// DKG never holds the master secret in the first place.
+    /// random polynomial coefficients are zeroized via
+    /// [`Scalar`]'s [`zeroize::Zeroize`] impl (added to
+    /// `adamant-crypto-blst-extra` at the post-Phase-5/6.9 audit
+    /// pass). The zeroize crate's `[u64; N]` impl uses volatile
+    /// writes that the optimiser cannot elide. Since this function
+    /// is **test-only** anyway (production DKG never holds the
+    /// master secret in the first place), the zeroize discipline
+    /// here is defense-in-depth.
     #[allow(clippy::needless_range_loop)] // explicit range matches Horner indexing
     pub fn generate_for_testing_only<R: CryptoRng + RngCore>(
         threshold: u32,
@@ -515,11 +516,11 @@ impl TrustedDealerShares {
             public_key_shares.push(public_key_share);
         }
 
-        // Best-effort zeroize of polynomial coefficients (Scalar has
-        // no Zeroize impl; this is a manual overwrite with the
-        // additive identity).
+        // Zeroize polynomial coefficients via Scalar's Zeroize
+        // impl. The zeroize crate's `[u64; N]` impl uses volatile
+        // writes that survive the optimiser.
         for c in &mut coefficients {
-            *c = Scalar::zero();
+            c.zeroize();
         }
         drop(coefficients);
 
