@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Twenty-two confirmed instances during
+sources before proceeding. Twenty-three confirmed instances during
 Phases 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -729,6 +729,73 @@ Phases 1, 2, 4, and 5:
   privacy guarantee from "depends on §7's scheme" to "ciphertext
   equality does not imply plaintext equality at protocol
   level."
+- **ML-DSA-87 spec-vs-spec inconsistency: restrict to ML-DSA-65**
+  (whitepaper 6.2) — Phase 5/6.3 (Adamant-extension handlers)
+  implementation surfaced that whitepaper §3.4.2 explicitly fixes
+  the post-quantum signature scheme to ML-DSA-65 with explicit
+  Level 5 rejection ("Level 5 (ML-DSA-87) provides 256-bit
+  classical security at significantly higher signature size (4627
+  bytes per FIPS 204 final) and computational cost. Level 3 is
+  the appropriate balance for a chain whose lifetime is intended
+  to be measured in decades"; "the algorithm choice (ML-DSA-65)
+  is fixed"), while §6.2 admitted both `MlDsa65` and `MlDsa87` in
+  three sites: the §6.0.7 `Signature` BCS variant-tag inventory
+  (variant tag 0x02 = `MlDsa87`), the §6.2.1.4 AdamantBytecode
+  list (`MlDsaVerify65 and MlDsaVerify87`), and the §6.2.1.5 per-
+  extension operand-encoding paragraph (count of "19 Adamant-
+  specific extensions" with `MlDsaVerify87` enumerated among the
+  zero-operand extensions). The contradiction was internally
+  load-bearing: §3.4.2's "fixed" framing is the older substantive
+  spec text with explicit threat-model justification, while §6.2's
+  inclusion of ML-DSA-87 appeared to be an artifact of inheriting
+  general-purpose bytecode design rather than deliberate parameter-
+  set choice. Resolved by spec amendment restricting §6.2 to
+  ML-DSA-65: removing `MlDsa87` from the `Signature` variant
+  inventory (consensus surface change; pre-mainnet so straight-
+  forward), removing `MlDsaVerify87` from the AdamantBytecode list
+  and the per-extension operand-encoding paragraph, and updating
+  the counts (19 → 18 Adamant-specific extensions; 13 → 12 zero-
+  operand extensions). The amendment aligns §6.2 with §3.4.2's
+  unambiguous commitment, reduces the consensus-binding signature-
+  scheme surface (one fewer variant in the genesis-fixed `Signature`
+  union), and is consistent with the conservative-choice principle
+  per CLAUDE.md §12 ("Prefer the conservative choice"). Hard-fork-
+  to-add-later remains available via the genesis-fixed instruction-
+  set posture (§6.2.1.4 "Adding new instructions ... is a hard
+  fork"). Methodologically, this instance surfaces a new sub-
+  classification of spec-first verification empirical work: **spec-
+  vs-spec inconsistency** (two spec sections directly contradicting
+  each other; resolved by spec amendment) is distinct from **spec-
+  vs-implementation inconsistency** (implementation lags spec;
+  resolved by implementation work) and from **spec-vs-implementation-
+  comment inconsistency** (implementation comment cites wrong spec
+  section; resolved by comment fix). The 5/6.3 implementation-gate
+  empirical reads surfaced all three categories simultaneously
+  (ML-DSA-87 = spec-vs-spec; ML-KEM lag = spec-vs-implementation;
+  KZG `§3.7.2` vs `§3.9.2` comment in `bytecode.rs` = spec-vs-
+  implementation-comment), with only the spec-vs-spec category
+  warranting an amendment. The unratified
+  `whitepaper/proposals/proposal-hybrid-signature-model.md`
+  deliberation describes the current state as "ML-DSA-65 for
+  ordinary, ML-DSA-87 for high-value/constitutional" signatures
+  and proposes a hybrid Ed25519+ML-DSA+ML-KEM model with
+  substantial constitutional impact; this proposal remains in
+  active deliberation and may, if ratified, restore ML-DSA-87 to
+  §3 + §6 via subsequent amendment. The instance-23 amendment does
+  not preempt that deliberation — it aligns the spec to §3.4.2's
+  stated authority *as currently written*, leaving the proposal-
+  track future to its own ratification path. Eliminates the
+  adamant-crypto ML-DSA-87 wrapper carry-forward entirely; reduces
+  the 5/6.3.b deferred-handler scope from 3 to 2 (KZG only).
+  Implementation cascade: `adamant-vm/src/bytecode.rs` removes
+  `MlDsaVerify87` from `AdamantBytecode` and
+  `AdamantOpcodeKind::ALL` (opcode byte 0x8C frees up);
+  `adamant-vm/src/runtime/interpreter.rs::dispatch_adamant`
+  removes the deferred-handler arm for `MlDsaVerify87`; the test
+  at `runtime/tests/adamant_extensions.rs::deferred_ml_dsa_87_*`
+  removes (commits 80ccd46 + 22b5a8a + this CONTRIBUTING.md
+  instance entry; implementation cascade follows in a subsequent
+  commit batch).
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
