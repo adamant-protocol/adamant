@@ -151,10 +151,15 @@ impl<F: PrimeFieldBits, const K: usize> LookupRangeCheckConfig<F, K> {
         config
     }
 
-    #[cfg(test)]
-    // Loads the values [0..2^K) into `table_idx`. This is only used in testing
-    // for now, since the Sinsemilla chip provides a pre-loaded table in the
-    // Orchard context.
+    // Adamant fork (Phase 6.8b.4d-2.c): widened from `#[cfg(test)]` to
+    // always-available. Upstream Orchard's `load` was test-only because the
+    // Sinsemilla chip provides the pre-loaded lookup table at production
+    // time; Adamant does not vendor Sinsemilla (per Phase 6.8b.3 stub
+    // posture), so production circuits using `LookupRangeCheckConfig`
+    // (including the §7.3.1.2 value-commitment ECC chip's variable-base
+    // scalar mul) must load the table themselves. Behaviour identical to
+    // upstream's test-time loader: writes `[0..2^K)` into the table column.
+    /// Loads the values [0..2^K) into `table_idx`.
     pub fn load(&self, layouter: &mut impl Layouter<F>) -> Result<(), Error> {
         layouter.assign_table(
             || "table_idx",
