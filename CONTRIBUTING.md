@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Twenty-eight confirmed instances during
+sources before proceeding. Twenty-nine confirmed instances during
 Phases 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -961,6 +961,32 @@ Phases 1, 2, 4, and 5:
   shape: new sub-subsection inserted (§7.3.1.1) — 6th distinct
   sub-shape. Bumps Phase 1-5 instance count Twenty-seven →
   Twenty-eight.
+- **§7.8.1 shielded-object encryption scheme specification**
+  (whitepaper 7.8.1) — Closes third of three §7.0 instance-24
+  carry-forwards; closes the §7.0-pre-bound site enumeration
+  for shielded-object contents. §7.8.1 originally said only
+  "The `contents` field is encrypted" with no scheme; resolved
+  by replacing that line with the full
+  `shielded_contents = { object_key_ciphertext, contents_
+  ciphertext, auth_tag, update_nonce }` construction. Hybrid
+  long-term + per-update encryption: ML-KEM-768 encapsulation
+  against owner's `pk_v_kem` produces long-term `ss_obj`
+  rotating on owner change; per-update HKDF-SHA3 derives
+  `update_key` from `(ss_obj, object_id, version)`; random
+  `update_nonce` per write; ChaCha20-Poly1305 encrypts. State
+  transitions update `contents_ciphertext` + `update_nonce`
+  together. Per-update random nonce satisfies §7.0
+  probabilistic-only posture: equal contents across updates
+  produce uncorrelated ciphertexts. Spec-first verification
+  29th instance. Amendment-mechanical-shape: in-place
+  expansion (existing terse line replaced with full
+  construction; sibling to instance-25's gap-acknowledgment-
+  replaced-with-full-construction shape; arguably the same
+  6th sub-shape but with content-not-acknowledgment as the
+  removed text — leaves at 6 distinct shapes total). Closes
+  all three instance-24 §7.0 site-enumeration carry-forwards
+  in single workstream-session. Bumps Phase 1-5 instance
+  count Twenty-eight → Twenty-nine.
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol

@@ -2632,7 +2632,22 @@ Section 5.7 anticipated this subsection: how does the privacy layer interact wit
 
 An object is either **shielded** or **transparent**, declared at creation:
 
-- **Shielded objects.** The `contents` field is encrypted. State transitions are accompanied by Halo 2 proofs attesting to correctness. The object's existence is public; its contents and ownership details are not.
+- **Shielded objects.** The `contents` field is encrypted using the following construction:
+
+```
+shielded_contents {
+    object_key_ciphertext: [u8; 1088],  // ML-KEM encapsulation
+    contents_ciphertext:   Vec<u8>,     // encrypted contents
+    auth_tag:              [u8; 16],    // Poly1305 tag
+    update_nonce:          [u8; 12],    // per-update nonce
+}
+```
+
+The `object_key_ciphertext` is an ML-KEM-768 encapsulation against the owner's viewing public key `pk_v_kem` per §7.2.2, performed at object creation or owner-rotation. The encapsulated shared secret `ss_obj` is the long-term object-level key material. Per-update encryption derives the symmetric key as `update_key = HKDF-SHA3(salt = domain_tag_object_update, ikm = ss_obj, info = object_id || version_u64_le, L = 32)` where `domain_tag_object_update = b"ADAMANT-v1-object-update"`. The `update_nonce` is sampled fresh per write (random 12-byte value); encryption is `(contents_ciphertext, auth_tag) = ChaCha20Poly1305-Encrypt(update_key, update_nonce, contents_payload)`.
+
+State transitions update `contents_ciphertext` + `update_nonce` together; `object_key_ciphertext` rotates only on owner change. State transitions are accompanied by Halo 2 proofs attesting to correctness. The object's existence is public; its contents and ownership details are not.
+
+The construction satisfies the §7.0 encryption-posture probabilistic-only requirement: per-update random nonce ensures equal `contents_payload` across updates produces uncorrelated ciphertexts.
 
 - **Transparent objects.** The `contents` field is in clear text. State transitions are visible to all observers. Ownership is visible. Useful for public-record applications, public bounties, transparent governance, and any case where the application's purpose requires transparency.
 
