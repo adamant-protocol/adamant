@@ -2456,19 +2456,36 @@ The viewing key has full visibility. Sub-view-keys are derived deterministically
 
 ### 7.4.2 Sub-view-key construction
 
-The cryptographic construction of sub-view-keys is in active design, pending reconciliation with the §7.2.2 ML-KEM-based viewing-keypair construction. The earlier classical-curve-arithmetic construction (referenced in pre-ML-KEM drafts of this whitepaper) is not directly applicable: §7.2.2's viewing keypair `(sk_v_kem, pk_v_kem)` is an ML-KEM-768 keypair (post-quantum), not a BLS12-381 scalar, so the formula previously specified at this subsection (`sub_view_key_S = (sk_v + Hash(domain || S || sk_v) · G_aux)`) is structurally incompatible with the §7.2.2 construction.
+A sub-view-key for scope `S` is a deterministically derived ML-KEM-768 keypair:
 
-The sub-view-key construction will be specified in a future amendment, bound by:
+```
+sub_seed_S = HKDF-SHA3(
+    salt = domain_tag_subview,
+    ikm  = sk_v_kem_seed,
+    info = BCS(S),
+    L    = 64
+)
+(sub_sk_v_kem_S, sub_pk_v_kem_S) = ML-KEM-768.KeyGen(sub_seed_S)
+```
 
-- The §7.0 encryption posture (probabilistic-only)
-- The §7.4.1 one-way derivation property (sub-view-key holder cannot derive parent viewing key)
-- Reconciliation with the §7.2.2 ML-KEM-based viewing-keypair construction
+where:
 
-Implementations `MUST NOT` rely on the formula as previously written.
+- `sk_v_kem_seed` is the 64-byte canonical seed of the parent viewing keypair `(sk_v_kem, pk_v_kem)` per §7.2.2
+- `domain_tag_subview = b"ADAMANT-v1-subview-derive"`
+- `S` is the structured scope descriptor (e.g. `{"start": t1, "end": t2}` for a time-windowed key); `BCS(S)` is its canonical encoding per §5.1.8
+- HKDF-SHA3 is the HKDF construction per RFC 5869 instantiated with SHA3-256, matching the HKDF usage for spending-key derivation per §7.2.5
+- L = 64 produces the 64-byte seed required for ML-KEM-768 deterministic key generation per FIPS 203 §6.1
+- ML-KEM-768.KeyGen is the FIPS 203 deterministic key-generation function
 
-The sub-view-key allows the holder to compute the shared secret `s'` for notes that fall within scope `S`, but is cryptographically constructed so that notes outside scope `S` produce nonsense decryption results. The exact construction is pending the future amendment described above.
+Properties:
 
-The implementation of "in scope" is enforced by the recipient's wallet, not by the chain: the wallet decides which sub-view-keys to derive and to whom. The chain has no view-key-related logic; it does not know which sub-view-keys exist.
+- **One-way derivation.** A sub-view-key holder cannot derive the parent viewing-keypair seed. HKDF-SHA3 is cryptographically one-way; reversing the derivation requires breaking SHA3-256 preimage resistance.
+- **Scope-bound decapsulation.** The sub-view-key holder can decapsulate notes whose stealth-address derivation used the same ML-KEM public key family (i.e., notes within scope `S`). Notes outside scope `S` were encapsulated against the parent `pk_v_kem`, not `sub_pk_v_kem_S`; decapsulating them with the sub-view-key produces deterministic-but-meaningless results per FIPS 203 §6.4.1 implicit rejection.
+- **Determinism.** Same parent seed + same scope `S` always produces the same sub-view-key. No per-derivation entropy.
+
+The implementation of "in scope" — which sub-view-keys to derive and to whom — is enforced by the recipient's wallet, not by the chain. The chain has no sub-view-key awareness.
+
+**Bytecode-level construction.** Section 6.2.1.4's `ReleaseSubViewKey` instruction performs the HKDF-SHA3 derivation step; ML-KEM-768.KeyGen from the derived seed is performed by the wallet outside shielded execution (the runtime does not need to materialise the keypair; only the seed is exposed via `ReleaseSubViewKey`).
 
 ### 7.4.3 Provable disclosure
 
