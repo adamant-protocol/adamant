@@ -77,6 +77,7 @@
 
 pub mod error;
 pub mod frame;
+pub mod gas;
 pub mod interpreter;
 pub mod module_helpers;
 pub mod runtime_value;
@@ -90,8 +91,9 @@ pub(in crate::runtime) mod test_helpers;
 #[cfg(test)]
 mod tests;
 
-pub use error::{ArithmeticErrorReason, InvariantViolationReason, VMError};
+pub use error::{AbortReason, ArithmeticErrorReason, InvariantViolationReason, VMError};
 pub use frame::{Frame, PrivacyMode};
+pub use gas::GasTracker;
 pub use interpreter::{DispatchOutcome, InterpreterState};
 pub use runtime_value::{
     compare_unsigned, Container, Reference, RuntimeStructValue, RuntimeValue, RuntimeVariantValue,

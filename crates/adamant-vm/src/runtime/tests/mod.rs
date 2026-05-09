@@ -16,6 +16,7 @@
 )]
 
 mod adamant_extensions;
+mod gas_accounting;
 mod struct_ops;
 mod variant_ops;
 mod vector_ops;

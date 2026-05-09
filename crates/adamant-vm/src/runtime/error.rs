@@ -22,9 +22,13 @@
 //!   — the transaction attempted to load or modify an object
 //!   outside its declared read or write set per §6.2.2 step 2.
 //!   The transaction is rejected before execution.
-//! - [`VMError::GasExhausted`] — the transaction's gas budget for
-//!   one of the six dimensions per §6.3.1 was exhausted during
-//!   execution. Execution aborts at the first dimension exhausted.
+//! - [`VMError::AbortError`] — explicit transaction abort per
+//!   whitepaper §6.2.1.4 (Move `Abort` opcode), §6.2.1.9
+//!   arithmetic abort (cross-reference to [`VMError::ArithmeticError`])
+//!   or gas-budget exhaustion per §6.3.1. Carries an
+//!   [`AbortReason`] sub-reason per the closed-enum-sub-reason
+//!   discipline. Refined at Phase 5/6.5 from the prior
+//!   `VMError::GasExhausted` placeholder.
 //! - [`VMError::InvalidInstruction`] — defensive: the bytecode
 //!   contains an instruction the runtime cannot dispatch. The
 //!   verifier (§6.2.1.6) should pre-empt all such cases at deploy
@@ -47,6 +51,7 @@
 //! lands as a typed [`InvariantViolationReason`] sub-reason rather
 //! than as a free-form string.
 
+use crate::bytecode::GasDimension;
 use crate::runtime::state_mutator::CommitError;
 use crate::runtime::state_view::LoadError;
 
@@ -107,22 +112,18 @@ pub enum VMError {
         attempted: ObjectId,
     },
 
-    /// Gas-budget dimension exhausted during execution per
-    /// whitepaper §6.2.2 step 5 ("Bytecode runs to completion or
-    /// until gas is exhausted") and §6.3.1.
+    /// Explicit transaction abort.
     ///
-    /// The runtime aborts at the first dimension exhausted; the
-    /// user cannot trade unused budget in one dimension for
-    /// additional consumption in another per whitepaper §6.0.2's
-    /// `GasBudget` semantics.
-    ///
-    /// 5/6.5 (gas accounting sub-arc) refines this variant with
-    /// per-dimension diagnostic data; the 5/6.1 surface is
-    /// minimal.
-    GasExhausted {
-        /// Which of the six dimensions was exhausted per
-        /// [`crate::bytecode::GasDimension`].
-        dimension: crate::bytecode::GasDimension,
+    /// Carries an [`AbortReason`] closed sub-reason per the
+    /// closed-enum-sub-reason discipline. Refined at Phase 5/6.5
+    /// from the prior `VMError::GasExhausted` placeholder; the
+    /// `AbortReason::OutOfGas` variant carries the gas-exhaustion
+    /// case forward with the same `GasDimension` payload, while
+    /// `AbortReason::UserAbort` and `AbortReason::AssertionFailure`
+    /// carry user-provided abort codes per Move semantics.
+    AbortError {
+        /// The specific abort condition.
+        reason: AbortReason,
     },
 
     /// Defensive: the bytecode contains an instruction the runtime
@@ -341,6 +342,90 @@ pub enum InvariantViolationReason {
     /// either verifier unsoundness on the variant-coverage
     /// invariant, or post-deployment bytecode modification.
     JumpTableTagOutOfRange,
+}
+
+/// Closed sub-reason enum for [`VMError::AbortError`].
+///
+/// Per Phase 5/6.5 plan-gate Q5/6.5.3 disposition, refines the
+/// prior `VMError::GasExhausted` placeholder into a structured
+/// abort-classification surface. Four variants partition the
+/// abort surface into categories distinguished by **what
+/// triggered the abort**:
+///
+/// - [`AbortReason::UserAbort`] — explicit Move `Abort` opcode
+///   per §6.2.1.4 (`Bytecode::Abort` consumes a `u64` abort
+///   code).
+/// - [`AbortReason::AssertionFailure`] — Move `assert!`
+///   compiled to an `Abort` with a known assertion code; the
+///   runtime treats this as a distinct abort category for
+///   diagnostic purposes (assertion failures are typically
+///   contract-bug indicators rather than expected user-side
+///   abort flow).
+/// - [`AbortReason::DivisionByZero`] — arithmetic abort cross-
+///   referenced with [`ArithmeticErrorReason::DivisionByZero`].
+///   The runtime returns [`VMError::ArithmeticError`] for the
+///   in-instruction surface; this variant is for stdlib-side
+///   abort wrappers that lift arithmetic failures into the
+///   abort surface for user-facing diagnostic consistency.
+/// - [`AbortReason::OutOfGas`] — gas-budget dimension exhausted
+///   per whitepaper §6.3.1. Carries the exhausted dimension as
+///   a [`GasDimension`] payload (replaces the prior
+///   `VMError::GasExhausted { dimension }` field shape with
+///   the same semantic).
+///
+/// **Privacy-property constraint** (per Phase 5/6.5 plan-gate
+/// Q5/6.5.3 + §7.0 encryption-posture implications):
+/// `AbortReason` variants are designed to NOT leak plaintext-
+/// correlatable details through error codes. `UserAbort` and
+/// `AssertionFailure` carry user-provided codes (already public
+/// per Move semantics — the abort code appears in the bytecode
+/// constant pool); `OutOfGas` and `DivisionByZero` are
+/// deterministic-from-execution-trace (no privacy leak beyond
+/// what the execution trace already exposes).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum AbortReason {
+    /// Explicit Move `Abort` opcode per §6.2.1.4 with a
+    /// user-provided `u64` abort code. Code semantics are
+    /// determined by the contract author; the runtime carries
+    /// the code through to the outer error surface for caller
+    /// diagnostics.
+    UserAbort {
+        /// User-provided abort code (already public per Move
+        /// semantics — the code appears in the bytecode
+        /// constant pool that produced the abort).
+        code: u64,
+    },
+    /// Move `assert!` macro failure compiled to an `Abort`. The
+    /// stdlib `assert!` macro wraps an `Abort` with a code
+    /// chosen by the compiler/contract author for diagnostic
+    /// purposes; this variant lifts the code into a distinct
+    /// abort category from `UserAbort` for surface-level clarity
+    /// (assertion failure usually indicates a contract bug,
+    /// while `UserAbort` indicates an expected abort flow).
+    AssertionFailure {
+        /// User-provided assertion code (already public per
+        /// Move semantics).
+        code: u64,
+    },
+    /// Arithmetic division-by-zero cross-reference. The
+    /// in-instruction surface returns [`VMError::ArithmeticError`]
+    /// with [`ArithmeticErrorReason::DivisionByZero`]; this
+    /// variant is for stdlib-side abort wrappers that lift the
+    /// arithmetic failure into the abort surface for user-facing
+    /// diagnostic consistency.
+    DivisionByZero,
+    /// Gas-budget dimension exhausted during execution per
+    /// whitepaper §6.2.2 step 5 ("Bytecode runs to completion or
+    /// until gas is exhausted") and §6.3.1.
+    ///
+    /// Replaces the prior `VMError::GasExhausted { dimension }`
+    /// field shape with the same semantic (Phase 5/6.5 plan-gate
+    /// Q5/6.5.3 disposition).
+    OutOfGas {
+        /// Which of the six dimensions was exhausted per
+        /// [`GasDimension`].
+        dimension: GasDimension,
+    },
 }
 
 #[cfg(test)]

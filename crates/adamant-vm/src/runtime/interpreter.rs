@@ -26,11 +26,15 @@
 
 use adamant_bytecode_format::{Bytecode, FunctionHandleIndex, U256 as FormatU256};
 
-use crate::bytecode::BytecodeInstruction;
+use crate::bytecode::{BytecodeInstruction, GasDimension};
 use crate::module::AdamantCompiledModule;
-use crate::runtime::error::{ArithmeticErrorReason, InvariantViolationReason, VMError};
+use crate::runtime::error::{
+    AbortReason, ArithmeticErrorReason, InvariantViolationReason, VMError,
+};
 use crate::runtime::frame::Frame;
+use crate::runtime::gas::GasTracker;
 use crate::runtime::runtime_value::RuntimeValue;
+use crate::transaction::GasBudget;
 
 /// Multi-frame interpreter state.
 ///
@@ -40,9 +44,23 @@ use crate::runtime::runtime_value::RuntimeValue;
 /// frame. Per whitepaper §6.2.2 step 5, execution runs "to
 /// completion" — i.e., until the call stack is empty — "or until
 /// gas is exhausted."
+///
+/// Phase 5/6.5 adds the [`GasTracker`] field for multi-dimensional
+/// gas accounting per §6.3.1. The tracker is set once at
+/// transaction frame entry from the transaction's [`GasBudget`]
+/// and never topped up mid-execution.
 #[derive(Debug, Clone, Default)]
 pub struct InterpreterState {
     frames: Vec<Frame>,
+    /// Multi-dimensional gas tracker per §6.3.1. Initialised at
+    /// transaction frame entry via
+    /// [`InterpreterState::set_gas_budget`]; per-instruction
+    /// charges deduct via [`InterpreterState::charge_gas`];
+    /// remaining-per-dimension reads via
+    /// [`InterpreterState::remaining_gas`]. Default is empty (all
+    /// dimensions at zero); an empty tracker aborts on any
+    /// positive charge per [`GasTracker::charge`] semantics.
+    gas_tracker: GasTracker,
 }
 
 impl InterpreterState {
@@ -98,6 +116,35 @@ impl InterpreterState {
     #[must_use]
     pub fn top_frame(&self) -> Option<&Frame> {
         self.frames.last()
+    }
+
+    /// Set the gas tracker from a transaction's [`GasBudget`].
+    /// Invoked at transaction-execution start to initialise
+    /// per-dimension remaining budget per §6.3.1.
+    pub fn set_gas_budget(&mut self, budget: &GasBudget) {
+        self.gas_tracker = GasTracker::from_budget(budget);
+    }
+
+    /// Read the current gas tracker. Used by tests and by
+    /// transaction-execution-end hooks that report consumed gas.
+    #[must_use]
+    pub fn gas_tracker(&self) -> &GasTracker {
+        &self.gas_tracker
+    }
+
+    /// Charge `amount` units against `dimension`'s remaining
+    /// budget. Convenience wrapper over
+    /// [`GasTracker::charge`]; surfaces
+    /// [`VMError::AbortError`] with
+    /// [`crate::runtime::AbortReason::OutOfGas`] on exhaustion.
+    pub fn charge_gas(&mut self, dimension: GasDimension, amount: u64) -> Result<(), VMError> {
+        self.gas_tracker.charge(dimension, amount)
+    }
+
+    /// Read the remaining budget for `dimension`.
+    #[must_use]
+    pub fn remaining_gas(&self, dimension: GasDimension) -> u64 {
+        self.gas_tracker.remaining(dimension)
     }
 }
 
@@ -271,16 +318,18 @@ fn dispatch_adamant(
         AB::MlDsaVerify65 => dispatch_ml_dsa_verify_65(state),
         AB::BlsVerify => dispatch_bls_verify(state),
 
+        // ---------- Gas handlers (Phase 5/6.5) ----------
+        AB::ChargeGas(dim) => dispatch_charge_gas(state, *dim),
+        AB::RemainingGas(dim) => dispatch_remaining_gas(state, *dim),
+        AB::OutOfGas => dispatch_out_of_gas(state),
+
         // ---------- Deferred handlers ----------
         AB::KzgCommit
         | AB::KzgVerify
         | AB::GenerateProof(_)
         | AB::VerifyProof(_)
         | AB::RecursiveVerify
-        | AB::ReleaseSubViewKey
-        | AB::ChargeGas(_)
-        | AB::RemainingGas(_)
-        | AB::OutOfGas => {
+        | AB::ReleaseSubViewKey => {
             let frame = state
                 .top_frame()
                 .expect("dispatch_adamant caller-contract: call stack non-empty");
@@ -459,27 +508,18 @@ fn dispatch_inherited(
 
         // ---------- Misc ----------
         Bytecode::Abort => {
-            let frame = top_frame_mut(state)?;
             // Abort consumes its u64 abort code per §6.2.1.4
-            // ("Abort with an error code"). At sub-arc 5/6.2b the
-            // abort code is consumed but not propagated to the
-            // outer error variant; richer abort handling (with
-            // error-code carriage in VMError) defers to 5/6.5
-            // gas accounting + 5/6.7 stdlib integration.
-            let _abort_code = frame.pop_u64()?;
-            // Surface as InvariantViolation { ... } would mis-
-            // categorize this as defensive; Abort is an expected
-            // runtime condition. Use ArithmeticError until a
-            // dedicated AbortError variant lands at 5/6.5 (where
-            // the abort_code carries diagnostic info alongside
-            // the gas-charge accounting).
-            //
-            // Sub-arc 5/6.2b lands the bytecode-level dispatch;
-            // semantic refinement of AbortError vs ArithmeticError
-            // distinction defers to 5/6.5 plan-gate where the
-            // top-level VMError variant set is finalized.
-            Err(VMError::ArithmeticError {
-                reason: ArithmeticErrorReason::Overflow, // placeholder pending 5/6.5
+            // ("Abort with an error code"). Phase 5/6.5 refines
+            // the prior placeholder into VMError::AbortError with
+            // AbortReason::UserAbort { code } per Q5/6.5.3
+            // disposition. The abort code is the user-provided
+            // value from the bytecode's preceding LdU64 / LdConst
+            // (already public per Move semantics; no privacy
+            // leak).
+            let frame = top_frame_mut(state)?;
+            let code = frame.pop_u64()?;
+            Err(VMError::AbortError {
+                reason: AbortReason::UserAbort { code },
             })
         }
         Bytecode::Nop => {
@@ -1937,6 +1977,63 @@ fn dispatch_bls_verify(state: &mut InterpreterState) -> Result<DispatchOutcome, 
     Ok(DispatchOutcome::Continue)
 }
 
+// ============================================================================
+// Phase 5/6.5: Gas handlers
+// ============================================================================
+
+/// `Bytecode::Adamant(ChargeGas(dim))` handler.
+///
+/// Per whitepaper §6.2.1.4 line 423: "Charge a specified amount
+/// across one of the six gas dimensions (per section 6.0.7's
+/// `GasBudget` and section 6.3.1). Pops the amount as `u64`."
+///
+/// Pops `u64` amount; calls [`GasTracker::charge`]. On exhaustion,
+/// surfaces [`VMError::AbortError`] with [`AbortReason::OutOfGas`].
+fn dispatch_charge_gas(
+    state: &mut InterpreterState,
+    dim: GasDimension,
+) -> Result<DispatchOutcome, VMError> {
+    let amount = top_frame_mut(state)?.pop_u64()?;
+    state.gas_tracker.charge(dim, amount)?;
+    let frame = top_frame_mut(state)?;
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::Adamant(RemainingGas(dim))` handler.
+///
+/// Per whitepaper §6.2.1.4 line 424: "Push the remaining budget
+/// for a specified dimension as `u64`. Used by stdlib functions
+/// that adapt behaviour based on remaining budget."
+fn dispatch_remaining_gas(
+    state: &mut InterpreterState,
+    dim: GasDimension,
+) -> Result<DispatchOutcome, VMError> {
+    let remaining = state.gas_tracker.remaining(dim);
+    let frame = top_frame_mut(state)?;
+    frame.push_value(RuntimeValue::U64(remaining));
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::Adamant(OutOfGas)` handler.
+///
+/// Per whitepaper §6.2.1.4 line 425: "Abort the transaction with
+/// the out-of-gas error. Used by stdlib functions that detect
+/// dimension exhaustion."
+///
+/// Surfaces [`VMError::AbortError`] with
+/// [`AbortReason::OutOfGas { dimension: ProofGeneration }`] —
+/// the proof-generation dimension is the canonical "stdlib-
+/// detected exhaustion" dimension per §6.3.1.
+fn dispatch_out_of_gas(_state: &mut InterpreterState) -> Result<DispatchOutcome, VMError> {
+    Err(VMError::AbortError {
+        reason: AbortReason::OutOfGas {
+            dimension: GasDimension::ProofGeneration,
+        },
+    })
+}
+
 /// Helper: parse-and-verify BLS12-381 returning `bool`.
 fn bls_verify_plain(pk_bytes: &[u8], msg: &[u8], sig_bytes: &[u8]) -> bool {
     use adamant_crypto::bls::{PUBLIC_KEY_BYTES, SIGNATURE_BYTES};
@@ -3164,16 +3261,20 @@ mod tests {
     }
 
     /// Whitepaper §6.2.1.4 (verbatim): "Abort with an error code."
-    /// 5/6.2b lands the dispatch shape; richer abort handling
-    /// (with error-code carriage) defers to 5/6.5.
+    /// Phase 5/6.5 refines the prior placeholder into
+    /// VMError::AbortError with AbortReason::UserAbort { code }.
     #[test]
     fn abort_returns_error() {
+        use crate::runtime::AbortReason;
         let mut state = state_with_frame(0);
         push_stack(&mut state, vec![RuntimeValue::U64(42)]);
         let err = dispatch(&mut state, Bytecode::Abort).expect_err("aborts");
-        // At 5/6.2b the abort placeholder uses Overflow; this is
-        // a known shape that 5/6.5 refines.
-        assert!(matches!(err, VMError::ArithmeticError { .. }));
+        assert!(matches!(
+            err,
+            VMError::AbortError {
+                reason: AbortReason::UserAbort { code: 42 }
+            }
+        ));
     }
 
     /// Whitepaper §6.2.1.6 Rule 5: "No global storage instructions."

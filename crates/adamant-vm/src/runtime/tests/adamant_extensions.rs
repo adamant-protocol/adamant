@@ -683,18 +683,9 @@ fn deferred_release_sub_view_key_surfaces_invalid_instruction() {
     assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
 }
 
-/// Gas handlers (sample: ChargeGas) deferred to 5/6.5.
-#[test]
-fn deferred_charge_gas_surfaces_invalid_instruction() {
-    let module = empty_module();
-    let mut state = state_with_transparent_frame(0);
-    let result = dispatch_adamant(
-        &mut state,
-        AdamantBytecode::ChargeGas(crate::bytecode::GasDimension::Computation),
-        &module,
-    );
-    assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
-}
+// (Note: deferred_charge_gas_surfaces_invalid_instruction was
+// removed at Phase 5/6.5 — gas handlers are now real per
+// Q5/6.5.4 disposition; see runtime/tests/gas_accounting.rs.)
 
 // =====================================================================
 // PC advancement on hash/signature handlers
