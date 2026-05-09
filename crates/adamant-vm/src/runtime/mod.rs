@@ -85,7 +85,7 @@ pub mod state_view;
 #[cfg(test)]
 pub(in crate::runtime) mod test_helpers;
 
-pub use error::{InvariantViolationReason, VMError};
+pub use error::{ArithmeticErrorReason, InvariantViolationReason, VMError};
 pub use frame::Frame;
 pub use interpreter::{DispatchOutcome, InterpreterState};
 pub use state_buffer::TransactionStateBuffer;
