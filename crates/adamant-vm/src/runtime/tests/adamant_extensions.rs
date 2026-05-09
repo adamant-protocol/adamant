@@ -467,14 +467,19 @@ fn invoke_shielded_from_shielded_caller_creates_shielded_frame() {
     // gives FnOnce-like single-shot behaviour through Fn shape.
     let invoke = AdamantBytecode::InvokeShielded(target);
     let fired = Cell::new(false);
-    let result = run(&mut state, &module, |_h, _pc| {
-        if fired.get() {
-            None
-        } else {
-            fired.set(true);
-            Some(BytecodeInstruction::Adamant(invoke.clone()))
-        }
-    });
+    let result = run(
+        &mut state,
+        &module,
+        |_h, _pc| {
+            if fired.get() {
+                None
+            } else {
+                fired.set(true);
+                Some(BytecodeInstruction::Adamant(invoke.clone()))
+            }
+        },
+        None,
+    );
     // After the InvokeShielded fires, do_call_with_privacy creates
     // a new shielded frame. The next fetch returns None →
     // InvalidInstruction. Reaching that error (and not
@@ -493,14 +498,19 @@ fn invoke_shielded_from_transparent_caller_surfaces_privacy_mismatch() {
 
     let invoke = AdamantBytecode::InvokeShielded(target);
     let fired = Cell::new(false);
-    let result = run(&mut state, &module, move |_h, _pc| {
-        if fired.get() {
-            None
-        } else {
-            fired.set(true);
-            Some(BytecodeInstruction::Adamant(invoke.clone()))
-        }
-    });
+    let result = run(
+        &mut state,
+        &module,
+        move |_h, _pc| {
+            if fired.get() {
+                None
+            } else {
+                fired.set(true);
+                Some(BytecodeInstruction::Adamant(invoke.clone()))
+            }
+        },
+        None,
+    );
     assert!(matches!(
         result,
         Err(VMError::InvariantViolation {
@@ -517,14 +527,19 @@ fn invoke_shielded_oob_handle_surfaces_invariant_violation() {
     let mut state = state_with_shielded_frame(0);
     let invoke = AdamantBytecode::InvokeShielded(FunctionHandleIndex(99));
     let fired = Cell::new(false);
-    let result = run(&mut state, &module, move |_h, _pc| {
-        if fired.get() {
-            None
-        } else {
-            fired.set(true);
-            Some(BytecodeInstruction::Adamant(invoke.clone()))
-        }
-    });
+    let result = run(
+        &mut state,
+        &module,
+        move |_h, _pc| {
+            if fired.get() {
+                None
+            } else {
+                fired.set(true);
+                Some(BytecodeInstruction::Adamant(invoke.clone()))
+            }
+        },
+        None,
+    );
     assert!(matches!(
         result,
         Err(VMError::InvariantViolation {
@@ -547,14 +562,19 @@ fn invoke_transparent_from_transparent_caller_creates_transparent_frame() {
 
     let invoke = AdamantBytecode::InvokeTransparent(target);
     let fired = Cell::new(false);
-    let result = run(&mut state, &module, move |_h, _pc| {
-        if fired.get() {
-            None
-        } else {
-            fired.set(true);
-            Some(BytecodeInstruction::Adamant(invoke.clone()))
-        }
-    });
+    let result = run(
+        &mut state,
+        &module,
+        move |_h, _pc| {
+            if fired.get() {
+                None
+            } else {
+                fired.set(true);
+                Some(BytecodeInstruction::Adamant(invoke.clone()))
+            }
+        },
+        None,
+    );
     assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
 }
 
@@ -568,14 +588,19 @@ fn invoke_transparent_from_shielded_caller_surfaces_privacy_mismatch() {
 
     let invoke = AdamantBytecode::InvokeTransparent(target);
     let fired = Cell::new(false);
-    let result = run(&mut state, &module, move |_h, _pc| {
-        if fired.get() {
-            None
-        } else {
-            fired.set(true);
-            Some(BytecodeInstruction::Adamant(invoke.clone()))
-        }
-    });
+    let result = run(
+        &mut state,
+        &module,
+        move |_h, _pc| {
+            if fired.get() {
+                None
+            } else {
+                fired.set(true);
+                Some(BytecodeInstruction::Adamant(invoke.clone()))
+            }
+        },
+        None,
+    );
     assert!(matches!(
         result,
         Err(VMError::InvariantViolation {
@@ -597,14 +622,19 @@ fn call_inherits_caller_privacy_mode() {
 
     let call = Bytecode::Call(target);
     let fired = Cell::new(false);
-    let result = run(&mut state, &module, move |_h, _pc| {
-        if fired.get() {
-            None
-        } else {
-            fired.set(true);
-            Some(BytecodeInstruction::Inherited(call.clone()))
-        }
-    });
+    let result = run(
+        &mut state,
+        &module,
+        move |_h, _pc| {
+            if fired.get() {
+                None
+            } else {
+                fired.set(true);
+                Some(BytecodeInstruction::Inherited(call.clone()))
+            }
+        },
+        None,
+    );
     // The fact that we reach InvalidInstruction (and not
     // PrivacyModeMismatch — which is impossible here since Call
     // doesn't check) confirms the new shielded frame was created

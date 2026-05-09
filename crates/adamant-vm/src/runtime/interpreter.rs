@@ -1344,10 +1344,25 @@ fn narrow_or_abort<T, E>(r: Result<T, E>) -> Result<T, VMError> {
 /// Whitepaper §6.2.2 step 5: "Bytecode runs to completion or
 /// until gas is exhausted." Sub-arc 5/6.1 enforces only the
 /// "to completion" half (gas exhaustion is 5/6.5 scope).
+///
+/// # Native-handler dispatch (Phase 5/6.8.A)
+///
+/// `natives` is an optional reference to a native-handler
+/// [`crate::runtime::NativeRegistry`] per whitepaper §6.5
+/// amendment. When `Some`, the dispatch loop checks the registry
+/// before pushing a new bytecode frame for `Bytecode::Call`,
+/// `Bytecode::CallGeneric`, `BytecodeInstruction::InvokeShielded`,
+/// and `BytecodeInstruction::InvokeTransparent`. A registry hit
+/// dispatches to the native handler in place of the new-frame
+/// push; a miss falls through to ordinary bytecode interpretation.
+/// `None` is equivalent to passing an empty registry — every call
+/// falls through to bytecode interpretation. Tests that don't
+/// exercise native dispatch pass `None` for clarity.
 pub fn run(
     state: &mut InterpreterState,
     module: &AdamantCompiledModule,
     fetch_instruction: impl Fn(FunctionHandleIndex, u16) -> Option<BytecodeInstruction>,
+    natives: Option<&crate::runtime::NativeRegistry>,
 ) -> Result<(), VMError> {
     loop {
         if state.is_empty() {
@@ -1365,21 +1380,142 @@ pub fn run(
         match dispatch_instruction(&instruction, state, module)? {
             DispatchOutcome::Continue => {}
             DispatchOutcome::Halt => return Ok(()),
-            DispatchOutcome::Call(handle) => do_call(state, module, handle)?,
+            DispatchOutcome::Call(handle) => do_call_or_native(state, module, handle, natives)?,
             DispatchOutcome::CallGeneric(idx) => do_call_generic(state, module, idx)?,
             DispatchOutcome::InvokeShielded(handle) => {
-                do_call_with_privacy(state, module, handle, crate::runtime::PrivacyMode::Shielded)?;
+                do_call_or_native_with_privacy(
+                    state,
+                    module,
+                    handle,
+                    crate::runtime::PrivacyMode::Shielded,
+                    natives,
+                )?;
             }
             DispatchOutcome::InvokeTransparent(handle) => {
-                do_call_with_privacy(
+                do_call_or_native_with_privacy(
                     state,
                     module,
                     handle,
                     crate::runtime::PrivacyMode::Transparent,
+                    natives,
                 )?;
             }
         }
     }
+}
+
+/// Native-aware Call dispatch. If `natives` resolves the call to
+/// a registered handler, invoke it via [`do_native_call`]; else
+/// fall through to ordinary [`do_call`].
+fn do_call_or_native(
+    state: &mut InterpreterState,
+    module: &AdamantCompiledModule,
+    handle: adamant_bytecode_format::FunctionHandleIndex,
+    natives: Option<&crate::runtime::NativeRegistry>,
+) -> Result<(), VMError> {
+    if let Some(registry) = natives {
+        if let Some(key) = crate::runtime::native::native_key_from_handle(module, handle) {
+            if let Some(handler) = registry.lookup(&key) {
+                return do_native_call(state, module, handle, handler);
+            }
+        }
+    }
+    do_call(state, module, handle)
+}
+
+/// Native-aware Call dispatch with privacy-mode pinning. Same
+/// shape as [`do_call_or_native`] for the ordinary `Call` path
+/// but pins the new frame's privacy mode for `InvokeShielded` /
+/// `InvokeTransparent` per Phase 5/6.3 + Rule 7.
+///
+/// For native dispatch, the privacy-mode invariant is checked at
+/// the caller-frame level (residual binding for §6.2.1.6 Rule 7
+/// per `do_call_with_privacy` shape); the native handler runs
+/// without a new frame, so the caller's mode persists.
+fn do_call_or_native_with_privacy(
+    state: &mut InterpreterState,
+    module: &AdamantCompiledModule,
+    handle: adamant_bytecode_format::FunctionHandleIndex,
+    expected_mode: crate::runtime::PrivacyMode,
+    natives: Option<&crate::runtime::NativeRegistry>,
+) -> Result<(), VMError> {
+    if let Some(registry) = natives {
+        if let Some(key) = crate::runtime::native::native_key_from_handle(module, handle) {
+            if let Some(handler) = registry.lookup(&key) {
+                // Residual Rule 7 caller-frame mode pin.
+                let caller_mode = state
+                    .top_frame()
+                    .ok_or(VMError::InvariantViolation {
+                        reason: InvariantViolationReason::StackUnderflow,
+                    })?
+                    .privacy_mode;
+                if caller_mode != expected_mode {
+                    return Err(VMError::InvariantViolation {
+                        reason: InvariantViolationReason::PrivacyModeMismatchPostVerification,
+                    });
+                }
+                return do_native_call(state, module, handle, handler);
+            }
+        }
+    }
+    do_call_with_privacy(state, module, handle, expected_mode)
+}
+
+/// Invoke a native handler in place of pushing a new bytecode
+/// frame.
+///
+/// Pops the function's declared parameter count from the caller
+/// frame, builds a [`crate::runtime::NativeContext`], invokes
+/// the handler, then pushes the handler's `return_values` back
+/// to the caller frame. The caller frame's `pc` was already
+/// advanced by the dispatch arm before the [`DispatchOutcome::Call`]
+/// signal — execution resumes at the caller's next instruction
+/// when the handler returns.
+fn do_native_call(
+    state: &mut InterpreterState,
+    module: &AdamantCompiledModule,
+    handle: adamant_bytecode_format::FunctionHandleIndex,
+    handler: crate::runtime::NativeFunction,
+) -> Result<(), VMError> {
+    // 1. Resolve parameter signature for arity.
+    let func_handle =
+        module
+            .function_handles
+            .get(handle.0 as usize)
+            .ok_or(VMError::InvariantViolation {
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+            })?;
+    let params_sig = module
+        .signatures
+        .get(func_handle.parameters.0 as usize)
+        .ok_or(VMError::InvariantViolation {
+            reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+        })?;
+    let arg_count = params_sig.0.len();
+
+    // 2. Pop arguments from caller frame.
+    let caller_frame = state.top_frame_mut().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::StackUnderflow,
+    })?;
+    let mut args: Vec<RuntimeValue> = Vec::with_capacity(arg_count);
+    for _ in 0..arg_count {
+        args.push(caller_frame.pop_value()?);
+    }
+    args.reverse();
+
+    // 3. Invoke the handler with the constructed context.
+    let mut ctx = crate::runtime::NativeContext::new(state, module, args);
+    handler(&mut ctx)?;
+
+    // 4. Push handler's return values back to the caller frame.
+    let return_values = std::mem::take(&mut ctx.return_values);
+    let caller_frame = state.top_frame_mut().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::StackUnderflow,
+    })?;
+    for value in return_values {
+        caller_frame.push_value(value);
+    }
+    Ok(())
 }
 
 // ---------- Module-access handler helpers (Phase 5/6.2c.2.α) ----------
@@ -2315,6 +2451,17 @@ mod tests {
         FunctionHandleIndex(idx)
     }
 
+    /// Probe handler used by `run_invokes_native_handler_when_registered`.
+    /// Pushes the sentinel `0xCAFE` value onto the caller's stack
+    /// via the [`NativeContext`] return-values channel.
+    #[allow(clippy::unnecessary_wraps, reason = "match NativeFunction signature")]
+    fn native_probe_handler(
+        ctx: &mut crate::runtime::NativeContext<'_>,
+    ) -> Result<(), VMError> {
+        ctx.return_values.push(RuntimeValue::U64(0xCAFE));
+        Ok(())
+    }
+
     /// Construct an empty placeholder module for tests that don't
     /// exercise module-access handlers. 5/6.2c.1 foundation tests
     /// pass an empty module since the 38 self-contained handlers
@@ -2379,9 +2526,12 @@ mod tests {
     fn run_on_empty_interpreter_state_returns_ok() {
         let mut state = InterpreterState::new();
         let module = empty_module();
-        let result = run(&mut state, &module, |_h, _pc| {
-            panic!("fetch_instruction should not be called on empty state")
-        });
+        let result = run(
+            &mut state,
+            &module,
+            |_h, _pc| panic!("fetch_instruction should not be called on empty state"),
+            None,
+        );
         assert!(result.is_ok());
     }
 
@@ -2409,7 +2559,7 @@ mod tests {
     fn run_returns_invalid_instruction_when_fetch_returns_none() {
         let mut state = state_with_frame(0);
         let module = empty_module();
-        let result = run(&mut state, &module, |_h, _pc| None);
+        let result = run(&mut state, &module, |_h, _pc| None, None);
         assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
     }
 
@@ -3794,9 +3944,108 @@ mod tests {
     fn run_trivial_ret_completes() {
         let mut state = state_with_frame(0);
         let module = empty_module();
-        let result = run(&mut state, &module, |_h, _pc| {
-            Some(BytecodeInstruction::Inherited(Bytecode::Ret))
+        let result = run(
+            &mut state,
+            &module,
+            |_h, _pc| Some(BytecodeInstruction::Inherited(Bytecode::Ret)),
+            None,
+        );
+        assert!(result.is_ok());
+        assert!(state.is_empty());
+    }
+
+    /// Phase 5/6.8.A — native dispatch hook: when the registry
+    /// resolves a `Bytecode::Call` target, the native handler
+    /// runs instead of pushing a new frame. The handler's
+    /// return values appear on the caller frame's stack.
+    #[test]
+    fn run_invokes_native_handler_when_registered() {
+        use adamant_bytecode_format::{
+            AddressIdentifierIndex, FunctionHandle, IdentifierIndex, ModuleHandle,
+            ModuleHandleIndex, Signature, SignatureIndex,
+        };
+        use crate::runtime::{NativeFunction, NativeKey, NativeRegistry, STDLIB_ADDRESS};
+
+        let mut module = empty_module();
+        // Wire a stdlib function handle for `0x1::probe::native`.
+        module.module_handles.push(ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(0),
         });
+        module.address_identifiers.push(STDLIB_ADDRESS);
+        module
+            .identifiers
+            .push(adamant_bytecode_format::Identifier::new("probe").unwrap());
+        module
+            .identifiers
+            .push(adamant_bytecode_format::Identifier::new("native").unwrap());
+        module.signatures.push(Signature(vec![])); // empty params/return
+        module.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(0),
+            type_parameters: vec![],
+        });
+
+        // Native handler pushes a sentinel value.
+        let handler_fn: NativeFunction = native_probe_handler;
+
+        let mut registry = NativeRegistry::new();
+        registry.register(
+            NativeKey::new(
+                STDLIB_ADDRESS,
+                adamant_bytecode_format::Identifier::new("probe").unwrap(),
+                adamant_bytecode_format::Identifier::new("native").unwrap(),
+            ),
+            handler_fn,
+        );
+
+        let mut state = state_with_frame(0);
+        let target_handle = adamant_bytecode_format::FunctionHandleIndex(0);
+        let fired = std::cell::Cell::new(false);
+        let result = run(
+            &mut state,
+            &module,
+            |_h, _pc| {
+                if fired.get() {
+                    None
+                } else {
+                    fired.set(true);
+                    Some(BytecodeInstruction::Inherited(Bytecode::Call(target_handle)))
+                }
+            },
+            Some(&registry),
+        );
+        // After the native fires, the next fetch returns None →
+        // InvalidInstruction. Reaching that error confirms the
+        // native ran without pushing a new frame (no frame push
+        // would have happened for a missing-fetch on a callee
+        // bytecode body).
+        assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
+        // The native's return value made it to the caller's stack.
+        let frame = state.top_frame().expect("caller frame still present");
+        assert_eq!(frame.stack.len(), 1);
+        assert!(matches!(frame.stack[0], RuntimeValue::U64(0xCAFE)));
+    }
+
+    /// Phase 5/6.8.A — native dispatch passthrough: when the
+    /// registry has no entry for the call target, dispatch falls
+    /// through to ordinary `do_call` (i.e., a new frame is
+    /// pushed). The behaviour is byte-identical to the
+    /// `natives = None` path.
+    #[test]
+    fn run_falls_through_to_bytecode_when_target_not_registered() {
+        use crate::runtime::NativeRegistry;
+        let registry = NativeRegistry::new(); // empty
+        let mut state = state_with_frame(0);
+        let module = empty_module();
+        let result = run(
+            &mut state,
+            &module,
+            |_h, _pc| Some(BytecodeInstruction::Inherited(Bytecode::Ret)),
+            Some(&registry),
+        );
         assert!(result.is_ok());
         assert!(state.is_empty());
     }
