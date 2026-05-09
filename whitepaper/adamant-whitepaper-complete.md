@@ -2220,6 +2220,26 @@ The section builds on section 3 (cryptographic primitives), section 4 (account m
 
 The design follows from Principle II (privacy by default), and it is designed to interact cleanly with Principle I (credible neutrality) and Principle IV (performance). Where these come into tension, the priority order in section 2.8 governs.
 
+## 7.0 Encryption posture
+
+All shielded encryption in this section uses **probabilistic** schemes. Two encryptions of the same plaintext under the same key produce different ciphertexts; ciphertext equality does not imply plaintext equality. This is a protocol-level commitment, not a per-site convention.
+
+The commitment matters because the runtime's shielded-value-equality semantics (§6.2.1.9) compares ciphertext bytes verbatim — `Bytecode::Eq` on two shielded values returns `true` when the ciphertext bytes match, `false` otherwise. The privacy property — *ciphertext equality reveals nothing about plaintext equality* — depends on the encryption being probabilistic. A deterministic shielded-encryption scheme would silently break this property: two equal plaintexts would produce equal ciphertexts, and an observer could detect plaintext equality by ciphertext comparison without holding the key.
+
+The §7.0 posture binds every on-chain shielded-encryption surface in this section. The surfaces and their per-site specification status as of this amendment:
+
+- **Note commitments** (§7.1) — Poseidon hash with per-note `randomness: [u8; 32]`. Scheme fully specified by §7.1; probabilistic by construction (the per-note randomness ensures uncorrelated commitments for byte-equal `(value, asset_type, recipient, metadata)` tuples).
+- **Stealth-address ciphertexts** (§7.2.2) — ML-KEM-768 encapsulation per FIPS 203. Scheme fully specified by §7.2.2; probabilistic by FIPS 203 §6.3 (a fresh `m ← {0,1}^256` is sampled per encapsulation call).
+- **Encrypted memos** (§7.6.1) — ChaCha20-Poly1305 with `memo_key = HashToKey(s || domain_tag_memo)`. Scheme partially specified by §7.6.1; the nonce-derivation half is not pinned at this amendment and remains open per the §3.5 framing ("Implementation details for nonce derivation are specified per-use in subsequent sections"). The §7.0 posture binds the eventual specification to a probabilistic shape.
+- **Encrypted note delivery** (§7.3.1 `encrypted_outputs: Vec<EncryptedNote>`) — encryption scheme not specified at this amendment. The §7.0 posture binds the eventual specification to a probabilistic shape.
+- **Shielded object contents** (§7.8.1) — encryption scheme not specified at this amendment. The §7.0 posture binds the eventual specification to a probabilistic shape.
+
+Per-site specifications for the three open surfaces (memo nonce derivation, encrypted-note delivery, shielded object contents) are subsequent §7 substantive work. The §7.0 posture pre-binds them: any scheme that lands at those subsections must be probabilistic. An implementation that proceeds with an as-yet-unspecified surface — for example, by choosing a default scheme for shielded object contents — must choose a probabilistic scheme to be conformant.
+
+**Surfaces the posture does not bind.** Out-of-protocol encryption — for example, witness encryption between a user and a prover in the prover market (§7.7.1) — is operationally distinct from on-chain shielded encryption. The §6.2.1.9 shielded-value-equality runtime semantics applies only to on-chain ciphertext bytes; out-of-protocol encryption is the user's choice and does not affect consensus.
+
+**Anti-pattern (explicitly forbidden).** Deterministic encryption schemes — for example, AES-ECB, AES-SIV with deterministic IV, or Poseidon-as-encryption without per-input randomness — are not admitted for any on-chain shielded-encryption surface. An implementation that substitutes a deterministic scheme is non-conforming, regardless of whether the scheme is otherwise cryptographically strong: the conformance break is at the privacy-property level, not the cryptographic-strength level.
+
 ## 7.1 The note model
 
 The fundamental unit of shielded value on Adamant is the **note**: a cryptographic commitment to a value held by a specified recipient under specified conditions. Notes are conceptually similar to Zcash Sapling/Orchard notes and to Aztec's notes, with adaptations for Adamant's object model.
