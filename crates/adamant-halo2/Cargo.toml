@@ -61,6 +61,20 @@ maybe-rayon = { version = "0.1.0", default-features = false }
 # Tracing for upstream's logging surface. Used by
 # `proofs::dev` and a few `proofs::plonk` trace points.
 tracing = "0.1"
+# Phase 6.8b.3 ECC chip deps:
+# Fixed-capacity vector used by `ecc::chip`'s window
+# decomposition.
+arrayvec = "0.7"
+# Lazy-initialised constants used by
+# `ecc::chip::mul_fixed`'s scalar setup (`H_BASE`,
+# `H_SCALAR`, `TWO_SCALAR`).
+lazy_static = "1"
+# 256-bit integer arithmetic for `ecc::chip::mul`'s scalar
+# decomposition. Already in the workspace via
+# `ethnum` for U256 elsewhere; upstream halo2_gadgets uses
+# the `uint` crate's `U256` directly. We track the upstream
+# choice here.
+uint = { workspace = true }
 
 [dev-dependencies]
 # Dev-only deps used by upstream test modules across the vendored

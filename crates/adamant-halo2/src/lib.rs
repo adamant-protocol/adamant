@@ -17,8 +17,8 @@
 //! |---------------|--------------------------------------------|--------------|
 //! | 6.8b.0        | [`poseidon::primitives`] (out-of-circuit)  | DONE         |
 //! | 6.8b.1        | [`proofs`] (PLONKish + IPA)                | DONE         |
-//! | 6.8b.2        | [`poseidon::Pow5Chip`] + [`utilities`]     | THIS SUB-ARC |
-//! | 6.8b.3        | ECC chips for Pallas                       | pending      |
+//! | 6.8b.2        | [`poseidon::Pow5Chip`] + [`utilities`]     | DONE         |
+//! | 6.8b.3        | [`ecc`] chips for Pallas + [`sinsemilla`]  | THIS SUB-ARC |
 //! | 6.8b.4        | §7.3.2 validity circuit                    | pending      |
 //! | 6.9b          | recursive proof composition                | pending      |
 //!
@@ -33,6 +33,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ecc;
 pub mod poseidon;
 pub mod proofs;
+pub mod sinsemilla;
 pub mod utilities;

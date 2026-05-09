@@ -62,6 +62,7 @@ dependencies = [
 name = "adamant-halo2"
 version = "0.0.1"
 dependencies = [
+ "arrayvec",
  "assert_matches",
  "bitvec 1.0.1",
  "blake2b_simd",
@@ -69,12 +70,14 @@ dependencies = [
  "group",
  "halo2_legacy_pdqsort",
  "indexmap 1.9.3",
+ "lazy_static",
  "maybe-rayon",
  "pasta_curves",
  "proptest",
  "rand 0.8.6",
  "rand_core 0.6.4",
  "tracing",
+ "uint",
 ]
 
 [[package]]

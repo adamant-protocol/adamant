@@ -205,7 +205,7 @@ impl<F: PrimeFieldBits, const WINDOW_NUM_BITS: usize> RunningSumConfig<F, WINDOW
     }
 }
 
-#[cfg(all(test, feature = "vendored-test-suite"))] // gated: references crate::ecc / crate::sinsemilla / rand / uint not vendored at Phase 6.8b.2
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::proofs::{

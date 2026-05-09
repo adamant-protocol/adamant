@@ -237,7 +237,7 @@ pub fn i2lebsp<const NUM_BITS: usize>(int: u64) -> [bool; NUM_BITS] {
     gen_const_array(|mask: usize| (int & (1 << mask)) != 0)
 }
 
-#[cfg(all(test, feature = "vendored-test-suite"))] // gated: references crate::ecc / crate::sinsemilla / rand / uint not vendored at Phase 6.8b.2
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::proofs::{
@@ -454,6 +454,11 @@ mod tests {
     #[test]
     fn lebs2ip_round_trip() {
         use rand::rngs::OsRng;
+        // Adamant fork (Phase 6.8b.3): bring `RngCore` into scope
+        // explicitly. Upstream halo2_gadgets relied on a
+        // `rand_core` re-export that our feature-flag selection
+        // does not pull in.
+        use rand_core::RngCore;
 
         let mut rng = OsRng;
         {

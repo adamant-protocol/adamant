@@ -382,7 +382,7 @@ impl<F: PrimeFieldBits, const K: usize> LookupRangeCheckConfig<F, K> {
     }
 }
 
-#[cfg(all(test, feature = "vendored-test-suite"))] // gated: references crate::ecc / crate::sinsemilla / rand / uint not vendored at Phase 6.8b.2
+#[cfg(test)]
 mod tests {
     use super::LookupRangeCheckConfig;
 

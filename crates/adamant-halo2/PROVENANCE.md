@@ -234,6 +234,92 @@ review reduces to upstream halo2_gadgets's audit history
 the four behavioural-change classes above plus the path
 rewrites.
 
+### Sub-arc 6.8b.3 — `halo2_gadgets` ECC chips + minimal Sinsemilla stub
+
+**Source.** `halo2_gadgets` crate at version `0.3.1`. Vendored
+sub-surface (14 files, ~5972 LOC):
+
+- `src/ecc.rs` (918 LOC) → `ecc/mod.rs`.
+- `src/ecc/chip.rs` (614 LOC) → `ecc/chip.rs`.
+- `src/ecc/chip/{add,add_incomplete,constants,witness_point}.rs`
+  → `ecc/chip/...`.
+- `src/ecc/chip/mul.rs` + `mul/{complete,incomplete,overflow}.rs`
+  → `ecc/chip/mul.rs` + `mul/...`.
+- `src/ecc/chip/mul_fixed.rs` +
+  `mul_fixed/{base_field_elem,full_width,short}.rs`
+  → `ecc/chip/mul_fixed.rs` + `mul_fixed/...`.
+
+**Adamant-side Sinsemilla stub.** Upstream `halo2_gadgets::ecc`
+references `sinsemilla::primitives::K` (a chunk-size constant
+for variable-length scalar multiplication's bit decomposition)
+as a generic parameter to `LookupRangeCheckConfig`. Adamant
+does NOT use Sinsemilla as a hash function (it's Orchard-
+specific; Adamant's §7.3.2 validity circuit uses Poseidon per
+§3.3.3). Rather than vendoring the full upstream `sinsemilla`
+crate, sub-arc 6.8b.3 ships a minimal
+`crates/adamant-halo2/src/sinsemilla.rs` stub exposing only
+`primitives::K = 10`. The constant is sourced byte-identically
+from the external `sinsemilla 0.1.0` crate's `lib.rs`.
+
+If a future workstream needs the full Sinsemilla hash, a
+separate sub-arc can fork the external crate; for the §7.3.2
+scope, the K-constant stub is sufficient.
+
+**Behavioural changes from upstream.**
+
+1. `halo2_proofs::*` paths in the vendored ECC files rewritten
+   to `crate::proofs::*` (same pattern as sub-arc 6.8b.1 / 6.8b.2).
+2. Path rewrites preserve all internal `crate::ecc::*`,
+   `crate::utilities::*` references — these are now
+   adamant-halo2-internal paths matching upstream's structure.
+3. The Sinsemilla stub at `crates/adamant-halo2/src/sinsemilla.rs`
+   is Adamant-authored (not a verbatim fork) — only the K = 10
+   constant comes from upstream.
+
+**Workspace dep updates.**
+
+- `arrayvec 0.7` (fixed-capacity vector for ECC chip's window
+  decomposition).
+- `lazy_static 1` (lazy-initialised constants `H_BASE`,
+  `H_SCALAR`, `TWO_SCALAR` in `ecc::chip::mul_fixed`).
+- `uint` (workspace dep) — production-level dep used by
+  `ecc::chip::mul`'s scalar decomposition.
+
+**Audit posture.** ECC chips for Pallas provide in-circuit
+point arithmetic (point addition, scalar multiplication,
+fixed-base scalar multiplication, witness-point loading).
+These are the gadgets Phase 6.8b.4's §7.3.2 validity circuit
+will use to verify §7.2.2 stealth-address derivation
+(`P = pk_s + s · G` over Pallas) inside the proof. Algorithm
+review reduces to upstream halo2_gadgets's audit history
+(Zcash Orchard production deployment); fork-side review covers
+the path-rewrite class plus the Sinsemilla stub correctness
+(K = 10 byte-identity check against upstream
+`sinsemilla 0.1.0`).
+
+**Test gating revert from 6.8b.2.** Sub-arc 6.8b.2 gated
+`utilities/*` test modules behind the `vendored-test-suite`
+feature because they referenced `crate::ecc` (vendored at
+6.8b.3) and `crate::sinsemilla::primitives::K` (stubbed at
+6.8b.3). Sub-arc 6.8b.3 reverts the gating: the four
+`utilities/*` test modules (`cond_swap::tests`,
+`decompose_running_sum::tests`, `lookup_range_check::tests`,
+`utilities::tests`) are back at plain `#[cfg(test)]` and the
+test code compiles cleanly against the now-available ECC
+chips + Sinsemilla stub. One Adamant-side adjustment: the
+`utilities::tests::lebs2ip_round_trip` test gets an explicit
+`use rand_core::RngCore;` because the workspace feature-flag
+selection does not bring `RngCore` into scope through the
+`rand 0.8` re-export upstream relied on. Inline comment
+records the change.
+
+**Test count.** 47 tests passing in `adamant-halo2 --lib` at
+6.8b.3 closure (up from 43 at 6.8b.2; +4 from ECC's
+`ecc_chip` integration test + `zs_and_us` constants test +
+the ungating revert). The lib test runtime is ~56 minutes on
+the reference Windows machine — most of the cost is in the
+ECC `MockProver`-based circuit verification tests.
+
 ## Refresh policy
 
 Upstream `halo2_poseidon` (and the broader Halo 2 ecosystem)

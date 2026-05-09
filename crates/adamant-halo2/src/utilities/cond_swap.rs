@@ -57,7 +57,7 @@ pub struct CondSwapConfig {
     swap: Column<Advice>,
 }
 
-#[cfg(all(test, feature = "vendored-test-suite"))] // gated: references crate::ecc / crate::sinsemilla / rand / uint not vendored at Phase 6.8b.2
+#[cfg(test)]
 impl CondSwapConfig {
     pub(crate) fn a(&self) -> Column<Advice> {
         self.a
@@ -192,7 +192,7 @@ impl<F: PrimeField> CondSwapChip<F> {
     }
 }
 
-#[cfg(all(test, feature = "vendored-test-suite"))] // gated: references crate::ecc / crate::sinsemilla / rand / uint not vendored at Phase 6.8b.2
+#[cfg(test)]
 mod tests {
     use super::super::UtilitiesInstructions;
     use super::{CondSwapChip, CondSwapConfig, CondSwapInstructions};
