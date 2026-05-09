@@ -1031,6 +1031,43 @@ Phases 1, 2, 4, and 5:
   forward (extending §13 resistant-proof posture from
   Sui-Move-specific to all external dependencies).
   Bumps Phase 1-5 instance count Twenty-nine → Thirty.
+- **§3.3.3 Poseidon field-of-definition** (whitepaper 3.3.3 vs
+  3.9.1) — Phase 6 plan-gate Poseidon-helper investigation
+  surfaced spec-vs-spec inconsistency: §3.3.3 specified
+  Poseidon parameters over "BLS12-381 scalar field (255 bits)"
+  while §3.9.1 specified Halo 2 over Pasta curves (Pallas /
+  Vesta) — two different ~255-bit primes. The §3.3.3 library
+  reference also pointed at `halo2_gadgets` (zcash variant),
+  whose Poseidon parameters are tuned for Pallas's base field
+  (matching Zcash Orchard's deployed configuration), not
+  BLS12-381's scalar field. Implementing §3.3.3 verbatim would
+  have required either expensive non-native BLS12-381
+  arithmetic emulation inside Pallas Halo 2 circuits (~30×
+  constraint blow-up per Poseidon hash) or generation of fresh
+  un-deployed Poseidon parameters for BLS12-381's scalar field
+  (security-review-heavy, no published audits). Resolved by
+  spec amendment replacing "BLS12-381 scalar field" with
+  "Pallas base field" — aligning Poseidon with §3.9.1's Halo 2
+  native field, with Zcash Orchard's deployed parameters, and
+  with the `halo2_gadgets` library §3.3.3 already references.
+  Added a Cross-curve note paragraph distinguishing Poseidon's
+  field of definition (Pasta-cycle native) from KZG's field
+  (BLS12-381 scalar field per §3.9.2) and pinning that
+  cross-curve consistency, where required, is established via
+  SHA3-256 commitments per the existing circuit/non-circuit
+  boundary rule. Amended Library paragraph names the specific
+  parameter set (`P128Pow5T3` with `ConstantLength` domain).
+  Bumps Phase 1-5 instance count Thirty → Thirty-one. Spec-vs-
+  spec-inconsistency-resolved-via-amendment 6th canonical
+  instance (rule-of-three well beyond met; pattern stable).
+  Amendment-mechanical-shape sub-shape 4 reused (in-place
+  line replacement) plus a new paragraph addition (sub-shape 7
+  registered: section-internal cross-reference clarification
+  paragraph — distinct from prior addition shapes 1-6 because
+  the new content reconciles two pre-existing pieces of spec
+  text rather than adding new content or removing existing
+  content; rule-of-three pending). Closes the Phase 6
+  plan-gate Poseidon-helper investigation.
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol

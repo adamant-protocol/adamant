@@ -110,11 +110,13 @@ Inside zero-knowledge circuits, the protocol uses the Poseidon hash function. Po
 
 **Rationale.** Poseidon was designed by Grassi, Khovratovich, Rechberger, Roy, and Schofnegger (2020) specifically for zk-friendly hashing. It has been adopted by Filecoin, Mina, and Aztec, providing extensive deployment evidence. Cryptanalytic effort against Poseidon has been substantial, with no attacks reducing security below the 128-bit level at the parameters used.
 
-**Parameters.** The protocol uses Poseidon with the following parameters: prime field of order equal to the BLS12-381 scalar field (255 bits), state width of 3 field elements (rate 2, capacity 1), 8 full rounds and 57 partial rounds. These parameters provide approximately 128-bit security against differential and algebraic attacks.
+**Parameters.** The protocol uses Poseidon with the following parameters: prime field of order equal to the **Pallas base field** (255 bits, matching the native arithmetic of Halo 2 over the Pasta cycle per section 3.9.1), state width of 3 field elements (rate 2, capacity 1), 8 full rounds and 57 partial rounds — the parameters deployed by Zcash Orchard in production. These provide approximately 128-bit security against differential and algebraic attacks.
+
+**Cross-curve note.** Poseidon's field of definition is intentionally the Pasta-cycle native field, not BLS12-381's scalar field used by KZG (section 3.9.2). The two cryptographic surfaces are independent: Halo 2 circuits operate over Pallas/Vesta natively (Poseidon hashes within circuits, Merkle paths in the GNCT per section 7.1.3, validity proofs per section 7.3); KZG operates over BLS12-381 separately for state commitments and validator-set-size vectors per section 3.9.2. No data structure crosses the curve boundary in its native field representation; cross-curve consistency, where required, is established via SHA3-256 commitments per the boundary rule below.
 
 **Constraint.** Poseidon is used only inside zk circuits. It `MUST NOT` be used for general protocol hashing outside circuits. Hashes that cross the circuit/non-circuit boundary use both Poseidon (inside the circuit) and SHA3-256 (outside), with the circuit proving consistency between the two representations.
 
-**Library.** The reference implementation uses the Poseidon implementation from `halo2_gadgets` (zcash variant).
+**Library.** The reference implementation uses the Poseidon implementation from `halo2_gadgets` (zcash variant), specifically the `P128Pow5T3` specification with `ConstantLength` domain — the same parameters deployed by Zcash Orchard in production.
 
 ## 3.4 Signature schemes
 
