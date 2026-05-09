@@ -740,7 +740,7 @@ KZG commitments (Kate, Zaverucha, Goldberg 2010) are used inside the consensus l
 
 **Parameters.** The protocol uses KZG commitments on BLS12-381, with a trusted setup of size 2^16 (sufficient for validator sets up to approximately 65,000, well above any plausible operational set size). The specific Powers of Tau output used is documented in section 11 (genesis specification).
 
-**Library.** The reference implementation uses the KZG implementation from the `arkworks` ecosystem.
+**Library.** The reference implementation provides KZG operations (commit, open, verify) over BLS12-381 primitives consistent with the rest of `adamant-crypto`. The implementation uses the project's existing BLS12-381 primitive layer (`blst`-based) and standard polynomial arithmetic; no external KZG library is consumed. Adamant-native posture per §6.2.1.8 resistant-proof commitment extends to the KZG implementation: the production-binary dependency graph remains Adamant-controlled.
 
 ## 3.10 Randomness
 
