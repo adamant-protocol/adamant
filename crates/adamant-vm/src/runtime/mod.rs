@@ -96,7 +96,9 @@ pub(in crate::runtime) mod test_helpers;
 mod tests;
 
 pub use error::{AbortReason, ArithmeticErrorReason, InvariantViolationReason, VMError};
-pub use executor::{commit_buffer, load_read_set};
+pub use executor::{
+    commit_buffer, execute_transaction, load_read_set, GasConsumed, TransactionResult,
+};
 pub use frame::{Frame, PrivacyMode};
 pub use gas::GasTracker;
 pub use interpreter::{DispatchOutcome, InterpreterState};
