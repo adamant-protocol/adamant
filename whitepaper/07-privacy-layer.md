@@ -251,15 +251,17 @@ The viewing key has full visibility. Sub-view-keys are derived deterministically
 
 ### 7.4.2 Sub-view-key construction
 
-A sub-view-key for scope `S` is constructed as:
+The cryptographic construction of sub-view-keys is in active design, pending reconciliation with the §7.2.2 ML-KEM-based viewing-keypair construction. The earlier classical-curve-arithmetic construction (referenced in pre-ML-KEM drafts of this whitepaper) is not directly applicable: §7.2.2's viewing keypair `(sk_v_kem, pk_v_kem)` is an ML-KEM-768 keypair (post-quantum), not a BLS12-381 scalar, so the formula previously specified at this subsection (`sub_view_key_S = (sk_v + Hash(domain || S || sk_v) · G_aux)`) is structurally incompatible with the §7.2.2 construction.
 
-```
-sub_view_key_S = (sk_v + Hash(domain || S || sk_v) · G_aux)
-```
+The sub-view-key construction will be specified in a future amendment, bound by:
 
-Where `G_aux` is a fixed auxiliary curve point and `S` is a structured description of the sub-key's scope (e.g. `{"start": t1, "end": t2}` for a time-windowed key).
+- The §7.0 encryption posture (probabilistic-only)
+- The §7.4.1 one-way derivation property (sub-view-key holder cannot derive parent viewing key)
+- Reconciliation with the §7.2.2 ML-KEM-based viewing-keypair construction
 
-The sub-view-key allows the holder to compute the shared secret `s'` for notes that fall within scope `S`, but is cryptographically constructed so that notes outside scope `S` produce nonsense decryption results.
+Implementations `MUST NOT` rely on the formula as previously written.
+
+The sub-view-key allows the holder to compute the shared secret `s'` for notes that fall within scope `S`, but is cryptographically constructed so that notes outside scope `S` produce nonsense decryption results. The exact construction is pending the future amendment described above.
 
 The implementation of "in scope" is enforced by the recipient's wallet, not by the chain: the wallet decides which sub-view-keys to derive and to whom. The chain has no view-key-related logic; it does not know which sub-view-keys exist.
 
