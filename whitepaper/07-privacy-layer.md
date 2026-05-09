@@ -126,19 +126,19 @@ The protocol uses an **ML-KEM-based stealth address scheme**, providing post-qua
 
 A recipient's long-term identity comprises:
 
-- **Spending key** `sk_s`: scalar in the BLS12-381 scalar field (used for nullifier derivation and spending authorization, classical layer; see section 7.2.5 for hybrid-mode considerations)
+- **Spending key** `sk_s`: scalar in the **Pallas scalar field** (used for nullifier derivation and spending-address authorization; see section 7.2.5 for hybrid-mode signature considerations, which are independent of the stealth-address arithmetic)
 - **Viewing keypair** `(sk_v_kem, pk_v_kem)`: an ML-KEM-768 keypair (public key 1184 bytes, secret key 2400 bytes)
-- **Spending public key** `pk_s = sk_s · G` where G is the BLS12-381 curve generator
+- **Spending public key** `pk_s = sk_s · G` where G is the **Pallas curve generator**
 
-The recipient's "address" published off-chain (in payment URIs, QR codes, etc.) is `(pk_s, pk_v_kem)`. ML-KEM public keys are larger than ECDH public keys, so addresses are larger; address-encoding formats accommodate this (Bech32m at appropriate length, QR codes scaled correspondingly).
+The recipient's "address" published off-chain (in payment URIs, QR codes, etc.) is `(pk_s, pk_v_kem)`. `pk_s` is a Pallas point encoded as its 32-byte canonical compressed form (x-coordinate plus sign bit). ML-KEM public keys are larger than ECDH public keys, so the combined address is dominated by `pk_v_kem` (1184 bytes); address-encoding formats accommodate this (Bech32m at appropriate length, QR codes scaled correspondingly).
 
 To send a note to this recipient, a sender:
 
 1. Performs ML-KEM-768 encapsulation against `pk_v_kem`, producing `(ct, ss)` where `ct` is a 1088-byte ciphertext and `ss` is a 32-byte shared secret
 2. Stores `ct` as part of the note's on-chain data (analogous to the `R` element in classical schemes)
-3. Computes the shared scalar: `s = HashToScalar(ss || domain_tag)` where `HashToScalar` produces a BLS12-381 scalar field element
-4. Computes the one-time stealth address: `P = pk_s + s · G`
-5. Constructs the note with `recipient = P`
+3. Computes the shared scalar: `s = HashToScalar(ss || domain_tag)` where `HashToScalar` produces a **Pallas scalar field element**
+4. Computes the one-time stealth address: `P = pk_s + s · G` (a Pallas point)
+5. Constructs the note with `recipient = P`, where `recipient` is the canonical 32-byte encoding of `P`'s base-field x-coordinate (the same Pallas-base-field element width as the rest of the note-commitment inputs per section 7.1)
 
 The recipient's wallet, upon scanning the chain, performs for each note:
 
@@ -149,7 +149,9 @@ The recipient's wallet, upon scanning the chain, performs for each note:
 
 If the note is theirs, the recipient derives the corresponding spending key as `sk' = sk_s + s'` and uses it to construct the nullifier when spending.
 
-**Why ML-KEM and not BLS12-381 ECDH.** ECDH on BLS12-381 (or any elliptic curve over a finite field) is broken by Shor's algorithm; a future quantum adversary observing historical chain state can recover `r · pk_v` from `(r · G, pk_v)` by computing the discrete logarithm. ML-KEM is lattice-based and presumed post-quantum-secure; encapsulation outputs cannot be retroactively broken by quantum attack. The cost of this protection is the per-note ciphertext size (1088 bytes vs ~32 bytes for ECDH); this is amortised across the note's lifetime and is acceptable given the permanence of the privacy guarantee.
+**Why ML-KEM and not curve ECDH.** ECDH on any elliptic curve over a finite field is broken by Shor's algorithm; a future quantum adversary observing historical chain state can recover `r · pk_v` from `(r · G, pk_v)` by computing the discrete logarithm. ML-KEM is lattice-based and presumed post-quantum-secure; encapsulation outputs cannot be retroactively broken by quantum attack. The cost of this protection is the per-note ciphertext size (1088 bytes vs ~32 bytes for ECDH); this is amortised across the note's lifetime and is acceptable given the permanence of the privacy guarantee.
+
+**Cross-curve note.** The stealth-address arithmetic above operates on the **Pasta cycle** (Pallas/Vesta), matching Halo 2's native field per section 3.9.1 and Poseidon's field of definition per section 3.3.3. This is intentional: stealth addresses appear as the `recipient` field inside note commitments (section 7.1), which are hashed in-circuit by Poseidon; placing the address arithmetic on Pallas keeps the in-circuit verification native and avoids non-native arithmetic emulation. The protocol's *other* curve, BLS12-381, is used independently for KZG vector commitments (section 3.9.2), threshold encryption (section 3.6), and validator BLS signatures (section 3.4.3); BLS12-381 does not appear in stealth-address derivation. Pre-amendment drafts of section 7.2.2 specified BLS12-381 for the stealth-address arithmetic; that conflicted with section 3.3.3's amended Poseidon field-of-definition (Pallas) and section 7.1's commitment formula. The amendment unifies the privacy-layer arithmetic on Pasta cycle native fields, parallel to the section 3.3.3 amendment instance 31.
 
 **Bytecode-level construction.** Section 6.2.1.4's `MlKemEncapsulate` and `MlKemDecapsulate` instructions perform the ML-KEM operations inside Adamant Move shielded circuits. The compiler emits these instructions automatically when `#[shielded]` functions construct or process notes; contract authors do not invoke them directly.
 

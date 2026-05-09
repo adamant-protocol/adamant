@@ -1083,6 +1083,52 @@ Phases 1, 2, 4, and 5:
   traceability. Spec-text-vs-deployed-library off-by-one
   canonical pattern 1st instance — registered for forward
   tracking; rule-of-three pending.
+- **§7.2.2 stealth-address curve-of-definition** (whitepaper
+  7.2.2 vs 7.1 vs 3.3.3 + 3.9.1) — Phase 6.4 plan-gate
+  stealth-address-helper investigation surfaced the same family
+  of inconsistency that instance 31 addressed for §3.3.3. §7.2.2
+  specified spending-key arithmetic on the BLS12-381 scalar
+  field with `pk_s + s · G` over BLS12-381 G1 — but §7.1's note
+  commitment formula hashes the resulting stealth address
+  through Poseidon, which §3.3.3 (post-amendment instance 31)
+  pins to the Pallas base field matching Halo 2's native field
+  per §3.9.1. A BLS12-381 G1 point cannot be fed natively into
+  a Pallas-base-field Poseidon hash without either (a) splitting
+  the 48-byte compressed encoding across multiple Poseidon
+  inputs (cascading §7.1 hash-arity changes), (b) emulating
+  BLS12-381 arithmetic in Pallas circuits (~30× constraint
+  blow-up — same problem instance 31 fixed for Poseidon), or
+  (c) moving the stealth-address arithmetic to Pallas to align
+  with §3.3.3 + §7.1 + §3.9.1.
+
+  Resolved by amending §7.2.2 along path (c): replaced the
+  BLS12-381 references with Pallas — `sk_s` is now a Pallas
+  scalar, `G` is the Pallas curve generator, `s = HashToScalar(...)`
+  produces a Pallas scalar, `P = pk_s + s · G` is a Pallas point
+  encoded as its 32-byte canonical compressed form (x-coordinate
+  + sign bit). Added a Cross-curve note paragraph mirroring the
+  §3.3.3 one — distinguishing stealth-address arithmetic
+  (Pallas) from KZG (BLS12-381 per §3.9.2) and threshold
+  encryption + validator BLS signatures (BLS12-381 per §3.6 +
+  §3.4.3). ML-KEM stays curve-independent (lattice-based, not
+  affected by curve choice). §7.2.5 unchanged — its hybrid-mode
+  references are about Ed25519 / ML-DSA spending signatures,
+  which are independent of the stealth-address arithmetic.
+
+  The amendment matches Zcash Orchard's deployed design pattern
+  (Pallas for stealth addresses + Halo 2 native curve). Spec-
+  vs-spec-inconsistency-resolved-via-amendment 7th canonical
+  instance (pattern stable). Sibling-amendment-to-prior-instance
+  sub-pattern 1st instance: instance 32's amendment text mirrors
+  instance 31's pattern at a different surface (Cross-curve
+  note paragraph, in-place curve-name replacements, parallel
+  framing of why-not-the-other-curve). Bumps Phase 1-5 instance
+  count Thirty-one → Thirty-two.
+
+  Instance 32 closes the cross-curve coherence question for the
+  privacy layer's note-commitment ↔ stealth-address ↔ Halo 2
+  validity-circuit composition. Phase 6.4 (stealth-address
+  construction) ships next under the amended §7.2.2.
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
