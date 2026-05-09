@@ -45,6 +45,7 @@ pub mod gnct;
 pub mod note;
 pub mod nullifier;
 pub mod poseidon;
+pub mod stealth;
 
 pub use gnct::{
     verify_membership, GlobalNoteCommitmentTree, MerklePath, MerkleRoot, TreeFull, GNCT_DEPTH,
@@ -55,3 +56,8 @@ pub use nullifier::{
     derive_nullifier, derive_nullifier_key, LeafPosition, Nullifier, NullifierKey, SpendingKey,
 };
 pub use poseidon::{poseidon_hash, FieldBytes, POSEIDON_OUTPUT_BYTES};
+pub use stealth::{
+    derive_shared_scalar, derive_stealth_address, derive_view_tag, recover_stealth_spending_key,
+    Address, EncapsulatedSecret, SpendingPrivateKey, SpendingPublicKey, StealthAddressIsIdentity,
+    StealthSecret, ViewTag,
+};

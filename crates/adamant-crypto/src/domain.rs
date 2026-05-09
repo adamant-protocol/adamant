@@ -273,6 +273,35 @@ pub static NULLIFIER_HASH: DomainTag = DomainTag::new(b"ADAMANT-v1-nullifier-has
 pub static NULLIFIER_KEY_DERIVATION: DomainTag =
     DomainTag::new(b"ADAMANT-v1-nullifier-key-derivation");
 
+/// Stealth-address shared-scalar domain tag, per whitepaper section 7.2.2.
+///
+/// Used in `s = HashToScalar(ss || domain_tag)` where `ss` is the
+/// 32-byte ML-KEM shared secret and `s` is a Pallas scalar
+/// (post-amendment instance 32). The byte tag is one component of
+/// the input to the SHA3-derived scalar hashing; the resulting
+/// scalar `s` is then used in `P = pk_s + s · G` to produce the
+/// one-time stealth address.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 6.4.
+pub static STEALTH_SHARED_SCALAR: DomainTag =
+    DomainTag::new(b"ADAMANT-v1-stealth-shared-scalar");
+
+/// Stealth-address view-tag domain tag, per whitepaper section 7.2.4.
+///
+/// Used in `view_tag = SHA3_256(ss || tag_domain)[0]` where `ss`
+/// is the 32-byte ML-KEM shared secret. The view tag is the
+/// first byte of the tagged SHA3-256 of the shared secret;
+/// recipients use it as a fast filter when scanning the chain
+/// (rejecting ~255/256 of unrelated notes before computing the
+/// full stealth-address derivation).
+///
+/// Distinct from [`STEALTH_SHARED_SCALAR`] so the view-tag and
+/// the shared-scalar derivations cannot collide. Per §3.3.1,
+/// adding/renaming domain tags is a hard fork. Registered at
+/// Phase 6.4.
+pub static STEALTH_VIEW_TAG: DomainTag = DomainTag::new(b"ADAMANT-v1-stealth-view-tag");
+
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and
 /// test-vector regressions.

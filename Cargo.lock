@@ -65,12 +65,14 @@ dependencies = [
  "adamant-crypto",
  "adamant-types",
  "bcs",
+ "getrandom 0.4.2",
  "halo2_gadgets",
  "hex",
  "hex-literal",
  "pasta_curves",
  "serde",
  "serde-big-array",
+ "subtle",
  "zeroize",
 ]
 

@@ -38,6 +38,16 @@ zeroize = { workspace = true }
 [dev-dependencies]
 hex = { workspace = true }
 hex-literal = { workspace = true }
+# Test-only RNG + constant-time compare for ML-KEM round-trip and
+# shared-secret equality probes in `stealth::tests`. The
+# `getrandom` 0.4 entry mirrors `adamant-crypto`'s Cargo.toml: it
+# supplies `SysRng` and re-exports the `rand_core` 0.10 trait
+# surface that `ml-kem`'s `CryptoRng` bound expects (RustCrypto
+# ecosystem skew, see `crates/adamant-crypto/Cargo.toml`).
+# `subtle` is already in the workspace's locked bounded-ecosystem
+# set per CLAUDE.md §14.1 (Cat B).
+getrandom = { version = "0.4", features = ["std", "sys_rng"] }
+subtle = { workspace = true }
 
 [lints]
 workspace = true

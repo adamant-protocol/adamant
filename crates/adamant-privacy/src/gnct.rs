@@ -702,7 +702,8 @@ mod tests {
         // Append GNCT_RECENT_ROOTS_WINDOW + 5 leaves; the buffer
         // should retain only the most recent.
         for i in 0..(GNCT_RECENT_ROOTS_WINDOW + 5) {
-            t.append(nc(u8::try_from(i & 0xFF).expect("masked"))).unwrap();
+            t.append(nc(u8::try_from(i & 0xFF).expect("masked")))
+                .unwrap();
         }
         // Internal: recent_roots.len() <= GNCT_RECENT_ROOTS_WINDOW.
         assert!(t.recent_roots.len() <= GNCT_RECENT_ROOTS_WINDOW);
