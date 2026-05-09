@@ -195,6 +195,29 @@ ShieldedTransaction {
 
 Public inputs include the nullifiers, the output commitments, the GNCT root being spent against, the asset types involved (which may be partially disclosed for compliance), and any explicit fees. Everything else is hidden.
 
+#### 7.3.1.1 EncryptedNote construction
+
+An `EncryptedNote` is the on-chain ciphertext that allows the recipient to decrypt the note's contents upon scanning the chain. The construction:
+
+```
+EncryptedNote {
+    ml_kem_ciphertext: [u8; 1088],  // ML-KEM encapsulation
+    chacha_ciphertext: Vec<u8>,     // encrypted note payload
+    auth_tag:          [u8; 16],    // Poly1305 authentication tag
+}
+```
+
+A sender constructs an `EncryptedNote` as:
+
+1. ML-KEM-768 encapsulation against recipient's `pk_v_kem` per §7.2.2: `(ml_kem_ciphertext, ss) = ML-KEM-768.Encap(pk_v_kem)`
+2. Derive symmetric key: `note_key = HKDF-SHA3(salt = domain_tag_note_key, ikm = ss, info = note_position_bytes, L = 32)` where `domain_tag_note_key = b"ADAMANT-v1-note-key"` and `note_position_bytes` is the 8-byte little-endian note position in the global note commitment tree
+3. Derive nonce: `note_nonce = SHA3_256(ss || domain_tag_note_nonce)[0..12]` where `domain_tag_note_nonce = b"ADAMANT-v1-note-nonce"`
+4. Encrypt note payload (BCS-encoded note tuple per §7.1): `(chacha_ciphertext, auth_tag) = ChaCha20Poly1305-Encrypt(note_key, note_nonce, note_payload)`
+
+The recipient decrypts by ML-KEM decapsulation against `sk_v_kem`, derives the same `note_key` + `note_nonce` from the recovered shared secret, and applies `ChaCha20Poly1305-Decrypt`.
+
+**Probabilistic property satisfied per §7.0.** Per-note ML-KEM encapsulation produces a fresh `ss` per FIPS 203 §6.3 (randomized encapsulation); the derived `note_key` + `note_nonce` are per-note unique; ciphertexts are uncorrelated across notes even for byte-equal note payloads.
+
 ### 7.3.2 The validity circuit
 
 The Halo 2 circuit that proves validity asserts the following statements:

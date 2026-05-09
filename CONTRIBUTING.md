@@ -120,7 +120,7 @@ down once; do not re-derive it per primitive.
 
 When implementation surfaces a question that contradicts or appears
 to contradict the whitepaper, stop and verify against authoritative
-sources before proceeding. Twenty-seven confirmed instances during
+sources before proceeding. Twenty-eight confirmed instances during
 Phases 1, 2, 4, and 5:
 
 - **BIP-340 tagged-hash construction** (whitepaper 3.3.1) — the
@@ -944,6 +944,23 @@ Phases 1, 2, 4, and 5:
   + domain-tag separation; satisfies §7.0 probabilistic-only
   posture. Bumps Phase 1-5 instance count Twenty-six →
   Twenty-seven.
+- **§7.3.1.1 EncryptedNote construction specification**
+  (whitepaper 7.3.1.1) — Closes second of three §7.0 instance-
+  24 carry-forwards. §7.3.1's `encrypted_outputs:
+  Vec<EncryptedNote>` field had no scheme specification at
+  instance 24; resolved by adding new §7.3.1.1 sub-subsection
+  pinning the construction. Hybrid encryption: ML-KEM-768
+  encapsulation against recipient's `pk_v_kem` produces a fresh
+  shared secret per note; HKDF-SHA3 derives a per-note
+  `note_key`; SHA3-256 derives a per-note `note_nonce`;
+  ChaCha20-Poly1305 encrypts the BCS-encoded note payload.
+  Construction parallels §7.6.1 memo encryption shape with
+  per-note key/nonce derivation; satisfies §7.0 probabilistic-
+  only posture by per-note FIPS 203 randomized encapsulation.
+  Spec-first verification 28th instance. Amendment-mechanical-
+  shape: new sub-subsection inserted (§7.3.1.1) — 6th distinct
+  sub-shape. Bumps Phase 1-5 instance count Twenty-seven →
+  Twenty-eight.
 
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
