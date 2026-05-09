@@ -46,7 +46,9 @@
 //! | Account address derivation      | 4.2                | [`ACCOUNT_ADDRESS`]. |
 //! | `ObjectId` derivation           | 5.1.1              | [`OBJECT_ID`]. |
 //! | Transaction-hash derivation     | 6.0.4              | [`TX_HASH`]. |
-//! | Nullifier (Poseidon, in-circuit)| 7                  | Tag string deferred to Phase 6 (`adamant-privacy`). |
+//! | Nullifier-hash (Poseidon)       | 7.1.2              | [`NULLIFIER_HASH`]. |
+//! | Nullifier-key derivation        | 7.1.2              | [`NULLIFIER_KEY_DERIVATION`]. |
+//! | Note metadata hash              | 7.1                | [`NOTE_METADATA_HASH`]. |
 //! | Stealth-address shared secret   | 7                  | Tag string deferred to Phase 6 (`adamant-privacy`). |
 //! | Memo key derivation             | 7                  | Tag string deferred to Phase 6 (`adamant-privacy`). |
 //!
@@ -235,6 +237,41 @@ pub static TX_HASH: DomainTag = DomainTag::new(b"ADAMANT-v1-tx-hash");
 /// Per §3.3.1, adding/renaming domain tags is a hard fork.
 /// Registered at Phase 6.1.
 pub static NOTE_METADATA_HASH: DomainTag = DomainTag::new(b"ADAMANT-v1-note-metadata-hash");
+
+/// Nullifier-hash domain tag, per whitepaper section 7.1.2.
+///
+/// Used as the first field-element input to the Poseidon
+/// nullifier construction:
+///
+/// `nullifier = Poseidon(domain_tag || nullifier_key || note_commitment || position_in_tree)`
+///
+/// The byte tag is converted to a Pallas-base-field element via
+/// `tagged_hash_sha3` followed by the standard reduction
+/// (`FieldBytes::from_bytes_reduced`); the field-element value is
+/// uniquely determined by this byte string. Distinct from
+/// [`NULLIFIER_KEY_DERIVATION`] to keep the inner and outer
+/// Poseidon hashes domain-separated.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 6.2.
+pub static NULLIFIER_HASH: DomainTag = DomainTag::new(b"ADAMANT-v1-nullifier-hash");
+
+/// Nullifier-key derivation domain tag, per whitepaper section 7.1.2.
+///
+/// Used as the first field-element input to the inner Poseidon
+/// derivation that produces the nullifier-key from the spending
+/// key:
+///
+/// `nullifier_key = Poseidon(domain || spending_key)`
+///
+/// Distinct from [`NULLIFIER_HASH`] so a cross-domain attack —
+/// substituting a nullifier output as a nullifier-key, or vice
+/// versa — is rejected by domain mismatch.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 6.2.
+pub static NULLIFIER_KEY_DERIVATION: DomainTag =
+    DomainTag::new(b"ADAMANT-v1-nullifier-key-derivation");
 
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and
