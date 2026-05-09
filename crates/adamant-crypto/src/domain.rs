@@ -287,6 +287,34 @@ pub static NULLIFIER_KEY_DERIVATION: DomainTag =
 pub static STEALTH_SHARED_SCALAR: DomainTag =
     DomainTag::new(b"ADAMANT-v1-stealth-shared-scalar");
 
+/// Memo-key derivation domain tag, per whitepaper section 7.6.1
+/// (`domain_tag_memo`).
+///
+/// Used in `memo_key = HashToKey(s || domain_tag_memo)` where
+/// `s` is the per-note ML-KEM shared secret per §7.2.2 and
+/// `memo_key` is the 32-byte ChaCha20-Poly1305 key. Composition
+/// uses the BIP-340 tagged-SHA3-256 construction
+/// ([`crate::hash::sha3_256_tagged`]); the 32-byte SHA3-256
+/// output is the symmetric key directly.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 6.6.
+pub static MEMO_KEY: DomainTag = DomainTag::new(b"ADAMANT-v1-memo-key");
+
+/// Memo-nonce derivation domain tag, per whitepaper section 7.6.1
+/// (`domain_tag_memo_nonce`). The exact byte string
+/// `b"ADAMANT-v1-memo-nonce"` is pinned by the spec.
+///
+/// Used in `nonce = SHA3_256(s || domain_tag_memo_nonce)[0..12]`
+/// where `s` is the per-note ML-KEM shared secret per §7.2.2.
+/// The 12-byte truncation matches ChaCha20-Poly1305's 96-bit
+/// nonce width per §3.5. Composition uses the BIP-340 tagged-
+/// SHA3-256 construction ([`crate::hash::sha3_256_tagged`]).
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 6.6.
+pub static MEMO_NONCE: DomainTag = DomainTag::new(b"ADAMANT-v1-memo-nonce");
+
 /// Master-seed → spending-key derivation domain tag, per
 /// whitepaper section 7.4.1.
 ///

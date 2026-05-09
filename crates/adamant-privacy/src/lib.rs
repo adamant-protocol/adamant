@@ -42,6 +42,7 @@
 #![forbid(unsafe_code)]
 
 pub mod gnct;
+pub mod memo;
 pub mod note;
 pub mod nullifier;
 pub mod poseidon;
@@ -51,6 +52,10 @@ pub mod view_key;
 pub use gnct::{
     verify_membership, GlobalNoteCommitmentTree, MerklePath, MerkleRoot, TreeFull, GNCT_DEPTH,
     GNCT_MAX_LEAVES, GNCT_RECENT_ROOTS_WINDOW,
+};
+pub use memo::{
+    decrypt_memo, encrypt_memo, EncryptedMemo, MemoDecryptError, MemoTooLarge,
+    MEMO_MAX_PLAINTEXT_BYTES,
 };
 pub use note::{derive_note_commitment, Note, NoteCommitment, NoteMetadata, StealthAddress};
 pub use nullifier::{
