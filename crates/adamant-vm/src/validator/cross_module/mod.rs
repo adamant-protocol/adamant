@@ -42,21 +42,14 @@
 //! cross-module Rule 3 walker (`rule_03_privacy_consistency`)
 //! and its happy-path / negative-path walker tests.
 //!
-//! # `dead_code` allow rationale
+//! # Production caller
 //!
-//! The cross-module walker has no production caller in
-//! `adamant-vm` itself; the eventual caller is the AVM runtime
-//! stdlib's `adamant::module::deploy` function (Phase 5/6) per
-//! whitepaper §6.5 line 97. Same shape as the D-1a / D-1b
-//! foundation-then-producer arc where the per-function-pass
-//! infrastructure was built before its D-6 wiring. The
-//! module-level `allow(dead_code)` will be removed once the
-//! deployment-validator wiring lands its production caller.
-
-#![allow(
-    dead_code,
-    reason = "cross-module verifier has no production caller in adamant-vm; the AVM runtime stdlib's adamant::module::deploy (Phase 5/6) is the eventual caller"
-)]
+//! Phase 5/6.7 lands [`super::deploy_validate`] as the production
+//! caller of the cross-module Rule 3 walker. The previous
+//! `dead_code` allow (registered at E-2a foundation-then-producer
+//! arc) is removed at this sub-arc per the foundation-then-producer
+//! arc resolution shape — same disposition as D-6 wired the per-
+//! function-pass infrastructure built at D-1a/D-1b.
 
 use adamant_bytecode_format::Identifier;
 use adamant_types::Address;
@@ -64,7 +57,7 @@ use adamant_types::Address;
 use crate::module::AdamantCompiledModule;
 
 #[cfg(test)]
-pub(in crate::validator::cross_module) mod test_helpers;
+pub(in crate::validator) mod test_helpers;
 
 /// Unique on-chain identity of a deployed Adamant module.
 ///

@@ -26,14 +26,14 @@ use super::{ModuleId, ModuleResolver};
 ///
 /// Construct via [`Self::new`] (empty map) or
 /// [`Self::from_modules`] (initial set).
-pub(in crate::validator::cross_module) struct InMemoryModuleResolver {
+pub(in crate::validator) struct InMemoryModuleResolver {
     modules: HashMap<ModuleId, AdamantCompiledModule>,
 }
 
 impl InMemoryModuleResolver {
     /// Construct an empty resolver. Modules are inserted via
     /// [`Self::insert`].
-    pub(in crate::validator::cross_module) fn new() -> Self {
+    pub(in crate::validator) fn new() -> Self {
         Self {
             modules: HashMap::new(),
         }
@@ -49,7 +49,7 @@ impl InMemoryModuleResolver {
     /// Test fixtures must have valid self-handle wiring; this
     /// assertion catches fixture bugs eagerly rather than
     /// silently dropping the module from the resolver.
-    pub(in crate::validator::cross_module) fn insert(&mut self, module: AdamantCompiledModule) {
+    pub(in crate::validator) fn insert(&mut self, module: AdamantCompiledModule) {
         let id = ModuleId::from_module(&module).expect(
             "InMemoryModuleResolver requires modules with valid self-handle wiring; \
              test fixtures must satisfy bounds_checker preconditions",

@@ -184,6 +184,10 @@ mod test_fixtures;
 
 pub use config::AdamantVerifierConfig;
 pub use cross_module::{ModuleId, ModuleResolver};
+// Cross-module Rule 3 walker is invoked through `deploy_validate`
+// below; the walker itself stays `pub(in crate::validator)` so the
+// only consensus-binding cross-module entry point is the combined
+// deploy_validate function.
 pub use error::{
     AdamantValidationError, DefKind, DynamicDispatchViolationReason, FieldOwnerKind, HandleKind,
     InvalidSignatureReason, IrreducibleReason, MalformedConstantReason,
@@ -379,6 +383,62 @@ pub fn verify_module(
     rule_06_no_dynamic_dispatch::verify(&module)?;
     rule_07_privacy_circuit_in_shielded_only::verify(&module)?;
 
+    Ok(module)
+}
+
+/// Full deployment-validation pipeline per whitepaper §6.4.1 +
+/// §6.2.1.6 line 477.
+///
+/// Phase 5/6.7: this is the consensus-binding entry point invoked
+/// by the AVM runtime stdlib's `adamant::module::deploy` function
+/// (whitepaper §6.5). Combines:
+///
+/// 1. [`verify_module`] — single-module pipeline (5 steps; 11
+///    module-level passes + 5 per-function passes + 6 single-
+///    module rules).
+/// 2. [`cross_module::rule_03_privacy_consistency::verify`] —
+///    cross-module Rule 3 privacy-consistency call-graph walker
+///    (Phase 5/5b.5 E-2b), driven through `resolver` to look up
+///    dependency modules' privacy annotations.
+///
+/// The cross-module walker stays `pub(in crate::validator)`; this
+/// function is the only public surface that exercises it. Rationale:
+/// keeping the walker visibility tight means there is exactly one
+/// consensus-binding deployment-validation entry point (auditor-
+/// friendly), parallel to the single [`verify_module`] entry point
+/// for module-self-contained verification.
+///
+/// # Eager error semantics
+///
+/// Returns the first error from either stage. Single-module errors
+/// (any of [`AdamantValidationError`]'s variants except
+/// `CrossModulePrivacyConsistencyViolation`) precede cross-module
+/// errors per the call order; this matches the "step 5 in numerical
+/// rule order, then deployment-validator wiring" pipeline shape
+/// pinned at §6.2.1.8 line 563's pass-orchestration discretion plus
+/// the cross-pass eager-error precedence registered at Phase 5/5b.2
+/// B-5.
+///
+/// # Errors
+///
+/// Any of [`AdamantValidationError`]'s variants. See [`verify_module`]
+/// for single-module variants;
+/// [`AdamantValidationError::CrossModulePrivacyConsistencyViolation`]
+/// is the cross-module variant.
+///
+/// # Panics
+///
+/// Inherits the `expect` from [`verify_module`] (serialiser/
+/// deserialiser asymmetry). The cross-module walker uses `expect`
+/// only on metadata-payload BCS shapes that the step-3
+/// `privacy_metadata_structure` pass has already validated.
+pub fn deploy_validate(
+    module_bytes: &[u8],
+    config: &AdamantVerifierConfig,
+    resolver: &dyn ModuleResolver,
+) -> Result<AdamantCompiledModule, AdamantValidationError> {
+    let module = verify_module(module_bytes, config)?;
+    cross_module::rule_03_privacy_consistency::verify(&module, resolver)?;
     Ok(module)
 }
 
@@ -1512,6 +1572,45 @@ mod tests {
                 panic!("expected Adamant step 4 TypeMismatch on inherited module, got {other:?}")
             }
         }
+    }
+
+    /// Phase 5/6.7 — `deploy_validate` happy path: a single-
+    /// module module with no cross-module calls passes both
+    /// `verify_module` and the cross-module Rule 3 walker
+    /// (which is a no-op for modules with no public functions
+    /// or no cross-module call edges).
+    #[test]
+    fn deploy_validate_passes_on_valid_module_with_empty_resolver() {
+        use super::cross_module::test_helpers::InMemoryModuleResolver;
+        use super::deploy_validate;
+        let m = valid_module();
+        let bytes = serialize_module(&m);
+        let config = AdamantVerifierConfig::new();
+        let resolver = InMemoryModuleResolver::new();
+        let result = deploy_validate(&bytes, &config, &resolver);
+        assert!(
+            result.is_ok(),
+            "valid_module() with empty resolver must pass deploy_validate (no cross-module calls); got {:?}",
+            result.err()
+        );
+    }
+
+    /// Phase 5/6.7 — single-module errors propagate through
+    /// `deploy_validate`. Rule 1 (mutability) violation surfaces
+    /// before the cross-module walker runs.
+    #[test]
+    fn deploy_validate_propagates_single_module_errors() {
+        use super::cross_module::test_helpers::InMemoryModuleResolver;
+        use super::deploy_validate;
+        let m = module_without_mutability_metadata();
+        let bytes = serialize_module(&m);
+        let config = AdamantVerifierConfig::new();
+        let resolver = InMemoryModuleResolver::new();
+        let result = deploy_validate(&bytes, &config, &resolver);
+        assert!(
+            matches!(result, Err(AdamantValidationError::MissingMutabilityMetadata)),
+            "deploy_validate must surface single-module errors verbatim; got {result:?}"
+        );
     }
 
     /// D-6 happy path inherited-only: a pure-Sui-base module
