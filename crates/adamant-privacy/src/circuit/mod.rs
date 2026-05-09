@@ -47,5 +47,9 @@
 //! nullifier set is the gating check.
 
 pub mod note_commitment;
+pub mod nullifier;
 
 pub use note_commitment::{NoteCommitmentCircuit, NoteCommitmentWitness};
+pub use nullifier::{
+    NullifierCircuit, NullifierDomainTags, NullifierPublicInputs, NullifierWitness,
+};

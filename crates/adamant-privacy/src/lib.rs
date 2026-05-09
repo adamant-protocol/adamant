@@ -56,7 +56,10 @@ pub mod shielded_tx;
 pub mod stealth;
 pub mod view_key;
 
-pub use circuit::{NoteCommitmentCircuit, NoteCommitmentWitness};
+pub use circuit::{
+    NoteCommitmentCircuit, NoteCommitmentWitness, NullifierCircuit, NullifierDomainTags,
+    NullifierPublicInputs, NullifierWitness,
+};
 pub use encrypted_note::{
     decapsulate_for_recipient, decrypt_note_for_recipient, encapsulate_for_recipient,
     encrypt_note_for_recipient, EncryptedNote, NoteDecryptError, AUTH_TAG_BYTES,
