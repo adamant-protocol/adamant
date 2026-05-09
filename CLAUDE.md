@@ -423,7 +423,7 @@ In scope:
 - **§3.3.1 BIP-340 tagged-hash construction.** Adamant-native; spec-first verification 1st instance (commit `62bfe89`).
 - **§3.6 Threshold encryption.** Adamant-native; in `adamant-crypto::threshold`.
 - **§3.9.2 KZG.** Adamant-native on `adamant-crypto-blst-extra`'s BLS12-381 primitives; spec-first verification 30th instance (commit `9c36c8f`); implementation pending dedicated session.
-- **§3.7.1 + §8.5 Halo 2 + recursive verification.** Posture pending at Phase 6 plan-gate (see §14.4 Decision 1 below). `halo2_gadgets 0.3` currently in workspace.
+- **§3.7.1 + §8.5 Halo 2 + recursive verification.** Posture resolved at §14.4 Decision 1 below as **Path C2** (fork into `adamant-halo2` crate). `halo2_gadgets 0.3` is in the workspace and consumed by Phase 6.0 Poseidon out-of-circuit (the smallest Cat C-equivalent surface area) until the C2 fork lands at Phase 6.8b.
 - **§3.8 + §8.x Time-lock VDF.** Adamant-native required; Phase 7+.
 - **§7 Privacy operations.** Adamant-native dispatch wrapping circuit operations; Phase 6.
 
@@ -487,23 +487,29 @@ Mechanical posture:
 - Production binary depends only on the Adamant-owned fork; upstream version (if any) appears only as test-time cross-validation oracle (Category D) or not at all.
 - Upstream changes affect Adamant only as development-time signals (refresh-and-review work item), never as consensus events.
 
-### 14.4 Pending posture decisions
+### 14.4 Posture decisions
 
-Two posture decisions deserve spec-author deliberation. They are registered here as canonical record of the open questions; the answers land at the appropriate plan-gate.
+Two posture decisions remain open for spec-author deliberation; one has been resolved. All are registered here as canonical record; pending answers land at the appropriate plan-gate.
 
-#### Decision 1 — Halo 2 / `halo2_gadgets` at Phase 6 plan-gate
+#### Decision 1 — Halo 2 / `halo2_gadgets` at Phase 6 plan-gate (RESOLVED — Path C2)
 
-`halo2_gadgets 0.3` (Zcash / Electric Coin Company ecosystem) is currently in the workspace `[workspace.dependencies]` but not yet pulled into any production-side crate. The Phase 6 privacy-layer workstream (§7 + §3.7.1 + §8.5) will activate the Halo 2 surface for shielded-execution circuits + recursive proof composition.
+`halo2_gadgets 0.3` (Zcash / Electric Coin Company ecosystem) is in the workspace `[workspace.dependencies]` and has been consumed since Phase 6.0 for the out-of-circuit Poseidon helper (§3.3.3). The Phase 6 privacy-layer workstream (§7 + §3.7.1 + §8.5) will additionally activate the Halo 2 in-circuit surface for shielded-execution circuits (§7.3.2) and recursive proof composition (§8.5.2) at Phase 6.8b + 6.9b.
 
-Three options at Phase 6 plan-gate:
+Three options were considered:
 
-- **Path C1 — Adamant-native Halo 2 implementation.** Tens of thousands of LOC; substantial pre-mainnet investment. Maximum independence; maximum implementation cost.
-- **Path C2 — Fork `halo2_gadgets` (and necessary subset of `halo2_proofs`) into `adamant-halo2` with `PROVENANCE.md`.** Phase 5/5b.1a/b precedent applied to the ZK proof system. Production-binary control retained; upstream code quality preserved; refresh-cadence controlled.
-- **Path C3 — Accept as bounded-ecosystem (Category B-style).** Pragmatic; same posture as the RustCrypto + blst set. Halo 2 is a substantial standardised proof system with audit history; bounded-ecosystem treatment is defensible.
+- **Path C1 — Adamant-native Halo 2 implementation.** Tens of thousands of LOC; substantial pre-mainnet investment. Maximum independence; maximum implementation cost. **Rejected:** violates Principle VI ("Use peer-reviewed cryptography. Never roll our own. Innovation is at the systems layer."). Halo 2 is a peer-reviewed (Bowe / Grigg / Hopwood 2019) production-deployed proving system (Zcash Orchard, Aztec); reimplementing it from scratch is exactly what Principle VI forbids. The audit risk of a from-scratch reimplementation exceeds the dependency risk of reusing the audited upstream.
+- **Path C2 — Fork `halo2_gadgets` (and necessary subset of `halo2_proofs`) into `adamant-halo2` with `PROVENANCE.md`.** Phase 5/5b.1a/b precedent applied to the ZK proof system. Production-binary control retained; upstream code quality preserved; refresh-cadence controlled. **Selected.**
+- **Path C3 — Accept as bounded-ecosystem (Category B-style).** Pragmatic; same posture as the RustCrypto + blst set. **Rejected:** Cat B (§14.1) is reserved for "Standardised algorithms (FIPS, RFC, IETF specs) with battle-tested implementations from a small set of well-audited upstream maintainers." Halo 2 is not FIPS / RFC / IETF — it is a specific Zcash design. Treating it as Cat B would be a runtime dependency on Zcash's codebase governance, refresh cadence, and shutdown risk — exactly what §13's resistant-proof posture forbids. The §14.4 Decision 3 (KZG trusted-setup) precedent applies the same logic: the spec-author chose Adamant-native KZG over arkworks integration because resistant-proof takes precedence over ecosystem ergonomics.
 
-**Recommendation**: Path C2 likely. The forking-over-vendoring discipline applies cleanly: Adamant owns the fork; upstream is consulted at refresh time, not depended on at runtime. Spec-author call at Phase 6 plan-gate.
+**Resolution**: **Path C2**. The fork-over-vendoring discipline (§14.3) applies cleanly: Adamant owns the fork in a new `adamant-halo2` crate under `crates/`; upstream is consulted at refresh time, not depended on at runtime; production binary's dependency graph contains no `halo2_*` crates from upstream. Same pattern as Phase 5/5b.1a/b (Sui-Move bytecode-format types forked into `adamant-bytecode-format`).
 
-**Sub-decision (independent of path)**: `halo2_gadgets` currently has a non-exact pin (`"0.3"` not `"=0.3.x"`). Worth tightening to exact pin regardless of posture path. Pre-mainnet hardening candidate.
+The fork lands at Phase 6.8b plan-gate as part of the validity-circuit + recursive-proving implementation work. Until then, Phase 6.0 Poseidon (out-of-circuit primitive surface) continues consuming `halo2_gadgets` directly via the workspace dep — bounded to the Poseidon namespace only, the smallest Cat C-equivalent surface area until C2 lands.
+
+**Fork scope** (target list at the Phase 6.8b plan-gate, refined as implementation proceeds): the in-circuit Poseidon chip (§7.1 / §7.1.2 / §7.1.3 in-circuit), ECC chips for Pallas (§7.2.2 stealth-address arithmetic in-circuit), the validity-circuit primitives Adamant's §7.3.2 statements consume (Merkle membership, range, value-conservation), and the subset of `halo2_proofs` (PLONKish arithmetisation, polynomial commitments) those circuits link against. The IPA-vs-KZG variant choice within `halo2_proofs` is decided at the same plan-gate; the fork carries only the variant Adamant uses.
+
+**Sub-decision (resolved by C2 landing)**: the workspace `halo2_gadgets = "0.3"` non-exact pin becomes moot once the fork lands — the production-binary dependency moves from upstream `halo2_gadgets` to `adamant-halo2`, and the upstream pin is consumed only by the development-time refresh / cross-validation path (mirror of the Sui-Move tag-pin discipline).
+
+**Mechanical guardrail**: a `tests/no_upstream_halo2_in_production_deps.rs` build-system independence check (mirroring `tests/no_sui_in_production_deps.rs` from Phase 5/5b.5) walks the resolved dependency tree via `cargo metadata` and fails CI if any upstream `halo2_*` crate appears in the production target. Lands with the C2 fork at Phase 6.8b.
 
 #### Decision 2 — RocksDB at Phase 4 backfill / pre-mainnet
 
@@ -559,7 +565,7 @@ The following map records which phases are complete, in progress, or pending, wi
 
 **Phase 6: Privacy layer (NEXT MAJOR PHASE)**
 - `adamant-privacy` — Cat A.
-- Halo 2 ZK circuits — **Posture Decision 1 pending** (C1/C2/C3 at Phase 6 plan-gate).
+- Halo 2 ZK circuits — **Posture Decision 1 resolved as Path C2** (fork into `adamant-halo2` crate; lands at Phase 6.8b).
 - Privacy-circuit handlers (`GenerateProof` / `VerifyProof` / `RecursiveVerify` / `ReleaseSubViewKey`) — Cat C bridge.
 - Recursive proof generation — Cat C bridge.
 

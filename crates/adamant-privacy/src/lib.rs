@@ -28,13 +28,17 @@
 //!
 //! - `adamant-crypto` — for SHA3 / BLAKE3 / HKDF / ML-KEM /
 //!   Ed25519 / ML-DSA / BLS / KZG / threshold-encryption.
-//! - `halo2_gadgets` — for Poseidon (§3.3.3) and (at Phase 6.8)
-//!   Halo 2 circuits over Pasta curves. Currently consumed as
-//!   bounded-ecosystem (Cat C-equivalent for the proving system
-//!   surface); the §14.4 Decision 1 posture (C1 / C2 / C3) is
-//!   pending at the Phase 6.8 plan-gate. Until then, Phase 6.0–
-//!   6.7 work only consumes the Poseidon out-of-circuit primitive
-//!   surface, keeping the posture decision fully reversible.
+//! - `halo2_gadgets` — for Poseidon (§3.3.3) out-of-circuit
+//!   primitive surface. Phase 6.0–6.7 + 6.8a + 6.9a consume this
+//!   dep at the smallest Cat C-equivalent footprint (Poseidon
+//!   only). The §14.4 Decision 1 posture is resolved as **Path C2**
+//!   (fork `halo2_gadgets` + necessary `halo2_proofs` subset
+//!   into a new `adamant-halo2` crate with `PROVENANCE.md`,
+//!   mirroring Phase 5/5b.1a/b's Sui-Move precedent). The fork
+//!   lands at Phase 6.8b alongside the §7.3.2 validity-circuit
+//!   work; production-binary independence is enforced by a
+//!   build-system check (`tests/no_upstream_halo2_in_production_deps.rs`,
+//!   landing with the fork).
 //!
 //! No new external dependencies beyond the workspace's already-
 //! locked set.

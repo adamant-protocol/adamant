@@ -7,12 +7,15 @@
 //! [`RecursiveProofEnvelope`] composition struct.
 //!
 //! Phase 6.9b (the actual Halo 2 recursive proving system per
-//! §8.5.2) lands alongside Phase 6.8b at the §14.4 Decision 1
-//! plan-gate (C1 native / C2 fork / C3 bounded-ecosystem). The
-//! 6.9a wire types here are posture-independent: the recursive
-//! proof is treated as opaque bytes at this layer, so adding the
-//! actual Halo 2 recursion later does not require changing the
-//! on-chain wire format.
+//! §8.5.2) lands alongside Phase 6.8b in the new `adamant-halo2`
+//! crate per §14.4 Decision 1 (resolved as Path C2 — fork
+//! `halo2_gadgets` + necessary `halo2_proofs` subset into an
+//! Adamant-owned crate with `PROVENANCE.md`, mirroring Phase
+//! 5/5b.1a/b's Sui-Move precedent). The 6.9a wire types here
+//! are posture-independent: the recursive proof is treated as
+//! opaque bytes at this layer, so adding the actual Halo 2
+//! recursion later does not require changing the on-chain wire
+//! format.
 //!
 //! # Spec basis
 //!
@@ -128,18 +131,19 @@ impl EpochCommitment {
 /// A constant-size recursive Halo 2 proof per whitepaper §8.5.2.
 ///
 /// Phase 6.9a stores the proof as an opaque byte buffer. Phase
-/// 6.9b will replace the internal representation with a
-/// structured Halo-2-recursive-proof shape resolved at the §14.4
-/// Decision 1 plan-gate. The on-chain wire format stays bytes-
-/// on-the-wire, so the §14.4 posture decision does NOT require a
-/// hard fork of the recursive-proof envelope.
+/// 6.9b will replace the internal representation with the
+/// structured Halo-2-recursive-proof shape from the new
+/// `adamant-halo2` fork per §14.4 Decision 1 (resolved as Path
+/// C2). The on-chain wire format stays bytes-on-the-wire, so
+/// adding the structured shape does NOT require a hard fork of
+/// the recursive-proof envelope.
 ///
 /// Per §8.5.2: "constant size, ~5-10 KB". The byte length is a
 /// property of the underlying proving system, not enforced here.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RecursiveProof {
     /// Opaque proof bytes. Format is defined by the recursive
-    /// proving system selected at Phase 6.9b plan-gate.
+    /// proving system in the `adamant-halo2` crate (Phase 6.9b).
     pub bytes: Vec<u8>,
 }
 

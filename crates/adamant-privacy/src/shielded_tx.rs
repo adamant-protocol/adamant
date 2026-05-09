@@ -5,8 +5,11 @@
 //! [`Halo2Proof`], and [`BindingSignature`] components.
 //!
 //! Phase 6.8b (the actual Halo 2 validity circuit per §7.3.2)
-//! lands separately at the §14.4 Decision 1 plan-gate (C1 native
-//! / C2 fork / C3 bounded-ecosystem). The 6.8a wire types here
+//! lands separately in the new `adamant-halo2` crate per
+//! §14.4 Decision 1 (resolved as Path C2 — fork
+//! `halo2_gadgets` + necessary `halo2_proofs` subset into an
+//! Adamant-owned crate with `PROVENANCE.md`, mirroring Phase
+//! 5/5b.1a/b's Sui-Move precedent). The 6.8a wire types here
 //! are posture-independent: the proof is treated as opaque bytes
 //! at this layer, so adding the circuit later does not require
 //! changing the on-chain wire format.
@@ -75,11 +78,11 @@ use crate::nullifier::Nullifier;
 /// shielded transaction per whitepaper §7.3.1 / §7.3.2.
 ///
 /// Phase 6.8a stores the proof as an opaque byte buffer. Phase
-/// 6.8b will replace the internal representation with a
-/// structured Halo-2-proof shape resolved at the §14.4 Decision 1
-/// plan-gate (C1 native / C2 fork / C3 bounded-ecosystem). The
-/// on-chain wire format stays bytes-on-the-wire, so the §14.4
-/// posture decision does NOT require a hard fork of the
+/// 6.8b will replace the internal representation with the
+/// structured Halo-2-proof shape from the new `adamant-halo2`
+/// fork per §14.4 Decision 1 (resolved as Path C2). The on-chain
+/// wire format stays bytes-on-the-wire, so adding the structured
+/// shape does NOT require a hard fork of the
 /// `ShieldedTransaction` envelope.
 ///
 /// Per §7.3.1: "Halo 2's `PLONKish` arithmetisation … proof size
