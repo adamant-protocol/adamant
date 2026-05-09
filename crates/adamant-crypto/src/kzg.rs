@@ -1,5 +1,5 @@
 //! KZG vector and polynomial commitments on BLS12-381, per whitepaper
-//! section 3.7.2.
+//! section 3.9.2.
 //!
 //! Trusted-setup parameters are sourced from the Ethereum Powers of Tau
 //! ceremony output; the specific reference is pinned in whitepaper
