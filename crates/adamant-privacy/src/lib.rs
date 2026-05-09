@@ -44,6 +44,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod circuit;
 pub mod encrypted_note;
 pub mod gnct;
 pub mod memo;
@@ -55,6 +56,7 @@ pub mod shielded_tx;
 pub mod stealth;
 pub mod view_key;
 
+pub use circuit::{NoteCommitmentCircuit, NoteCommitmentWitness};
 pub use encrypted_note::{
     decapsulate_for_recipient, decrypt_note_for_recipient, encapsulate_for_recipient,
     encrypt_note_for_recipient, EncryptedNote, NoteDecryptError, AUTH_TAG_BYTES,

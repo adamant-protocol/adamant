@@ -17,9 +17,23 @@ use super::{
 use crate::utilities::Var;
 
 /// Configuration for a [`Pow5Chip`].
+//
+// Adamant fork (Phase 6.8b.4a): widened `state`'s visibility
+// from `pub(crate)` to `pub` so downstream circuits in
+// adamant-privacy can layout their own input cells in the
+// state columns. Upstream halo2_gadgets's tests do this
+// (see `HashCircuit` in this file) but only because they live
+// in the same crate; downstream consumers in upstream's
+// ecosystem (Orchard) avoid the pattern by using the chip
+// indirectly via Sinsemilla/etc. Adamant's §7.3.2 validity
+// circuit uses the same direct pattern as the upstream tests,
+// so the field needs to be reachable from outside the crate.
 #[derive(Clone, Debug)]
 pub struct Pow5Config<F: Field, const WIDTH: usize, const RATE: usize> {
-    pub(crate) state: [Column<Advice>; WIDTH],
+    /// Advice columns holding the Poseidon permutation state.
+    /// `pub` per Adamant fork (Phase 6.8b.4a) — see comment
+    /// above the struct.
+    pub state: [Column<Advice>; WIDTH],
     partial_sbox: Column<Advice>,
     rc_a: [Column<Fixed>; WIDTH],
     rc_b: [Column<Fixed>; WIDTH],
