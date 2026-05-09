@@ -78,6 +78,8 @@
 pub mod error;
 pub mod frame;
 pub mod interpreter;
+pub mod module_helpers;
+pub mod runtime_value;
 pub mod state_buffer;
 pub mod state_mutator;
 pub mod state_view;
@@ -88,6 +90,7 @@ pub(in crate::runtime) mod test_helpers;
 pub use error::{ArithmeticErrorReason, InvariantViolationReason, VMError};
 pub use frame::Frame;
 pub use interpreter::{DispatchOutcome, InterpreterState};
+pub use runtime_value::{compare_unsigned, Container, Reference, RuntimeValue};
 pub use state_buffer::TransactionStateBuffer;
 pub use state_mutator::{CommitError, StateMutator, TransactionStateChanges};
 pub use state_view::{LoadError, StateView};

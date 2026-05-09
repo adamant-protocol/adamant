@@ -27,9 +27,10 @@
 use adamant_bytecode_format::{Bytecode, FunctionHandleIndex, U256 as FormatU256};
 
 use crate::bytecode::BytecodeInstruction;
+use crate::module::AdamantCompiledModule;
 use crate::runtime::error::{ArithmeticErrorReason, InvariantViolationReason, VMError};
 use crate::runtime::frame::Frame;
-use crate::value::Value;
+use crate::runtime::runtime_value::RuntimeValue;
 
 /// Multi-frame interpreter state.
 ///
@@ -159,7 +160,14 @@ pub enum DispatchOutcome {
 pub fn dispatch_instruction(
     instruction: &BytecodeInstruction,
     state: &mut InterpreterState,
+    _module: &AdamantCompiledModule,
 ) -> Result<DispatchOutcome, VMError> {
+    // The `_module` parameter is threaded through per Phase 5/6.2c.1
+    // foundation work (Q5/6.2c.2 disposition: `&'a AdamantCompiledModule`
+    // borrow lifetime). At sub-arc 5/6.2c.1, module-access handlers
+    // are not yet wired (they defer to 5/6.2c.2); the 38 self-
+    // contained handlers from 5/6.2b ignore `_module`. Adding the
+    // parameter now prevents a signature breaking change at 5/6.2c.2.
     match instruction {
         BytecodeInstruction::Inherited(opcode) => dispatch_inherited(opcode, state),
         BytecodeInstruction::Adamant(_) => {
@@ -252,14 +260,14 @@ fn dispatch_inherited(
         }
 
         // ---------- Literal load (immediates only; LdConst defers to 5/6.2c) ----------
-        Bytecode::LdU8(v) => push_and_continue(state, Value::U8(*v)),
-        Bytecode::LdU16(v) => push_and_continue(state, Value::U16(*v)),
-        Bytecode::LdU32(v) => push_and_continue(state, Value::U32(*v)),
-        Bytecode::LdU64(v) => push_and_continue(state, Value::U64(*v)),
-        Bytecode::LdU128(v) => push_and_continue(state, Value::U128(**v)),
-        Bytecode::LdU256(v) => push_and_continue(state, Value::U256(v.to_le_bytes())),
-        Bytecode::LdTrue => push_and_continue(state, Value::Bool(true)),
-        Bytecode::LdFalse => push_and_continue(state, Value::Bool(false)),
+        Bytecode::LdU8(v) => push_and_continue(state, RuntimeValue::U8(*v)),
+        Bytecode::LdU16(v) => push_and_continue(state, RuntimeValue::U16(*v)),
+        Bytecode::LdU32(v) => push_and_continue(state, RuntimeValue::U32(*v)),
+        Bytecode::LdU64(v) => push_and_continue(state, RuntimeValue::U64(*v)),
+        Bytecode::LdU128(v) => push_and_continue(state, RuntimeValue::U128(**v)),
+        Bytecode::LdU256(v) => push_and_continue(state, RuntimeValue::U256(v.to_le_bytes())),
+        Bytecode::LdTrue => push_and_continue(state, RuntimeValue::Bool(true)),
+        Bytecode::LdFalse => push_and_continue(state, RuntimeValue::Bool(false)),
 
         // ---------- Cast (§6.2.1.9 cast semantics) ----------
         Bytecode::CastU8 => dispatch_cast_u8(state),
@@ -309,7 +317,7 @@ fn dispatch_inherited(
             let frame = top_frame_mut(state)?;
             let rhs = frame.pop_bool()?;
             let lhs = frame.pop_bool()?;
-            frame.push_value(Value::Bool(lhs && rhs));
+            frame.push_value(RuntimeValue::Bool(lhs && rhs));
             advance_pc(frame);
             Ok(DispatchOutcome::Continue)
         }
@@ -317,14 +325,14 @@ fn dispatch_inherited(
             let frame = top_frame_mut(state)?;
             let rhs = frame.pop_bool()?;
             let lhs = frame.pop_bool()?;
-            frame.push_value(Value::Bool(lhs || rhs));
+            frame.push_value(RuntimeValue::Bool(lhs || rhs));
             advance_pc(frame);
             Ok(DispatchOutcome::Continue)
         }
         Bytecode::Not => {
             let frame = top_frame_mut(state)?;
             let v = frame.pop_bool()?;
-            frame.push_value(Value::Bool(!v));
+            frame.push_value(RuntimeValue::Bool(!v));
             advance_pc(frame);
             Ok(DispatchOutcome::Continue)
         }
@@ -461,7 +469,7 @@ fn advance_pc(frame: &mut Frame) {
 /// which all share the same shape: push immediate, advance pc.
 fn push_and_continue(
     state: &mut InterpreterState,
-    value: Value,
+    value: RuntimeValue,
 ) -> Result<DispatchOutcome, VMError> {
     let frame = top_frame_mut(state)?;
     frame.push_value(value);
@@ -506,12 +514,12 @@ fn dispatch_arith(state: &mut InterpreterState, op: ArithOp) -> Result<DispatchO
     let rhs = frame.pop_value()?;
     let lhs = frame.pop_value()?;
     let result = match (lhs, rhs) {
-        (Value::U8(a), Value::U8(b)) => Value::U8(arith_u8(a, b, op)?),
-        (Value::U16(a), Value::U16(b)) => Value::U16(arith_u16(a, b, op)?),
-        (Value::U32(a), Value::U32(b)) => Value::U32(arith_u32(a, b, op)?),
-        (Value::U64(a), Value::U64(b)) => Value::U64(arith_u64(a, b, op)?),
-        (Value::U128(a), Value::U128(b)) => Value::U128(arith_u128(a, b, op)?),
-        (Value::U256(a), Value::U256(b)) => Value::U256(arith_u256(a, b, op)?),
+        (RuntimeValue::U8(a), RuntimeValue::U8(b)) => RuntimeValue::U8(arith_u8(a, b, op)?),
+        (RuntimeValue::U16(a), RuntimeValue::U16(b)) => RuntimeValue::U16(arith_u16(a, b, op)?),
+        (RuntimeValue::U32(a), RuntimeValue::U32(b)) => RuntimeValue::U32(arith_u32(a, b, op)?),
+        (RuntimeValue::U64(a), RuntimeValue::U64(b)) => RuntimeValue::U64(arith_u64(a, b, op)?),
+        (RuntimeValue::U128(a), RuntimeValue::U128(b)) => RuntimeValue::U128(arith_u128(a, b, op)?),
+        (RuntimeValue::U256(a), RuntimeValue::U256(b)) => RuntimeValue::U256(arith_u256(a, b, op)?),
         _ => {
             return Err(VMError::InvariantViolation {
                 reason: InvariantViolationReason::TypeMismatchOnStack,
@@ -656,12 +664,12 @@ fn dispatch_bitop(state: &mut InterpreterState, op: BitOp) -> Result<DispatchOut
     let rhs = frame.pop_value()?;
     let lhs = frame.pop_value()?;
     let result = match (lhs, rhs) {
-        (Value::U8(a), Value::U8(b)) => Value::U8(bitop_u8(a, b, op)),
-        (Value::U16(a), Value::U16(b)) => Value::U16(bitop_u16(a, b, op)),
-        (Value::U32(a), Value::U32(b)) => Value::U32(bitop_u32(a, b, op)),
-        (Value::U64(a), Value::U64(b)) => Value::U64(bitop_u64(a, b, op)),
-        (Value::U128(a), Value::U128(b)) => Value::U128(bitop_u128(a, b, op)),
-        (Value::U256(a), Value::U256(b)) => {
+        (RuntimeValue::U8(a), RuntimeValue::U8(b)) => RuntimeValue::U8(bitop_u8(a, b, op)),
+        (RuntimeValue::U16(a), RuntimeValue::U16(b)) => RuntimeValue::U16(bitop_u16(a, b, op)),
+        (RuntimeValue::U32(a), RuntimeValue::U32(b)) => RuntimeValue::U32(bitop_u32(a, b, op)),
+        (RuntimeValue::U64(a), RuntimeValue::U64(b)) => RuntimeValue::U64(bitop_u64(a, b, op)),
+        (RuntimeValue::U128(a), RuntimeValue::U128(b)) => RuntimeValue::U128(bitop_u128(a, b, op)),
+        (RuntimeValue::U256(a), RuntimeValue::U256(b)) => {
             let a = FormatU256::from_le_bytes(a);
             let b = FormatU256::from_le_bytes(b);
             let r = match op {
@@ -669,7 +677,7 @@ fn dispatch_bitop(state: &mut InterpreterState, op: BitOp) -> Result<DispatchOut
                 BitOp::Or => a | b,
                 BitOp::Xor => a ^ b,
             };
-            Value::U256(r.to_le_bytes())
+            RuntimeValue::U256(r.to_le_bytes())
         }
         _ => {
             return Err(VMError::InvariantViolation {
@@ -734,7 +742,7 @@ fn dispatch_eq(state: &mut InterpreterState, negate: bool) -> Result<DispatchOut
     // computed field-wise and recurses into nested structs."
     let equal = lhs == rhs;
     let result = if negate { !equal } else { equal };
-    frame.push_value(Value::Bool(result));
+    frame.push_value(RuntimeValue::Bool(result));
     advance_pc(frame);
     Ok(DispatchOutcome::Continue)
 }
@@ -748,12 +756,12 @@ fn dispatch_cmp(state: &mut InterpreterState, op: CmpOp) -> Result<DispatchOutco
     let rhs = frame.pop_value()?;
     let lhs = frame.pop_value()?;
     let result = match (lhs, rhs) {
-        (Value::U8(a), Value::U8(b)) => cmp_apply(a.cmp(&b), op),
-        (Value::U16(a), Value::U16(b)) => cmp_apply(a.cmp(&b), op),
-        (Value::U32(a), Value::U32(b)) => cmp_apply(a.cmp(&b), op),
-        (Value::U64(a), Value::U64(b)) => cmp_apply(a.cmp(&b), op),
-        (Value::U128(a), Value::U128(b)) => cmp_apply(a.cmp(&b), op),
-        (Value::U256(a), Value::U256(b)) => {
+        (RuntimeValue::U8(a), RuntimeValue::U8(b)) => cmp_apply(a.cmp(&b), op),
+        (RuntimeValue::U16(a), RuntimeValue::U16(b)) => cmp_apply(a.cmp(&b), op),
+        (RuntimeValue::U32(a), RuntimeValue::U32(b)) => cmp_apply(a.cmp(&b), op),
+        (RuntimeValue::U64(a), RuntimeValue::U64(b)) => cmp_apply(a.cmp(&b), op),
+        (RuntimeValue::U128(a), RuntimeValue::U128(b)) => cmp_apply(a.cmp(&b), op),
+        (RuntimeValue::U256(a), RuntimeValue::U256(b)) => {
             // U256 comparison via the manual MSB-first impl on
             // adamant_bytecode_format::U256 (Phase 5/6.2a). Per
             // §6.2.1.9 unsigned comparison ordering.
@@ -767,7 +775,7 @@ fn dispatch_cmp(state: &mut InterpreterState, op: CmpOp) -> Result<DispatchOutco
             });
         }
     };
-    frame.push_value(Value::Bool(result));
+    frame.push_value(RuntimeValue::Bool(result));
     advance_pc(frame);
     Ok(DispatchOutcome::Continue)
 }
@@ -792,62 +800,62 @@ fn dispatch_shift(state: &mut InterpreterState, dir: ShiftDir) -> Result<Dispatc
     let n_bits = frame.pop_u8()?;
     let lhs = frame.pop_value()?;
     let result = match lhs {
-        Value::U8(a) => {
+        RuntimeValue::U8(a) => {
             if n_bits >= 8 {
                 return Err(VMError::ArithmeticError {
                     reason: ArithmeticErrorReason::ShiftAmountTooLarge,
                 });
             }
-            Value::U8(match dir {
+            RuntimeValue::U8(match dir {
                 ShiftDir::Left => a << n_bits,
                 ShiftDir::Right => a >> n_bits,
             })
         }
-        Value::U16(a) => {
+        RuntimeValue::U16(a) => {
             if n_bits >= 16 {
                 return Err(VMError::ArithmeticError {
                     reason: ArithmeticErrorReason::ShiftAmountTooLarge,
                 });
             }
-            Value::U16(match dir {
+            RuntimeValue::U16(match dir {
                 ShiftDir::Left => a << n_bits,
                 ShiftDir::Right => a >> n_bits,
             })
         }
-        Value::U32(a) => {
+        RuntimeValue::U32(a) => {
             if n_bits >= 32 {
                 return Err(VMError::ArithmeticError {
                     reason: ArithmeticErrorReason::ShiftAmountTooLarge,
                 });
             }
-            Value::U32(match dir {
+            RuntimeValue::U32(match dir {
                 ShiftDir::Left => a << n_bits,
                 ShiftDir::Right => a >> n_bits,
             })
         }
-        Value::U64(a) => {
+        RuntimeValue::U64(a) => {
             if n_bits >= 64 {
                 return Err(VMError::ArithmeticError {
                     reason: ArithmeticErrorReason::ShiftAmountTooLarge,
                 });
             }
-            Value::U64(match dir {
+            RuntimeValue::U64(match dir {
                 ShiftDir::Left => a << n_bits,
                 ShiftDir::Right => a >> n_bits,
             })
         }
-        Value::U128(a) => {
+        RuntimeValue::U128(a) => {
             if n_bits >= 128 {
                 return Err(VMError::ArithmeticError {
                     reason: ArithmeticErrorReason::ShiftAmountTooLarge,
                 });
             }
-            Value::U128(match dir {
+            RuntimeValue::U128(match dir {
                 ShiftDir::Left => a << n_bits,
                 ShiftDir::Right => a >> n_bits,
             })
         }
-        Value::U256(a) => {
+        RuntimeValue::U256(a) => {
             // u256 shift: no abort condition. n_bits is u8; max
             // 255 < 256 = bit_width. The abort check is structurally
             // unreachable per §6.2.1.9.
@@ -856,7 +864,7 @@ fn dispatch_shift(state: &mut InterpreterState, dir: ShiftDir) -> Result<Dispatc
                 ShiftDir::Left => a << n_bits,
                 ShiftDir::Right => a >> n_bits,
             };
-            Value::U256(r.to_le_bytes())
+            RuntimeValue::U256(r.to_le_bytes())
         }
         _ => {
             return Err(VMError::InvariantViolation {
@@ -882,12 +890,12 @@ fn dispatch_cast_u8(state: &mut InterpreterState) -> Result<DispatchOutcome, VME
     let frame = top_frame_mut(state)?;
     let v = frame.pop_value()?;
     let result = match v {
-        Value::U8(a) => a,
-        Value::U16(a) => narrow_or_abort(u8::try_from(a))?,
-        Value::U32(a) => narrow_or_abort(u8::try_from(a))?,
-        Value::U64(a) => narrow_or_abort(u8::try_from(a))?,
-        Value::U128(a) => narrow_or_abort(u8::try_from(a))?,
-        Value::U256(a) => {
+        RuntimeValue::U8(a) => a,
+        RuntimeValue::U16(a) => narrow_or_abort(u8::try_from(a))?,
+        RuntimeValue::U32(a) => narrow_or_abort(u8::try_from(a))?,
+        RuntimeValue::U64(a) => narrow_or_abort(u8::try_from(a))?,
+        RuntimeValue::U128(a) => narrow_or_abort(u8::try_from(a))?,
+        RuntimeValue::U256(a) => {
             FormatU256::from_le_bytes(a)
                 .try_into_u8()
                 .ok_or(VMError::ArithmeticError {
@@ -900,7 +908,7 @@ fn dispatch_cast_u8(state: &mut InterpreterState) -> Result<DispatchOutcome, VME
             });
         }
     };
-    frame.push_value(Value::U8(result));
+    frame.push_value(RuntimeValue::U8(result));
     advance_pc(frame);
     Ok(DispatchOutcome::Continue)
 }
@@ -909,12 +917,12 @@ fn dispatch_cast_u16(state: &mut InterpreterState) -> Result<DispatchOutcome, VM
     let frame = top_frame_mut(state)?;
     let v = frame.pop_value()?;
     let result = match v {
-        Value::U8(a) => u16::from(a),
-        Value::U16(a) => a,
-        Value::U32(a) => narrow_or_abort(u16::try_from(a))?,
-        Value::U64(a) => narrow_or_abort(u16::try_from(a))?,
-        Value::U128(a) => narrow_or_abort(u16::try_from(a))?,
-        Value::U256(a) => {
+        RuntimeValue::U8(a) => u16::from(a),
+        RuntimeValue::U16(a) => a,
+        RuntimeValue::U32(a) => narrow_or_abort(u16::try_from(a))?,
+        RuntimeValue::U64(a) => narrow_or_abort(u16::try_from(a))?,
+        RuntimeValue::U128(a) => narrow_or_abort(u16::try_from(a))?,
+        RuntimeValue::U256(a) => {
             FormatU256::from_le_bytes(a)
                 .try_into_u16()
                 .ok_or(VMError::ArithmeticError {
@@ -927,7 +935,7 @@ fn dispatch_cast_u16(state: &mut InterpreterState) -> Result<DispatchOutcome, VM
             });
         }
     };
-    frame.push_value(Value::U16(result));
+    frame.push_value(RuntimeValue::U16(result));
     advance_pc(frame);
     Ok(DispatchOutcome::Continue)
 }
@@ -936,12 +944,12 @@ fn dispatch_cast_u32(state: &mut InterpreterState) -> Result<DispatchOutcome, VM
     let frame = top_frame_mut(state)?;
     let v = frame.pop_value()?;
     let result = match v {
-        Value::U8(a) => u32::from(a),
-        Value::U16(a) => u32::from(a),
-        Value::U32(a) => a,
-        Value::U64(a) => narrow_or_abort(u32::try_from(a))?,
-        Value::U128(a) => narrow_or_abort(u32::try_from(a))?,
-        Value::U256(a) => {
+        RuntimeValue::U8(a) => u32::from(a),
+        RuntimeValue::U16(a) => u32::from(a),
+        RuntimeValue::U32(a) => a,
+        RuntimeValue::U64(a) => narrow_or_abort(u32::try_from(a))?,
+        RuntimeValue::U128(a) => narrow_or_abort(u32::try_from(a))?,
+        RuntimeValue::U256(a) => {
             FormatU256::from_le_bytes(a)
                 .try_into_u32()
                 .ok_or(VMError::ArithmeticError {
@@ -954,7 +962,7 @@ fn dispatch_cast_u32(state: &mut InterpreterState) -> Result<DispatchOutcome, VM
             });
         }
     };
-    frame.push_value(Value::U32(result));
+    frame.push_value(RuntimeValue::U32(result));
     advance_pc(frame);
     Ok(DispatchOutcome::Continue)
 }
@@ -963,12 +971,12 @@ fn dispatch_cast_u64(state: &mut InterpreterState) -> Result<DispatchOutcome, VM
     let frame = top_frame_mut(state)?;
     let v = frame.pop_value()?;
     let result = match v {
-        Value::U8(a) => u64::from(a),
-        Value::U16(a) => u64::from(a),
-        Value::U32(a) => u64::from(a),
-        Value::U64(a) => a,
-        Value::U128(a) => narrow_or_abort(u64::try_from(a))?,
-        Value::U256(a) => {
+        RuntimeValue::U8(a) => u64::from(a),
+        RuntimeValue::U16(a) => u64::from(a),
+        RuntimeValue::U32(a) => u64::from(a),
+        RuntimeValue::U64(a) => a,
+        RuntimeValue::U128(a) => narrow_or_abort(u64::try_from(a))?,
+        RuntimeValue::U256(a) => {
             FormatU256::from_le_bytes(a)
                 .try_into_u64()
                 .ok_or(VMError::ArithmeticError {
@@ -981,7 +989,7 @@ fn dispatch_cast_u64(state: &mut InterpreterState) -> Result<DispatchOutcome, VM
             });
         }
     };
-    frame.push_value(Value::U64(result));
+    frame.push_value(RuntimeValue::U64(result));
     advance_pc(frame);
     Ok(DispatchOutcome::Continue)
 }
@@ -990,12 +998,12 @@ fn dispatch_cast_u128(state: &mut InterpreterState) -> Result<DispatchOutcome, V
     let frame = top_frame_mut(state)?;
     let v = frame.pop_value()?;
     let result = match v {
-        Value::U8(a) => u128::from(a),
-        Value::U16(a) => u128::from(a),
-        Value::U32(a) => u128::from(a),
-        Value::U64(a) => u128::from(a),
-        Value::U128(a) => a,
-        Value::U256(a) => {
+        RuntimeValue::U8(a) => u128::from(a),
+        RuntimeValue::U16(a) => u128::from(a),
+        RuntimeValue::U32(a) => u128::from(a),
+        RuntimeValue::U64(a) => u128::from(a),
+        RuntimeValue::U128(a) => a,
+        RuntimeValue::U256(a) => {
             FormatU256::from_le_bytes(a)
                 .try_into_u128()
                 .ok_or(VMError::ArithmeticError {
@@ -1008,7 +1016,7 @@ fn dispatch_cast_u128(state: &mut InterpreterState) -> Result<DispatchOutcome, V
             });
         }
     };
-    frame.push_value(Value::U128(result));
+    frame.push_value(RuntimeValue::U128(result));
     advance_pc(frame);
     Ok(DispatchOutcome::Continue)
 }
@@ -1018,19 +1026,19 @@ fn dispatch_cast_u256(state: &mut InterpreterState) -> Result<DispatchOutcome, V
     let v = frame.pop_value()?;
     // All widening casts to U256 succeed (zero-extension).
     let result = match v {
-        Value::U8(a) => FormatU256::from_u8(a),
-        Value::U16(a) => FormatU256::from_u16(a),
-        Value::U32(a) => FormatU256::from_u32(a),
-        Value::U64(a) => FormatU256::from_u64(a),
-        Value::U128(a) => FormatU256::from_u128(a),
-        Value::U256(a) => FormatU256::from_le_bytes(a),
+        RuntimeValue::U8(a) => FormatU256::from_u8(a),
+        RuntimeValue::U16(a) => FormatU256::from_u16(a),
+        RuntimeValue::U32(a) => FormatU256::from_u32(a),
+        RuntimeValue::U64(a) => FormatU256::from_u64(a),
+        RuntimeValue::U128(a) => FormatU256::from_u128(a),
+        RuntimeValue::U256(a) => FormatU256::from_le_bytes(a),
         _ => {
             return Err(VMError::InvariantViolation {
                 reason: InvariantViolationReason::TypeMismatchOnStack,
             });
         }
     };
-    frame.push_value(Value::U256(result.to_le_bytes()));
+    frame.push_value(RuntimeValue::U256(result.to_le_bytes()));
     advance_pc(frame);
     Ok(DispatchOutcome::Continue)
 }
@@ -1070,6 +1078,7 @@ fn narrow_or_abort<T, E>(r: Result<T, E>) -> Result<T, VMError> {
 /// "to completion" half (gas exhaustion is 5/6.5 scope).
 pub fn run(
     state: &mut InterpreterState,
+    module: &AdamantCompiledModule,
     fetch_instruction: impl Fn(FunctionHandleIndex, u16) -> Option<BytecodeInstruction>,
 ) -> Result<(), VMError> {
     loop {
@@ -1085,7 +1094,7 @@ pub fn run(
                 function_handle,
                 pc,
             })?;
-        match dispatch_instruction(&instruction, state)? {
+        match dispatch_instruction(&instruction, state, module)? {
             DispatchOutcome::Continue => {}
             DispatchOutcome::Halt => return Ok(()),
         }
@@ -1117,6 +1126,15 @@ mod tests {
         FunctionHandleIndex(idx)
     }
 
+    /// Construct an empty placeholder module for tests that don't
+    /// exercise module-access handlers. 5/6.2c.1 foundation tests
+    /// pass an empty module since the 38 self-contained handlers
+    /// don't dereference it; 5/6.2c.2 will replace this with
+    /// realistic fixtures for module-access handler tests.
+    fn empty_module() -> AdamantCompiledModule {
+        AdamantCompiledModule::default()
+    }
+
     /// Construct a state with one frame holding `local_count`
     /// locals slots.
     fn state_with_frame(local_count: usize) -> InterpreterState {
@@ -1127,7 +1145,7 @@ mod tests {
 
     /// Push values onto the frame's stack in order (first → bottom,
     /// last → top).
-    fn push_stack(state: &mut InterpreterState, values: Vec<Value>) {
+    fn push_stack(state: &mut InterpreterState, values: Vec<RuntimeValue>) {
         let frame = state.top_frame_mut().expect("frame");
         for v in values {
             frame.push_value(v);
@@ -1139,11 +1157,12 @@ mod tests {
         state: &mut InterpreterState,
         opcode: Bytecode,
     ) -> Result<DispatchOutcome, VMError> {
-        dispatch_instruction(&BytecodeInstruction::Inherited(opcode), state)
+        let module = empty_module();
+        dispatch_instruction(&BytecodeInstruction::Inherited(opcode), state, &module)
     }
 
     /// Read top-of-stack on the top frame for assertions.
-    fn top(state: &InterpreterState) -> Value {
+    fn top(state: &InterpreterState) -> RuntimeValue {
         state
             .top_frame()
             .expect("frame")
@@ -1170,7 +1189,8 @@ mod tests {
     #[test]
     fn run_on_empty_interpreter_state_returns_ok() {
         let mut state = InterpreterState::new();
-        let result = run(&mut state, |_h, _pc| {
+        let module = empty_module();
+        let result = run(&mut state, &module, |_h, _pc| {
             panic!("fetch_instruction should not be called on empty state")
         });
         assert!(result.is_ok());
@@ -1199,7 +1219,8 @@ mod tests {
     #[test]
     fn run_returns_invalid_instruction_when_fetch_returns_none() {
         let mut state = state_with_frame(0);
-        let result = run(&mut state, |_h, _pc| None);
+        let module = empty_module();
+        let result = run(&mut state, &module, |_h, _pc| None);
         assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
     }
 
@@ -1212,7 +1233,7 @@ mod tests {
     #[test]
     fn pop_removes_top_of_stack_and_advances_pc() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(42)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(42)]);
         dispatch(&mut state, Bytecode::Pop).expect("ok");
         assert_eq!(stack_len(&state), 0);
         assert_eq!(pc(&state), 1);
@@ -1257,7 +1278,7 @@ mod tests {
     #[test]
     fn br_true_branches_when_true() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::Bool(true)]);
+        push_stack(&mut state, vec![RuntimeValue::Bool(true)]);
         dispatch(&mut state, Bytecode::BrTrue(42)).expect("ok");
         assert_eq!(pc(&state), 42);
     }
@@ -1265,7 +1286,7 @@ mod tests {
     #[test]
     fn br_true_advances_pc_when_false() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::Bool(false)]);
+        push_stack(&mut state, vec![RuntimeValue::Bool(false)]);
         dispatch(&mut state, Bytecode::BrTrue(42)).expect("ok");
         assert_eq!(pc(&state), 1);
     }
@@ -1275,7 +1296,7 @@ mod tests {
     #[test]
     fn br_false_branches_when_false() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::Bool(false)]);
+        push_stack(&mut state, vec![RuntimeValue::Bool(false)]);
         dispatch(&mut state, Bytecode::BrFalse(42)).expect("ok");
         assert_eq!(pc(&state), 42);
     }
@@ -1283,7 +1304,7 @@ mod tests {
     #[test]
     fn br_false_advances_pc_when_true() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::Bool(true)]);
+        push_stack(&mut state, vec![RuntimeValue::Bool(true)]);
         dispatch(&mut state, Bytecode::BrFalse(42)).expect("ok");
         assert_eq!(pc(&state), 1);
     }
@@ -1293,7 +1314,7 @@ mod tests {
     #[test]
     fn br_true_on_non_bool_invariant_violation() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(1)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(1)]);
         let err = dispatch(&mut state, Bytecode::BrTrue(42)).expect_err("err");
         assert!(matches!(
             err,
@@ -1313,7 +1334,7 @@ mod tests {
     fn ld_u8_pushes_immediate() {
         let mut state = state_with_frame(0);
         dispatch(&mut state, Bytecode::LdU8(0xAB)).expect("ok");
-        assert_eq!(top(&state), Value::U8(0xAB));
+        assert_eq!(top(&state), RuntimeValue::U8(0xAB));
         assert_eq!(pc(&state), 1);
     }
 
@@ -1321,21 +1342,21 @@ mod tests {
     fn ld_u16_pushes_immediate() {
         let mut state = state_with_frame(0);
         dispatch(&mut state, Bytecode::LdU16(0xABCD)).expect("ok");
-        assert_eq!(top(&state), Value::U16(0xABCD));
+        assert_eq!(top(&state), RuntimeValue::U16(0xABCD));
     }
 
     #[test]
     fn ld_u32_pushes_immediate() {
         let mut state = state_with_frame(0);
         dispatch(&mut state, Bytecode::LdU32(0xABCD_1234)).expect("ok");
-        assert_eq!(top(&state), Value::U32(0xABCD_1234));
+        assert_eq!(top(&state), RuntimeValue::U32(0xABCD_1234));
     }
 
     #[test]
     fn ld_u64_pushes_immediate() {
         let mut state = state_with_frame(0);
         dispatch(&mut state, Bytecode::LdU64(0xDEAD_BEEF_CAFE_BABE)).expect("ok");
-        assert_eq!(top(&state), Value::U64(0xDEAD_BEEF_CAFE_BABE));
+        assert_eq!(top(&state), RuntimeValue::U64(0xDEAD_BEEF_CAFE_BABE));
     }
 
     #[test]
@@ -1343,7 +1364,7 @@ mod tests {
         let mut state = state_with_frame(0);
         let v = 0x1234_5678_9ABC_DEF0_FEDC_BA98_7654_3210u128;
         dispatch(&mut state, Bytecode::LdU128(Box::new(v))).expect("ok");
-        assert_eq!(top(&state), Value::U128(v));
+        assert_eq!(top(&state), RuntimeValue::U128(v));
     }
 
     /// Whitepaper §6.2.1.4 (verbatim): "Push a `U256` constant."
@@ -1355,7 +1376,7 @@ mod tests {
         bytes[0] = 0x42;
         let u = FormatU256::from_le_bytes(bytes);
         dispatch(&mut state, Bytecode::LdU256(Box::new(u))).expect("ok");
-        assert_eq!(top(&state), Value::U256(bytes));
+        assert_eq!(top(&state), RuntimeValue::U256(bytes));
     }
 
     /// Whitepaper §6.2.1.4 (verbatim): "Push `true` onto the stack."
@@ -1363,7 +1384,7 @@ mod tests {
     fn ld_true_pushes_bool() {
         let mut state = state_with_frame(0);
         dispatch(&mut state, Bytecode::LdTrue).expect("ok");
-        assert_eq!(top(&state), Value::Bool(true));
+        assert_eq!(top(&state), RuntimeValue::Bool(true));
     }
 
     /// Whitepaper §6.2.1.4 (verbatim): "Push `false` onto the stack."
@@ -1371,7 +1392,7 @@ mod tests {
     fn ld_false_pushes_bool() {
         let mut state = state_with_frame(0);
         dispatch(&mut state, Bytecode::LdFalse).expect("ok");
-        assert_eq!(top(&state), Value::Bool(false));
+        assert_eq!(top(&state), RuntimeValue::Bool(false));
     }
 
     /// LdConst defers to 5/6.2c (needs constant pool access).
@@ -1392,9 +1413,9 @@ mod tests {
     #[test]
     fn cast_u8_same_type_succeeds() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U8(42)]);
+        push_stack(&mut state, vec![RuntimeValue::U8(42)]);
         dispatch(&mut state, Bytecode::CastU8).expect("ok");
-        assert_eq!(top(&state), Value::U8(42));
+        assert_eq!(top(&state), RuntimeValue::U8(42));
     }
 
     /// Whitepaper §6.2.1.9 (verbatim): "*Widening cast* ... always
@@ -1403,9 +1424,9 @@ mod tests {
     #[test]
     fn cast_u64_widening_from_u8_succeeds() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U8(42)]);
+        push_stack(&mut state, vec![RuntimeValue::U8(42)]);
         dispatch(&mut state, Bytecode::CastU64).expect("ok");
-        assert_eq!(top(&state), Value::U64(42));
+        assert_eq!(top(&state), RuntimeValue::U64(42));
     }
 
     /// Whitepaper §6.2.1.9 (verbatim): "*Narrowing cast* ...
@@ -1414,9 +1435,9 @@ mod tests {
     #[test]
     fn cast_u8_narrowing_in_range_succeeds() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(255)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(255)]);
         dispatch(&mut state, Bytecode::CastU8).expect("ok");
-        assert_eq!(top(&state), Value::U8(255));
+        assert_eq!(top(&state), RuntimeValue::U8(255));
     }
 
     /// Whitepaper §6.2.1.9 (verbatim): "[Narrowing cast] otherwise
@@ -1424,7 +1445,7 @@ mod tests {
     #[test]
     fn cast_u8_narrowing_out_of_range_aborts() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(256)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(256)]);
         let err = dispatch(&mut state, Bytecode::CastU8).expect_err("aborts");
         assert!(matches!(
             err,
@@ -1437,19 +1458,19 @@ mod tests {
     #[test]
     fn cast_u256_widening_from_u128_succeeds() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U128(u128::MAX)]);
+        push_stack(&mut state, vec![RuntimeValue::U128(u128::MAX)]);
         dispatch(&mut state, Bytecode::CastU256).expect("ok");
         let u = FormatU256::from_u128(u128::MAX);
-        assert_eq!(top(&state), Value::U256(u.to_le_bytes()));
+        assert_eq!(top(&state), RuntimeValue::U256(u.to_le_bytes()));
     }
 
     #[test]
     fn cast_u128_narrowing_from_u256_in_range() {
         let mut state = state_with_frame(0);
         let u = FormatU256::from_u128(u128::MAX);
-        push_stack(&mut state, vec![Value::U256(u.to_le_bytes())]);
+        push_stack(&mut state, vec![RuntimeValue::U256(u.to_le_bytes())]);
         dispatch(&mut state, Bytecode::CastU128).expect("ok");
-        assert_eq!(top(&state), Value::U128(u128::MAX));
+        assert_eq!(top(&state), RuntimeValue::U128(u128::MAX));
     }
 
     #[test]
@@ -1457,7 +1478,7 @@ mod tests {
         let mut state = state_with_frame(0);
         let mut bytes = [0u8; 32];
         bytes[16] = 1; // value 2^128
-        push_stack(&mut state, vec![Value::U256(bytes)]);
+        push_stack(&mut state, vec![RuntimeValue::U256(bytes)]);
         let err = dispatch(&mut state, Bytecode::CastU128).expect_err("aborts");
         assert!(matches!(
             err,
@@ -1470,17 +1491,17 @@ mod tests {
     #[test]
     fn cast_u16_pinned() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U8(42)]);
+        push_stack(&mut state, vec![RuntimeValue::U8(42)]);
         dispatch(&mut state, Bytecode::CastU16).expect("ok");
-        assert_eq!(top(&state), Value::U16(42));
+        assert_eq!(top(&state), RuntimeValue::U16(42));
     }
 
     #[test]
     fn cast_u32_pinned() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(0xFFFF)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(0xFFFF)]);
         dispatch(&mut state, Bytecode::CastU32).expect("ok");
-        assert_eq!(top(&state), Value::U32(0xFFFF));
+        assert_eq!(top(&state), RuntimeValue::U32(0xFFFF));
     }
 
     // ============================================================
@@ -1495,12 +1516,12 @@ mod tests {
         state
             .top_frame_mut()
             .expect("frame")
-            .st_loc(0, Value::U64(7))
+            .st_loc(0, RuntimeValue::U64(7))
             .expect("ok");
         dispatch(&mut state, Bytecode::CopyLoc(0)).expect("ok");
-        assert_eq!(top(&state), Value::U64(7));
+        assert_eq!(top(&state), RuntimeValue::U64(7));
         // Local still occupied (CopyLoc clones, not moves).
-        assert!(state.top_frame().expect("frame").locals[0].is_some());
+        assert!(state.top_frame().expect("frame").locals.borrow()[0].is_some());
     }
 
     /// Whitepaper §6.2.1.4 (verbatim): "Move the local at
@@ -1511,12 +1532,12 @@ mod tests {
         state
             .top_frame_mut()
             .expect("frame")
-            .st_loc(0, Value::U64(7))
+            .st_loc(0, RuntimeValue::U64(7))
             .expect("ok");
         dispatch(&mut state, Bytecode::MoveLoc(0)).expect("ok");
-        assert_eq!(top(&state), Value::U64(7));
+        assert_eq!(top(&state), RuntimeValue::U64(7));
         // Local now empty (MoveLoc takes).
-        assert!(state.top_frame().expect("frame").locals[0].is_none());
+        assert!(state.top_frame().expect("frame").locals.borrow()[0].is_none());
     }
 
     /// Whitepaper §6.2.1.4 (verbatim): "Pop the stack top and
@@ -1524,12 +1545,12 @@ mod tests {
     #[test]
     fn st_loc_stores_stack_top_to_local() {
         let mut state = state_with_frame(2);
-        push_stack(&mut state, vec![Value::U64(99)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(99)]);
         dispatch(&mut state, Bytecode::StLoc(0)).expect("ok");
         assert_eq!(stack_len(&state), 0);
         assert_eq!(
-            state.top_frame().expect("frame").locals[0],
-            Some(Value::U64(99))
+            state.top_frame().expect("frame").locals.borrow()[0],
+            Some(RuntimeValue::U64(99))
         );
     }
 
@@ -1571,15 +1592,21 @@ mod tests {
     #[test]
     fn add_u64_within_range() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(7), Value::U64(11)]);
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::U64(7), RuntimeValue::U64(11)],
+        );
         dispatch(&mut state, Bytecode::Add).expect("ok");
-        assert_eq!(top(&state), Value::U64(18));
+        assert_eq!(top(&state), RuntimeValue::U64(18));
     }
 
     #[test]
     fn add_u64_overflow_aborts() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(u64::MAX), Value::U64(1)]);
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::U64(u64::MAX), RuntimeValue::U64(1)],
+        );
         let err = dispatch(&mut state, Bytecode::Add).expect_err("aborts");
         assert!(matches!(
             err,
@@ -1592,7 +1619,7 @@ mod tests {
     #[test]
     fn sub_u64_underflow_aborts() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(0), Value::U64(1)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(0), RuntimeValue::U64(1)]);
         let err = dispatch(&mut state, Bytecode::Sub).expect_err("aborts");
         assert!(matches!(
             err,
@@ -1605,7 +1632,7 @@ mod tests {
     #[test]
     fn mul_u8_overflow_aborts() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U8(255), Value::U8(2)]);
+        push_stack(&mut state, vec![RuntimeValue::U8(255), RuntimeValue::U8(2)]);
         let err = dispatch(&mut state, Bytecode::Mul).expect_err("aborts");
         assert!(matches!(
             err,
@@ -1620,7 +1647,10 @@ mod tests {
     #[test]
     fn div_by_zero_aborts() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(100), Value::U64(0)]);
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::U64(100), RuntimeValue::U64(0)],
+        );
         let err = dispatch(&mut state, Bytecode::Div).expect_err("aborts");
         assert!(matches!(
             err,
@@ -1633,7 +1663,10 @@ mod tests {
     #[test]
     fn rem_by_zero_aborts() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(100), Value::U64(0)]);
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::U64(100), RuntimeValue::U64(0)],
+        );
         let err = dispatch(&mut state, Bytecode::Mod).expect_err("aborts");
         assert!(matches!(
             err,
@@ -1646,17 +1679,23 @@ mod tests {
     #[test]
     fn div_normal() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(100), Value::U64(7)]);
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::U64(100), RuntimeValue::U64(7)],
+        );
         dispatch(&mut state, Bytecode::Div).expect("ok");
-        assert_eq!(top(&state), Value::U64(14));
+        assert_eq!(top(&state), RuntimeValue::U64(14));
     }
 
     #[test]
     fn mod_normal() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(100), Value::U64(7)]);
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::U64(100), RuntimeValue::U64(7)],
+        );
         dispatch(&mut state, Bytecode::Mod).expect("ok");
-        assert_eq!(top(&state), Value::U64(2));
+        assert_eq!(top(&state), RuntimeValue::U64(2));
     }
 
     /// U256 arithmetic via adamant_bytecode_format::U256
@@ -1668,11 +1707,14 @@ mod tests {
         let b = FormatU256::from_u64(11);
         push_stack(
             &mut state,
-            vec![Value::U256(a.to_le_bytes()), Value::U256(b.to_le_bytes())],
+            vec![
+                RuntimeValue::U256(a.to_le_bytes()),
+                RuntimeValue::U256(b.to_le_bytes()),
+            ],
         );
         dispatch(&mut state, Bytecode::Add).expect("ok");
         let expected = FormatU256::from_u64(18);
-        assert_eq!(top(&state), Value::U256(expected.to_le_bytes()));
+        assert_eq!(top(&state), RuntimeValue::U256(expected.to_le_bytes()));
     }
 
     #[test]
@@ -1683,8 +1725,8 @@ mod tests {
         push_stack(
             &mut state,
             vec![
-                Value::U256(max.to_le_bytes()),
-                Value::U256(one.to_le_bytes()),
+                RuntimeValue::U256(max.to_le_bytes()),
+                RuntimeValue::U256(one.to_le_bytes()),
             ],
         );
         let err = dispatch(&mut state, Bytecode::Add).expect_err("aborts");
@@ -1701,7 +1743,7 @@ mod tests {
     #[test]
     fn add_mixed_width_invariant_violation() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(1), Value::U32(1)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(1), RuntimeValue::U32(1)]);
         let err = dispatch(&mut state, Bytecode::Add).expect_err("err");
         assert!(matches!(
             err,
@@ -1718,50 +1760,65 @@ mod tests {
     #[test]
     fn bitand_u64() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(0xFF), Value::U64(0x0F)]);
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::U64(0xFF), RuntimeValue::U64(0x0F)],
+        );
         dispatch(&mut state, Bytecode::BitAnd).expect("ok");
-        assert_eq!(top(&state), Value::U64(0x0F));
+        assert_eq!(top(&state), RuntimeValue::U64(0x0F));
     }
 
     #[test]
     fn bitor_u64() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(0xF0), Value::U64(0x0F)]);
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::U64(0xF0), RuntimeValue::U64(0x0F)],
+        );
         dispatch(&mut state, Bytecode::BitOr).expect("ok");
-        assert_eq!(top(&state), Value::U64(0xFF));
+        assert_eq!(top(&state), RuntimeValue::U64(0xFF));
     }
 
     #[test]
     fn xor_u64() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(0xFF), Value::U64(0x0F)]);
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::U64(0xFF), RuntimeValue::U64(0x0F)],
+        );
         dispatch(&mut state, Bytecode::Xor).expect("ok");
-        assert_eq!(top(&state), Value::U64(0xF0));
+        assert_eq!(top(&state), RuntimeValue::U64(0xF0));
     }
 
     /// Whitepaper §6.2.1.4 (verbatim): "Logical OR / AND / NOT."
     #[test]
     fn and_bool() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::Bool(true), Value::Bool(false)]);
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::Bool(true), RuntimeValue::Bool(false)],
+        );
         dispatch(&mut state, Bytecode::And).expect("ok");
-        assert_eq!(top(&state), Value::Bool(false));
+        assert_eq!(top(&state), RuntimeValue::Bool(false));
     }
 
     #[test]
     fn or_bool() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::Bool(true), Value::Bool(false)]);
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::Bool(true), RuntimeValue::Bool(false)],
+        );
         dispatch(&mut state, Bytecode::Or).expect("ok");
-        assert_eq!(top(&state), Value::Bool(true));
+        assert_eq!(top(&state), RuntimeValue::Bool(true));
     }
 
     #[test]
     fn not_bool() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::Bool(true)]);
+        push_stack(&mut state, vec![RuntimeValue::Bool(true)]);
         dispatch(&mut state, Bytecode::Not).expect("ok");
-        assert_eq!(top(&state), Value::Bool(false));
+        assert_eq!(top(&state), RuntimeValue::Bool(false));
     }
 
     // ============================================================
@@ -1774,33 +1831,33 @@ mod tests {
     #[test]
     fn lt_u64() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(1), Value::U64(2)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(1), RuntimeValue::U64(2)]);
         dispatch(&mut state, Bytecode::Lt).expect("ok");
-        assert_eq!(top(&state), Value::Bool(true));
+        assert_eq!(top(&state), RuntimeValue::Bool(true));
     }
 
     #[test]
     fn gt_u64() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(2), Value::U64(1)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(2), RuntimeValue::U64(1)]);
         dispatch(&mut state, Bytecode::Gt).expect("ok");
-        assert_eq!(top(&state), Value::Bool(true));
+        assert_eq!(top(&state), RuntimeValue::Bool(true));
     }
 
     #[test]
     fn le_u64_equal() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(5), Value::U64(5)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(5), RuntimeValue::U64(5)]);
         dispatch(&mut state, Bytecode::Le).expect("ok");
-        assert_eq!(top(&state), Value::Bool(true));
+        assert_eq!(top(&state), RuntimeValue::Bool(true));
     }
 
     #[test]
     fn ge_u64_equal() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(5), Value::U64(5)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(5), RuntimeValue::U64(5)]);
         dispatch(&mut state, Bytecode::Ge).expect("ok");
-        assert_eq!(top(&state), Value::Bool(true));
+        assert_eq!(top(&state), RuntimeValue::Bool(true));
     }
 
     /// Whitepaper §6.2.1.9 (verbatim): "comparison is well-defined
@@ -1816,13 +1873,13 @@ mod tests {
         push_stack(
             &mut state,
             vec![
-                Value::U256(one.to_le_bytes()),
-                Value::U256(five_twelve.to_le_bytes()),
+                RuntimeValue::U256(one.to_le_bytes()),
+                RuntimeValue::U256(five_twelve.to_le_bytes()),
             ],
         );
         dispatch(&mut state, Bytecode::Lt).expect("ok");
         // 1 < 512 under unsigned ordering.
-        assert_eq!(top(&state), Value::Bool(true));
+        assert_eq!(top(&state), RuntimeValue::Bool(true));
     }
 
     /// Whitepaper §6.2.1.9 (verbatim): "byte-identity is computed
@@ -1831,33 +1888,36 @@ mod tests {
     #[test]
     fn eq_u64_equal() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(7), Value::U64(7)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(7), RuntimeValue::U64(7)]);
         dispatch(&mut state, Bytecode::Eq).expect("ok");
-        assert_eq!(top(&state), Value::Bool(true));
+        assert_eq!(top(&state), RuntimeValue::Bool(true));
     }
 
     #[test]
     fn eq_u64_unequal() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(7), Value::U64(8)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(7), RuntimeValue::U64(8)]);
         dispatch(&mut state, Bytecode::Eq).expect("ok");
-        assert_eq!(top(&state), Value::Bool(false));
+        assert_eq!(top(&state), RuntimeValue::Bool(false));
     }
 
     #[test]
     fn neq_u64_unequal() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(7), Value::U64(8)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(7), RuntimeValue::U64(8)]);
         dispatch(&mut state, Bytecode::Neq).expect("ok");
-        assert_eq!(top(&state), Value::Bool(true));
+        assert_eq!(top(&state), RuntimeValue::Bool(true));
     }
 
     #[test]
     fn eq_bool() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::Bool(true), Value::Bool(true)]);
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::Bool(true), RuntimeValue::Bool(true)],
+        );
         dispatch(&mut state, Bytecode::Eq).expect("ok");
-        assert_eq!(top(&state), Value::Bool(true));
+        assert_eq!(top(&state), RuntimeValue::Bool(true));
     }
 
     /// Verifier-residual: comparison on mismatched types surfaces
@@ -1865,7 +1925,7 @@ mod tests {
     #[test]
     fn lt_mixed_width_invariant_violation() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(1), Value::U32(1)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(1), RuntimeValue::U32(1)]);
         let err = dispatch(&mut state, Bytecode::Lt).expect_err("err");
         assert!(matches!(
             err,
@@ -1886,7 +1946,7 @@ mod tests {
     #[test]
     fn shl_u8_at_bit_width_aborts() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U8(1), Value::U8(8)]);
+        push_stack(&mut state, vec![RuntimeValue::U8(1), RuntimeValue::U8(8)]);
         let err = dispatch(&mut state, Bytecode::Shl).expect_err("aborts");
         assert!(matches!(
             err,
@@ -1899,7 +1959,7 @@ mod tests {
     #[test]
     fn shl_u64_at_bit_width_aborts() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(1), Value::U8(64)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(1), RuntimeValue::U8(64)]);
         let err = dispatch(&mut state, Bytecode::Shl).expect_err("aborts");
         assert!(matches!(
             err,
@@ -1912,7 +1972,10 @@ mod tests {
     #[test]
     fn shl_u128_at_bit_width_aborts() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U128(1), Value::U8(128)]);
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::U128(1), RuntimeValue::U8(128)],
+        );
         let err = dispatch(&mut state, Bytecode::Shl).expect_err("aborts");
         assert!(matches!(
             err,
@@ -1925,17 +1988,20 @@ mod tests {
     #[test]
     fn shl_u64_normal() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(1), Value::U8(8)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(1), RuntimeValue::U8(8)]);
         dispatch(&mut state, Bytecode::Shl).expect("ok");
-        assert_eq!(top(&state), Value::U64(256));
+        assert_eq!(top(&state), RuntimeValue::U64(256));
     }
 
     #[test]
     fn shr_u64_normal() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(256), Value::U8(8)]);
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::U64(256), RuntimeValue::U8(8)],
+        );
         dispatch(&mut state, Bytecode::Shr).expect("ok");
-        assert_eq!(top(&state), Value::U64(1));
+        assert_eq!(top(&state), RuntimeValue::U64(1));
     }
 
     /// Whitepaper §6.2.1.9 (verbatim): "For operand type `u256`,
@@ -1947,13 +2013,13 @@ mod tests {
         let one = FormatU256::from_u8(1);
         push_stack(
             &mut state,
-            vec![Value::U256(one.to_le_bytes()), Value::U8(255)],
+            vec![RuntimeValue::U256(one.to_le_bytes()), RuntimeValue::U8(255)],
         );
         dispatch(&mut state, Bytecode::Shl).expect("ok");
         // Result: bit 255 set.
         let mut expected_bytes = [0u8; 32];
         expected_bytes[31] = 0x80;
-        assert_eq!(top(&state), Value::U256(expected_bytes));
+        assert_eq!(top(&state), RuntimeValue::U256(expected_bytes));
     }
 
     // ============================================================
@@ -1975,7 +2041,7 @@ mod tests {
     #[test]
     fn abort_returns_error() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(42)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(42)]);
         let err = dispatch(&mut state, Bytecode::Abort).expect_err("aborts");
         // At 5/6.2b the abort placeholder uses Overflow; this is
         // a known shape that 5/6.5 refines.
@@ -2034,7 +2100,8 @@ mod tests {
     #[test]
     fn run_trivial_ret_completes() {
         let mut state = state_with_frame(0);
-        let result = run(&mut state, |_h, _pc| {
+        let module = empty_module();
+        let result = run(&mut state, &module, |_h, _pc| {
             Some(BytecodeInstruction::Inherited(Bytecode::Ret))
         });
         assert!(result.is_ok());
@@ -2050,7 +2117,7 @@ mod tests {
         dispatch(&mut state, Bytecode::LdU64(7)).expect("ok");
         dispatch(&mut state, Bytecode::LdU64(11)).expect("ok");
         dispatch(&mut state, Bytecode::Add).expect("ok");
-        assert_eq!(top(&state), Value::U64(18));
+        assert_eq!(top(&state), RuntimeValue::U64(18));
     }
 
     // ============================================================
@@ -2063,7 +2130,10 @@ mod tests {
     #[test]
     fn variant_audit_arithmetic_error_overflow() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(u64::MAX), Value::U64(1)]);
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::U64(u64::MAX), RuntimeValue::U64(1)],
+        );
         let err = dispatch(&mut state, Bytecode::Add).expect_err("err");
         assert!(matches!(
             err,
@@ -2077,7 +2147,7 @@ mod tests {
     #[test]
     fn variant_audit_arithmetic_error_underflow() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(0), Value::U64(1)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(0), RuntimeValue::U64(1)]);
         let err = dispatch(&mut state, Bytecode::Sub).expect_err("err");
         assert!(matches!(
             err,
@@ -2091,7 +2161,7 @@ mod tests {
     #[test]
     fn variant_audit_arithmetic_error_division_by_zero() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(1), Value::U64(0)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(1), RuntimeValue::U64(0)]);
         let err = dispatch(&mut state, Bytecode::Div).expect_err("err");
         assert!(matches!(
             err,
@@ -2105,7 +2175,7 @@ mod tests {
     #[test]
     fn variant_audit_arithmetic_error_shift_amount_too_large() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U8(1), Value::U8(8)]);
+        push_stack(&mut state, vec![RuntimeValue::U8(1), RuntimeValue::U8(8)]);
         let err = dispatch(&mut state, Bytecode::Shl).expect_err("err");
         assert!(matches!(
             err,
@@ -2119,7 +2189,7 @@ mod tests {
     #[test]
     fn variant_audit_arithmetic_error_cast_not_representable() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(256)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(256)]);
         let err = dispatch(&mut state, Bytecode::CastU8).expect_err("err");
         assert!(matches!(
             err,
@@ -2164,7 +2234,7 @@ mod tests {
     #[test]
     fn variant_audit_invariant_type_mismatch_on_stack() {
         let mut state = state_with_frame(0);
-        push_stack(&mut state, vec![Value::U64(1)]);
+        push_stack(&mut state, vec![RuntimeValue::U64(1)]);
         let err = dispatch(&mut state, Bytecode::BrTrue(0)).expect_err("err");
         assert!(matches!(
             err,
