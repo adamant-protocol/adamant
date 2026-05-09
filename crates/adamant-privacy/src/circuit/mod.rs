@@ -50,6 +50,7 @@ pub mod merkle;
 pub mod note_commitment;
 pub mod nullifier;
 pub mod range_check;
+pub mod shielded_output;
 
 pub use merkle::{MerkleMembershipCircuit, MerkleMembershipPublicInputs, MerkleMembershipWitness};
 pub use note_commitment::{NoteCommitmentCircuit, NoteCommitmentWitness};
@@ -57,3 +58,4 @@ pub use nullifier::{
     NullifierCircuit, NullifierDomainTags, NullifierPublicInputs, NullifierWitness,
 };
 pub use range_check::{u64_to_bit_witnesses, RangeCheck64Circuit, RangeCheck64Witness};
+pub use shielded_output::{ShieldedOutputCircuit, ShieldedOutputWitness};
