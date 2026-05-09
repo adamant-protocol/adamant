@@ -69,11 +69,13 @@
 
 use blst::{
     blst_fp12, blst_fr, blst_fr_add, blst_fr_from_scalar, blst_fr_from_uint64, blst_fr_inverse,
-    blst_fr_mul, blst_fr_sub, blst_hash_to_g1, blst_lendian_from_scalar, blst_p1, blst_p1_affine,
-    blst_p1_affine_compress, blst_p1_affine_in_g1, blst_p1_to_affine, blst_p1_uncompress, blst_p2,
-    blst_p2_affine, blst_p2_affine_compress, blst_p2_affine_in_g2, blst_p2_from_affine,
-    blst_p2_mult, blst_p2_to_affine, blst_p2_uncompress, blst_scalar, blst_scalar_fr_check,
-    blst_scalar_from_bendian, blst_scalar_from_fr, BLS12_381_G2, BLST_ERROR,
+    blst_fr_mul, blst_fr_sub, blst_hash_to_g1, blst_lendian_from_scalar, blst_p1, blst_p1_add,
+    blst_p1_affine, blst_p1_affine_compress, blst_p1_affine_in_g1, blst_p1_cneg,
+    blst_p1_from_affine, blst_p1_generator, blst_p1_mult, blst_p1_to_affine, blst_p1_uncompress,
+    blst_p2, blst_p2_add, blst_p2_affine, blst_p2_affine_compress, blst_p2_affine_in_g2,
+    blst_p2_cneg, blst_p2_from_affine, blst_p2_mult, blst_p2_to_affine, blst_p2_uncompress,
+    blst_scalar, blst_scalar_fr_check, blst_scalar_from_bendian, blst_scalar_from_fr,
+    BLS12_381_G2, BLST_ERROR,
 };
 
 /// G₁ compressed encoding length: 48 bytes.
@@ -256,6 +258,95 @@ impl G1Point {
         }
         bytes
     }
+
+    /// The canonical BLS12-381 G₁ generator.
+    ///
+    /// Required by KZG (whitepaper §3.9.2) for the polynomial-
+    /// commitment formula `C = Σ p_i · g^{τ^i}` where `g` is the
+    /// G₁ generator and `g^{τ^i}` are the trusted-setup powers.
+    #[must_use]
+    pub fn generator() -> Self {
+        // SAFETY: blst_p1_generator returns a pointer to a static
+        // blst_p1 (the canonical BLS12-381 G₁ generator), valid for
+        // the lifetime of the program. We dereference into a Jacobian
+        // value and convert to affine on owned storage.
+        let mut p_aff = blst_p1_affine::default();
+        unsafe {
+            let p_jac = *blst_p1_generator();
+            blst_p1_to_affine(&raw mut p_aff, &raw const p_jac);
+        }
+        Self(p_aff)
+    }
+
+    /// Multiply this G₁ point by a scalar.
+    ///
+    /// Required by KZG (whitepaper §3.9.2): committing a polynomial
+    /// requires scalar-multiplying each `g^{τ^i}` setup point by the
+    /// corresponding polynomial coefficient.
+    #[must_use]
+    pub fn mul_scalar(&self, scalar: &Scalar) -> Self {
+        let scalar_le = scalar.to_bytes_le();
+        let mut point_jac = blst_p1::default();
+        let mut result_jac = blst_p1::default();
+        let mut result_aff = blst_p1_affine::default();
+        // SAFETY: blst_p1_from_affine reads `self.0`; blst_p1_mult
+        // reads `point_jac` and `SCALAR_BITS` bits from the
+        // 32-byte little-endian scalar pointer, writing to the owned
+        // `result_jac`; blst_p1_to_affine writes the affine form to
+        // `result_aff`.
+        unsafe {
+            blst_p1_from_affine(&raw mut point_jac, &raw const self.0);
+            blst_p1_mult(
+                &raw mut result_jac,
+                &raw const point_jac,
+                scalar_le.as_ptr(),
+                SCALAR_BITS,
+            );
+            blst_p1_to_affine(&raw mut result_aff, &raw const result_jac);
+        }
+        Self(result_aff)
+    }
+
+    /// Add two G₁ points.
+    #[must_use]
+    pub fn add(&self, other: &Self) -> Self {
+        let mut a_jac = blst_p1::default();
+        let mut b_jac = blst_p1::default();
+        let mut sum_jac = blst_p1::default();
+        let mut sum_aff = blst_p1_affine::default();
+        // SAFETY: each call reads from owned local values and writes
+        // to owned local values. blst_p1_add handles the Jacobian
+        // addition; blst_p1_to_affine converts the result.
+        unsafe {
+            blst_p1_from_affine(&raw mut a_jac, &raw const self.0);
+            blst_p1_from_affine(&raw mut b_jac, &raw const other.0);
+            blst_p1_add(&raw mut sum_jac, &raw const a_jac, &raw const b_jac);
+            blst_p1_to_affine(&raw mut sum_aff, &raw const sum_jac);
+        }
+        Self(sum_aff)
+    }
+
+    /// Negate this G₁ point.
+    #[must_use]
+    pub fn negate(&self) -> Self {
+        let mut p_jac = blst_p1::default();
+        let mut p_aff = blst_p1_affine::default();
+        // SAFETY: blst_p1_cneg negates the Jacobian point in-place
+        // when the boolean flag is true; blst_p1_to_affine writes
+        // the affine form to owned local storage.
+        unsafe {
+            blst_p1_from_affine(&raw mut p_jac, &raw const self.0);
+            blst_p1_cneg(&raw mut p_jac, true);
+            blst_p1_to_affine(&raw mut p_aff, &raw const p_jac);
+        }
+        Self(p_aff)
+    }
+
+    /// Subtract `other` from this G₁ point: `self − other`.
+    #[must_use]
+    pub fn sub(&self, other: &Self) -> Self {
+        self.add(&other.negate())
+    }
 }
 
 // =====================================================================
@@ -308,6 +399,45 @@ impl G2Point {
             blst_p2_affine_compress(bytes.as_mut_ptr(), &raw const self.0);
         }
         bytes
+    }
+
+    /// Add two G₂ points.
+    #[must_use]
+    pub fn add(&self, other: &Self) -> Self {
+        let mut a_jac = blst_p2::default();
+        let mut b_jac = blst_p2::default();
+        let mut sum_jac = blst_p2::default();
+        let mut sum_aff = blst_p2_affine::default();
+        // SAFETY: each call reads from owned local values and writes
+        // to owned local values.
+        unsafe {
+            blst_p2_from_affine(&raw mut a_jac, &raw const self.0);
+            blst_p2_from_affine(&raw mut b_jac, &raw const other.0);
+            blst_p2_add(&raw mut sum_jac, &raw const a_jac, &raw const b_jac);
+            blst_p2_to_affine(&raw mut sum_aff, &raw const sum_jac);
+        }
+        Self(sum_aff)
+    }
+
+    /// Negate this G₂ point.
+    #[must_use]
+    pub fn negate(&self) -> Self {
+        let mut p_jac = blst_p2::default();
+        let mut p_aff = blst_p2_affine::default();
+        // SAFETY: blst_p2_cneg negates the Jacobian point in-place;
+        // blst_p2_to_affine writes the affine form.
+        unsafe {
+            blst_p2_from_affine(&raw mut p_jac, &raw const self.0);
+            blst_p2_cneg(&raw mut p_jac, true);
+            blst_p2_to_affine(&raw mut p_aff, &raw const p_jac);
+        }
+        Self(p_aff)
+    }
+
+    /// Subtract `other` from this G₂ point: `self − other`.
+    #[must_use]
+    pub fn sub(&self, other: &Self) -> Self {
+        self.add(&other.negate())
     }
 
     /// Multiply this G₂ point by a scalar.
