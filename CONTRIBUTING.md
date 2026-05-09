@@ -1069,6 +1069,21 @@ Phases 1, 2, 4, and 5:
   content; rule-of-three pending). Closes the Phase 6
   plan-gate Poseidon-helper investigation.
 
+  Companion correction at the same amendment commit: the
+  original §3.3.3 paragraph said "57 partial rounds"; the
+  deployed Zcash Orchard P128Pow5T3 parameter is **56 partial
+  rounds** (chosen because an even partial-round count is
+  cheaper to construct in circuit). The 56-round value is
+  consensus-binding; 57 was a transcription error in the
+  original spec text, surfaced when the Phase 6.0 Poseidon
+  parameter-pin regression test (`p128pow5t3_matches_amended_spec_3_3_3`)
+  compared spec text against the upstream `halo2_poseidon`
+  library and tripped on the off-by-one. The §3.3.3 paragraph
+  carries an inline parenthetical noting the correction for
+  traceability. Spec-text-vs-deployed-library off-by-one
+  canonical pattern 1st instance — registered for forward
+  tracking; rule-of-three pending.
+
 The pattern is: the cost of pausing to verify is hours; the cost of
 shipping wrong constants compounds after genesis, when the protocol
 cannot be patched. Implementers who hit a question against the

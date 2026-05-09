@@ -1,0 +1,43 @@
+[package]
+name = "adamant-privacy"
+description = "Privacy layer per whitepaper §7. Phase 6 deliverable: note model, stealth addresses, shielded execution circuits, view keys, encrypted memos, anonymity-set hygiene."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+adamant-crypto = { path = "../adamant-crypto" }
+adamant-types = { path = "../adamant-types" }
+# Halo 2 ecosystem (zcash variant) — Cat C bridge per CLAUDE.md
+# §14.4 Decision 1. Pulls in:
+# - Poseidon hash on Pallas base field per whitepaper §3.3.3
+#   (post-amendment instance 31), used for note commitments
+#   (§7.1), nullifier derivation (§7.1.2), and GNCT Merkle hashes
+#   (§7.1.3).
+# - Pasta curves (Pallas / Vesta) for Halo 2 native arithmetic
+#   per §3.9.1.
+# - halo2_proofs is pulled transitively when validity-circuit
+#   work lands at Phase 6.8.
+#
+# The §14.4 Decision 1 posture (C1 / C2 / C3) is implicit-C3
+# (bounded-ecosystem treatment) for the interim. Phase 6.8 plan-
+# gate revisits whether to fork halo2_gadgets into adamant-halo2
+# (path C2) before validity circuits land. Phase 6.0–6.7 work
+# only consumes the Poseidon out-of-circuit primitive surface;
+# the deferral question doesn't block these sub-arcs.
+halo2_gadgets = { workspace = true }
+pasta_curves = { workspace = true }
+serde = { workspace = true }
+serde-big-array = { workspace = true }
+bcs = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }
+hex-literal = { workspace = true }
+
+[lints]
+workspace = true

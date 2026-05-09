@@ -17,6 +17,7 @@ members = [
     "crates/adamant-bytecode-format",
     "crates/adamant-crypto",
     "crates/adamant-crypto-blst-extra",
+    "crates/adamant-privacy",
     "crates/adamant-state",
     "crates/adamant-types",
     "crates/adamant-vm",
@@ -95,6 +96,14 @@ hkdf = { version = "=0.12.4", default-features = false }
 blake3 = "=1.8.5"
 # Poseidon for use inside Halo 2 circuits (whitepaper 3.3.3, 3.7.1).
 halo2_gadgets = { version = "0.3", default-features = false }
+# Pasta curves (Pallas / Vesta) per whitepaper §3.9.1. Pulled in
+# directly so adamant-privacy can name `pallas::Base` field-element
+# types at its API boundary (Poseidon hash inputs/outputs per the
+# §3.3.3 amendment instance 31). The version matches the transitive
+# pin from halo2_gadgets 0.3 → halo2_poseidon 0.1 → pasta_curves
+# 0.5; no version skew. Bounded-ecosystem treatment per CLAUDE.md
+# §14.4 Decision 1 (interim C3; revisited at Phase 6.8 plan-gate).
+pasta_curves = { version = "0.5", default-features = false, features = ["alloc"] }
 
 # Classical signatures (whitepaper 3.4.1)
 # ed25519-dalek: pinned exactly.
