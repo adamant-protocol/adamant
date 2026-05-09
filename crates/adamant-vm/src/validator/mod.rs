@@ -172,6 +172,7 @@ mod rule_03_privacy_consistency;
 mod rule_04_no_natives;
 mod rule_06_no_dynamic_dispatch;
 mod rule_07_privacy_circuit_in_shielded_only;
+pub mod upgrade_compatibility;
 // Rule 8 (bounded loops) is a verifier-level no-op per
 // §6.2.1.6 amendment 804d9db; the canonical architectural-
 // position pin lives in `rule_08_bounded_loops.rs`. No

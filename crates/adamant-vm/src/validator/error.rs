@@ -1242,6 +1242,19 @@ pub enum AdamantValidationError {
         /// instruction triggered the rejection).
         reason: PrivacyCircuitContextViolationReason,
     },
+
+    /// A module upgrade was rejected as incompatible with the
+    /// existing on-chain module per whitepaper §6.4.3.
+    ///
+    /// Phase 5/6.9 ships the structural compatibility checker at
+    /// [`crate::validator::upgrade_compatibility::check_compatibility`].
+    /// The wrapped [`UpgradeIncompatibleReason`] pins the specific
+    /// failure: removed public function, changed privacy
+    /// annotation, removed public type, changed type field count.
+    UpgradeIncompatible {
+        /// Sub-reason discriminator.
+        reason: crate::validator::upgrade_compatibility::UpgradeIncompatibleReason,
+    },
 }
 
 /// Whether a handle is a datatype handle or a function
@@ -2334,6 +2347,11 @@ impl core::fmt::Display for AdamantValidationError {
                  (offending instruction in function {} at offset {code_offset}): {reason} \
                  (whitepaper §6.2.1.6 Rule 7)",
                 calling_public_index.0, violating_function_index.0
+            ),
+            Self::UpgradeIncompatible { reason } => write!(
+                f,
+                "module upgrade incompatible with existing on-chain module: {reason:?} \
+                 (whitepaper §6.4.3)"
             ),
         }
     }

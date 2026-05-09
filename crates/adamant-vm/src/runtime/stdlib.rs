@@ -440,6 +440,106 @@ fn module_deploy(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
     Ok(())
 }
 
+/// `adamant::module::upgrade(module_id: vector<u8>, new_bytecode: vector<u8>): ()`
+///
+/// Upgrade an existing module to new bytecode per whitepaper
+/// §6.4.2. The flow:
+///
+/// 1. Pop `new_bytecode` and `module_id` args.
+/// 2. Load existing module object via `state_view`.
+/// 3. Check `adamant_state::can_upgrade_rules` — enforces the
+///    §6.4.2 mutability rules (Immutable rejected, Frozen
+///    rejected, etc.).
+/// 4. Validate new bytecode via `deploy_validate`.
+/// 5. Run §6.4.3 compatibility check via
+///    `validator::upgrade_compatibility::check_compatibility`.
+/// 6. Construct updated Module Object with new contents,
+///    incremented version, preserved owner/mutability/lifecycle.
+/// 7. Stage update via `state_buffer::record_update`.
+fn module_upgrade(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
+    let new_bytecode = pop_byte_vector(ctx)?;
+    let module_id_bytes = pop_byte_vector(ctx)?;
+    let module_id = object_id_from_bytes(&module_id_bytes)?;
+    let tx_ctx = ctx.tx_context.as_mut().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::NativeContextMissingTxContext,
+    })?;
+
+    // Load existing module object.
+    let existing_obj = load_object_for_mutation(tx_ctx, module_id)?;
+
+    // §6.4.2 mutability check.
+    adamant_state::can_upgrade_rules(&existing_obj).map_err(|_| VMError::InvariantViolation {
+        reason: InvariantViolationReason::TypeMismatchOnStack,
+    })?;
+
+    // Validate new bytecode via the same deploy_validate path.
+    let new_module = crate::validator::deploy_validate(
+        &new_bytecode,
+        tx_ctx.verifier_config,
+        tx_ctx.module_resolver,
+    )
+    .map_err(|e| VMError::ModuleDeploymentFailed { error: Box::new(e) })?;
+
+    // Deserialize the existing module's bytecode for §6.4.3
+    // compatibility check.
+    let old_module = crate::module_wire::adamant_deserialize(existing_obj.contents.as_bytes())
+        .map_err(|_| VMError::InvariantViolation {
+            reason: InvariantViolationReason::TypeMismatchOnStack,
+        })?;
+
+    // §6.4.3 compatibility check.
+    crate::validator::upgrade_compatibility::check_compatibility(&old_module, &new_module)
+        .map_err(|e| VMError::ModuleDeploymentFailed { error: Box::new(e) })?;
+
+    // Re-decode new mutability (preserved per §6.4.3 — mutability
+    // is upgrade-immutable; we decode from new metadata which the
+    // compatibility check ensured matches old).
+    let new_mutability = decode_mutability_from_metadata(&new_module)?;
+
+    // Construct updated Module Object.
+    let new_contents = adamant_types::Contents::from_bytes(&new_bytecode).map_err(|_| {
+        VMError::InvariantViolation {
+            reason: InvariantViolationReason::TypeMismatchOnStack,
+        }
+    })?;
+    let updated_obj = adamant_types::Object {
+        id: existing_obj.id,
+        type_id: existing_obj.type_id,
+        owner: existing_obj.owner,
+        mutability: new_mutability,
+        lifecycle: existing_obj.lifecycle,
+        contents: new_contents,
+        version: existing_obj.version + 1,
+        metadata: existing_obj.metadata,
+    };
+    tx_ctx.state_buffer.record_update(updated_obj);
+    Ok(())
+}
+
+/// `adamant::module::freeze(module_id: vector<u8>): ()`
+///
+/// Freeze an `UpgradeableUntilFrozen` module per whitepaper
+/// §6.4.2 + §5.4.1. Pre-freeze: lifecycle = Active, mutability =
+/// `UpgradeableUntilFrozen`. Post-freeze: lifecycle = Frozen;
+/// mutability is unchanged per §5.1.4 ("the declaration is
+/// itself immutable") but `can_upgrade_rules` now rejects via
+/// the lifecycle-frozen path.
+fn module_freeze_native(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
+    let module_id_bytes = pop_byte_vector(ctx)?;
+    let module_id = object_id_from_bytes(&module_id_bytes)?;
+    let tx_ctx = ctx.tx_context.as_mut().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::NativeContextMissingTxContext,
+    })?;
+    let mut module_obj = load_object_for_mutation(tx_ctx, module_id)?;
+    adamant_state::can_freeze(&module_obj).map_err(|_| VMError::InvariantViolation {
+        reason: InvariantViolationReason::TypeMismatchOnStack,
+    })?;
+    module_obj.lifecycle = adamant_types::Lifecycle::Frozen;
+    module_obj.version += 1;
+    tx_ctx.state_buffer.record_update(module_obj);
+    Ok(())
+}
+
 /// Genesis-fixed `TypeId` for the `adamant::module::Module` type
 /// per whitepaper §6.4.1 amendment.
 ///
@@ -695,11 +795,21 @@ pub fn genesis_native_registry() -> NativeRegistry {
         "duplicate registration: adamant::tx_context::gas_remaining"
     );
 
-    // adamant::module (Phase 5/6.8.C)
+    // adamant::module (Phase 5/6.8.C + 5/6.9)
     let prev = registry.register(key("module", "deploy"), module_deploy);
     debug_assert!(
         prev.is_none(),
         "duplicate registration: adamant::module::deploy"
+    );
+    let prev = registry.register(key("module", "upgrade"), module_upgrade);
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::module::upgrade"
+    );
+    let prev = registry.register(key("module", "freeze"), module_freeze_native);
+    debug_assert!(
+        prev.is_none(),
+        "duplicate registration: adamant::module::freeze"
     );
 
     // adamant::object (Phase 5/6.8.C)
@@ -762,9 +872,9 @@ mod tests {
     fn genesis_registry_has_expected_handler_count() {
         let registry = genesis_native_registry();
         // 2 hash + 2 signature + 3 address (5/6.8.B)
-        // + 3 tx_context + 1 module + 5 object (5/6.8.C)
-        // = 16 handlers.
-        assert_eq!(registry.len(), 16);
+        // + 3 tx_context + 3 module (deploy/upgrade/freeze) + 5 object (5/6.8.C + 5/6.9)
+        // = 18 handlers.
+        assert_eq!(registry.len(), 18);
     }
 
     #[test]
