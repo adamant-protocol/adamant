@@ -130,6 +130,18 @@ pub enum DispatchOutcome {
     /// [`Self::Call`] but resolves the function via
     /// `function_instantiations` pool.
     CallGeneric(adamant_bytecode_format::FunctionInstantiationIndex),
+    /// `Bytecode::Adamant(InvokeShielded(_))` was dispatched.
+    /// Same shape as [`Self::Call`] but the outer driver checks
+    /// the caller's privacy mode is [`PrivacyMode::Shielded`]
+    /// (residual binding for §6.2.1.6 Rule 7) and creates the
+    /// new frame with [`PrivacyMode::Shielded`] per whitepaper
+    /// §6.1.2.
+    InvokeShielded(adamant_bytecode_format::FunctionHandleIndex),
+    /// `Bytecode::Adamant(InvokeTransparent(_))` was dispatched.
+    /// Same shape as [`Self::InvokeShielded`] but with
+    /// [`PrivacyMode::Transparent`] for both the residual check
+    /// and the new frame's mode.
+    InvokeTransparent(adamant_bytecode_format::FunctionHandleIndex),
 }
 
 /// Dispatch a single instruction against the interpreter state.
@@ -177,13 +189,82 @@ pub fn dispatch_instruction(
     // contained handlers from 5/6.2b ignore it.
     match instruction {
         BytecodeInstruction::Inherited(opcode) => dispatch_inherited(opcode, state, module),
-        BytecodeInstruction::Adamant(_) => {
-            // Adamant-extension handlers land at sub-arc 5/6.3
-            // (non-privacy extensions) and 5/6.4 (privacy-circuit
-            // scaffold). Until then, the scaffold rejects.
+        BytecodeInstruction::Adamant(opcode) => dispatch_adamant(opcode, state),
+    }
+}
+
+/// Dispatch an Adamant-extension opcode per whitepaper §6.1.2 +
+/// §6.2.1.4 extension surface.
+///
+/// Phase 5/6.3 wires 7 of the 17 Adamant-extension handlers under
+/// the scope-bounded-by-infrastructure-availability principle:
+///
+/// - 2 frame-creation: `InvokeShielded`, `InvokeTransparent`
+///   (privacy-mode residual check + frame creation)
+/// - 2 hash: `Sha3_256` (§3.3.1), `Blake3` (§3.3.2)
+/// - 3 signature: `Ed25519Verify` (§3.4.1), `MlDsaVerify65`
+///   (§3.4.2), `BlsVerify` (§3.4.3)
+///
+/// Deferred to alongside their respective adamant-crypto extensions:
+/// - `MlDsaVerify87` — pending adamant-crypto ML-DSA-87 wrapper
+/// - `KzgCommit`, `KzgVerify` — pending adamant-crypto KZG impl
+///
+/// Deferred to 5/6.4 (privacy-circuit scaffold):
+/// - `GenerateProof`, `VerifyProof`, `RecursiveVerify`,
+///   `ReleaseSubViewKey`
+///
+/// Deferred to 5/6.5 (gas accounting):
+/// - `ChargeGas`, `RemainingGas`, `OutOfGas`
+///
+/// Deferred handlers surface `InvalidInstruction` (verifier-residual
+/// posture: the verifier admits these but the runtime backing isn't
+/// ready). Modules using deferred extensions cannot be deployed
+/// until the corresponding sub-arc lands the handler.
+#[allow(
+    clippy::too_many_lines,
+    reason = "single match on AdamantBytecode covers the full extension instruction set; per-handler arms are small but the count of branches is structurally large"
+)]
+fn dispatch_adamant(
+    opcode: &crate::bytecode::AdamantBytecode,
+    state: &mut InterpreterState,
+) -> Result<DispatchOutcome, VMError> {
+    use crate::bytecode::AdamantBytecode as AB;
+    match opcode {
+        // ---------- Frame-creation handlers (Phase 5/6.3) ----------
+        AB::InvokeShielded(handle) => {
+            let frame = top_frame_mut(state)?;
+            advance_pc(frame);
+            Ok(DispatchOutcome::InvokeShielded(*handle))
+        }
+        AB::InvokeTransparent(handle) => {
+            let frame = top_frame_mut(state)?;
+            advance_pc(frame);
+            Ok(DispatchOutcome::InvokeTransparent(*handle))
+        }
+
+        // ---------- Hash handlers (Phase 5/6.3) ----------
+        AB::Sha3_256 => dispatch_sha3_256(state),
+        AB::Blake3 => dispatch_blake3(state),
+
+        // ---------- Signature handlers (Phase 5/6.3) ----------
+        AB::Ed25519Verify => dispatch_ed25519_verify(state),
+        AB::MlDsaVerify65 => dispatch_ml_dsa_verify_65(state),
+        AB::BlsVerify => dispatch_bls_verify(state),
+
+        // ---------- Deferred handlers ----------
+        AB::MlDsaVerify87
+        | AB::KzgCommit
+        | AB::KzgVerify
+        | AB::GenerateProof(_)
+        | AB::VerifyProof(_)
+        | AB::RecursiveVerify
+        | AB::ReleaseSubViewKey
+        | AB::ChargeGas(_)
+        | AB::RemainingGas(_)
+        | AB::OutOfGas => {
             let frame = state
                 .top_frame()
-                .expect("dispatch_instruction caller-contract: call stack must be non-empty");
+                .expect("dispatch_adamant caller-contract: call stack non-empty");
             Err(VMError::InvalidInstruction {
                 function_handle: frame.function_handle,
                 pc: frame.pc,
@@ -1225,6 +1306,17 @@ pub fn run(
             DispatchOutcome::Halt => return Ok(()),
             DispatchOutcome::Call(handle) => do_call(state, module, handle)?,
             DispatchOutcome::CallGeneric(idx) => do_call_generic(state, module, idx)?,
+            DispatchOutcome::InvokeShielded(handle) => {
+                do_call_with_privacy(state, module, handle, crate::runtime::PrivacyMode::Shielded)?;
+            }
+            DispatchOutcome::InvokeTransparent(handle) => {
+                do_call_with_privacy(
+                    state,
+                    module,
+                    handle,
+                    crate::runtime::PrivacyMode::Transparent,
+                )?;
+            }
         }
     }
 }
@@ -1703,6 +1795,147 @@ fn dispatch_variant_switch(
     Ok(DispatchOutcome::Continue)
 }
 
+// ============================================================================
+// Phase 5/6.3: Adamant-extension crypto dispatch helpers
+// ============================================================================
+
+/// Push a 32-byte hash digest onto the operand stack as a vector
+/// of `U8`s. Helper used by [`dispatch_sha3_256`] and
+/// [`dispatch_blake3`].
+fn push_hash_digest(frame: &mut Frame, digest: [u8; 32]) {
+    let elements: Vec<RuntimeValue> = digest.into_iter().map(RuntimeValue::U8).collect();
+    let container = crate::runtime::runtime_value::Container::from_vec(elements);
+    frame.push_value(RuntimeValue::Container(container));
+}
+
+/// `Bytecode::Adamant(Sha3_256)` handler.
+///
+/// Per whitepaper §3.3.1 (verbatim): "SHA3-256 (FIPS 202)
+/// produces a 256-bit (32-byte) hash output." Pops a `vector<u8>`
+/// from the operand stack, computes SHA3-256, pushes the digest as
+/// a 32-byte `vector<u8>`.
+fn dispatch_sha3_256(state: &mut InterpreterState) -> Result<DispatchOutcome, VMError> {
+    let frame = top_frame_mut(state)?;
+    let input = frame.pop_vec_u8()?;
+    let digest = adamant_crypto::hash::sha3_256_plain(&input);
+    push_hash_digest(frame, digest);
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::Adamant(Blake3)` handler.
+///
+/// Per whitepaper §3.3.2: BLAKE3 auxiliary hash. Same shape as
+/// `Sha3_256` — pops `vector<u8>`, pushes 32-byte digest.
+fn dispatch_blake3(state: &mut InterpreterState) -> Result<DispatchOutcome, VMError> {
+    let frame = top_frame_mut(state)?;
+    let input = frame.pop_vec_u8()?;
+    let digest = adamant_crypto::hash::blake3(&input);
+    push_hash_digest(frame, digest);
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::Adamant(Ed25519Verify)` handler.
+///
+/// Per whitepaper §3.4.1: Ed25519 classical signature verification.
+/// Stack: `..., pk: vector<u8>(32), msg: vector<u8>, sig: vector<u8>(64) -> ..., bool`.
+/// Pop order: signature (top), message, public key.
+///
+/// Returns `Bool(false)` for any verification failure (parse error
+/// or signature mismatch) per the constant-time discipline:
+/// distinguishing failure modes leaks information per §3.9.
+fn dispatch_ed25519_verify(state: &mut InterpreterState) -> Result<DispatchOutcome, VMError> {
+    let frame = top_frame_mut(state)?;
+    let sig_bytes = frame.pop_vec_u8()?;
+    let msg = frame.pop_vec_u8()?;
+    let pk_bytes = frame.pop_vec_u8()?;
+    let result = ed25519_verify_plain(&pk_bytes, &msg, &sig_bytes);
+    frame.push_value(RuntimeValue::Bool(result));
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// Helper: parse-and-verify Ed25519 returning `bool`.
+fn ed25519_verify_plain(pk_bytes: &[u8], msg: &[u8], sig_bytes: &[u8]) -> bool {
+    let Ok(pk_arr) = <[u8; 32]>::try_from(pk_bytes) else {
+        return false;
+    };
+    let Ok(sig_arr) = <[u8; 64]>::try_from(sig_bytes) else {
+        return false;
+    };
+    let Ok(pk) = adamant_crypto::sig_classical::VerifyingKey::from_bytes(&pk_arr) else {
+        return false;
+    };
+    let sig = adamant_crypto::sig_classical::Signature::from_bytes(&sig_arr);
+    pk.verify(msg, &sig).is_ok()
+}
+
+/// `Bytecode::Adamant(MlDsaVerify65)` handler.
+///
+/// Per whitepaper §3.4.2: ML-DSA-65 (FIPS 204 security level 3)
+/// post-quantum signature verification. Stack:
+/// `..., pk: vector<u8>(1952), msg: vector<u8>, sig: vector<u8>(3309) -> ..., bool`.
+fn dispatch_ml_dsa_verify_65(state: &mut InterpreterState) -> Result<DispatchOutcome, VMError> {
+    let frame = top_frame_mut(state)?;
+    let sig_bytes = frame.pop_vec_u8()?;
+    let msg = frame.pop_vec_u8()?;
+    let pk_bytes = frame.pop_vec_u8()?;
+    let result = ml_dsa_65_verify_plain(&pk_bytes, &msg, &sig_bytes);
+    frame.push_value(RuntimeValue::Bool(result));
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// Helper: parse-and-verify ML-DSA-65 returning `bool`.
+fn ml_dsa_65_verify_plain(pk_bytes: &[u8], msg: &[u8], sig_bytes: &[u8]) -> bool {
+    use adamant_crypto::sig_pq::{PUBLIC_KEY_BYTES, SIGNATURE_BYTES};
+    let Ok(pk_arr) = <[u8; PUBLIC_KEY_BYTES]>::try_from(pk_bytes) else {
+        return false;
+    };
+    let Ok(sig_arr) = <[u8; SIGNATURE_BYTES]>::try_from(sig_bytes) else {
+        return false;
+    };
+    let pk = adamant_crypto::sig_pq::VerifyingKey::from_bytes(&pk_arr);
+    let Ok(sig) = adamant_crypto::sig_pq::Signature::from_bytes(&sig_arr) else {
+        return false;
+    };
+    pk.verify(msg, &sig).is_ok()
+}
+
+/// `Bytecode::Adamant(BlsVerify)` handler.
+///
+/// Per whitepaper §3.4.3: BLS12-381 signature verification. Stack:
+/// `..., pk: vector<u8>(96), msg: vector<u8>, sig: vector<u8>(48) -> ..., bool`.
+fn dispatch_bls_verify(state: &mut InterpreterState) -> Result<DispatchOutcome, VMError> {
+    let frame = top_frame_mut(state)?;
+    let sig_bytes = frame.pop_vec_u8()?;
+    let msg = frame.pop_vec_u8()?;
+    let pk_bytes = frame.pop_vec_u8()?;
+    let result = bls_verify_plain(&pk_bytes, &msg, &sig_bytes);
+    frame.push_value(RuntimeValue::Bool(result));
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// Helper: parse-and-verify BLS12-381 returning `bool`.
+fn bls_verify_plain(pk_bytes: &[u8], msg: &[u8], sig_bytes: &[u8]) -> bool {
+    use adamant_crypto::bls::{PUBLIC_KEY_BYTES, SIGNATURE_BYTES};
+    let Ok(pk_arr) = <[u8; PUBLIC_KEY_BYTES]>::try_from(pk_bytes) else {
+        return false;
+    };
+    let Ok(sig_arr) = <[u8; SIGNATURE_BYTES]>::try_from(sig_bytes) else {
+        return false;
+    };
+    let Ok(pk) = adamant_crypto::bls::PublicKey::from_bytes(&pk_arr) else {
+        return false;
+    };
+    let Ok(sig) = adamant_crypto::bls::Signature::from_bytes(&sig_arr) else {
+        return false;
+    };
+    pk.verify(msg, &sig).is_ok()
+}
+
 /// Handle a `Bytecode::Call` outer-driver dispatch: resolve the
 /// function definition, pop arguments from the caller's stack,
 /// create a new [`Frame`] with arguments populated in locals
@@ -1752,9 +1985,13 @@ fn do_call(
     let total_locals = arg_count + body_locals_sig.0.len();
 
     // 5. Pop arguments from caller frame (top-of-stack is last arg).
+    //    Capture caller's privacy mode for inheritance (Bytecode::Call
+    //    does not transition modes — that's InvokeShielded /
+    //    InvokeTransparent's job).
     let caller_frame = state.top_frame_mut().ok_or(VMError::InvariantViolation {
         reason: InvariantViolationReason::StackUnderflow,
     })?;
+    let caller_mode = caller_frame.privacy_mode;
     let mut args: Vec<RuntimeValue> = Vec::with_capacity(arg_count);
     for _ in 0..arg_count {
         args.push(caller_frame.pop_value()?);
@@ -1762,14 +1999,91 @@ fn do_call(
     // Reverse so args[0] is the first parameter (was bottom of pop).
     args.reverse();
 
-    // 6. Create the new frame and populate parameter locals.
-    let new_frame = Frame::new(handle, total_locals);
+    // 6. Create the new frame inheriting caller's privacy mode and
+    //    populate parameter locals.
+    let new_frame = Frame::new_with_privacy(handle, total_locals, caller_mode);
     for (i, arg) in args.into_iter().enumerate() {
         let mut cell = new_frame.locals.borrow_mut();
         cell[i] = Some(arg);
     }
 
     // 7. Push the new frame onto the call stack.
+    state.push_frame(new_frame);
+    Ok(())
+}
+
+/// Frame-creation outer-driver helper for `InvokeShielded` /
+/// `InvokeTransparent`.
+///
+/// Same shape as [`do_call`] but verifies the caller's privacy mode
+/// matches `expected_mode` (residual binding for whitepaper
+/// §6.2.1.6 Rule 7) and creates the new frame with `expected_mode`.
+fn do_call_with_privacy(
+    state: &mut InterpreterState,
+    module: &AdamantCompiledModule,
+    handle: adamant_bytecode_format::FunctionHandleIndex,
+    expected_mode: crate::runtime::PrivacyMode,
+) -> Result<(), VMError> {
+    // Residual check: the verifier (§6.2.1.6 Rule 7) statically
+    // validates privacy consistency at deploy time. Reaching this
+    // case at runtime indicates either verifier unsoundness or
+    // post-deployment bytecode modification.
+    let caller_mode = state
+        .top_frame()
+        .ok_or(VMError::InvariantViolation {
+            reason: InvariantViolationReason::StackUnderflow,
+        })?
+        .privacy_mode;
+    if caller_mode != expected_mode {
+        return Err(VMError::InvariantViolation {
+            reason: InvariantViolationReason::PrivacyModeMismatchPostVerification,
+        });
+    }
+    // Resolve handle → arg_count + total_locals (same as do_call).
+    let func_handle =
+        module
+            .function_handles
+            .get(handle.0 as usize)
+            .ok_or(VMError::InvariantViolation {
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+            })?;
+    let params_sig = module
+        .signatures
+        .get(func_handle.parameters.0 as usize)
+        .ok_or(VMError::InvariantViolation {
+            reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+        })?;
+    let arg_count = params_sig.0.len();
+    let func_def = crate::runtime::module_helpers::resolve_function_def(module, handle)?;
+    let code = func_def.code.as_ref().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::DeprecatedOpcodePostVerification,
+    })?;
+    let body_locals_sig =
+        module
+            .signatures
+            .get(code.locals.0 as usize)
+            .ok_or(VMError::InvariantViolation {
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+            })?;
+    let total_locals = arg_count + body_locals_sig.0.len();
+
+    // Pop arguments + build new frame with the explicit privacy
+    // mode. Same shape as do_call's tail.
+    let caller_frame = state.top_frame_mut().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::StackUnderflow,
+    })?;
+    let mut args: Vec<RuntimeValue> = Vec::with_capacity(arg_count);
+    for _ in 0..arg_count {
+        args.push(caller_frame.pop_value()?);
+    }
+    args.reverse();
+
+    let new_frame = Frame::new_with_privacy(handle, total_locals, expected_mode);
+    for (i, arg) in args.into_iter().enumerate() {
+        let mut cell = new_frame.locals.borrow_mut();
+        cell[i] = Some(arg);
+    }
+
     state.push_frame(new_frame);
     Ok(())
 }

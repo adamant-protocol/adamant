@@ -33,6 +33,39 @@ use crate::runtime::runtime_value::{Container, RuntimeValue};
 /// pass proved the borrow lives.
 pub type LocalsCell = Rc<RefCell<Vec<Option<RuntimeValue>>>>;
 
+/// Privacy mode of the executing frame per whitepaper §6.1.2 +
+/// §6.2.1.6 Rule 7 (privacy consistency).
+///
+/// Adamant functions declare a privacy mode at the type level
+/// (`#[shielded]` or `#[transparent]`); the verifier (Rule 7)
+/// statically validates that callers' privacy modes match
+/// callees'. The runtime carries the residual binding via
+/// `Bytecode::Adamant(InvokeShielded | InvokeTransparent)` —
+/// these handlers verify the caller's privacy mode matches the
+/// callee's declared mode and abort with
+/// [`InvariantViolationReason::PrivacyModeMismatchPostVerification`]
+/// if not.
+///
+/// Per whitepaper §6.2.1.6 line 477 ("The runtime check carries
+/// the residual binding for any case the static analysis cannot
+/// fully verify"), `PrivacyMode` is the runtime-readable state
+/// the residual binding requires.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum PrivacyMode {
+    /// Frame is executing under shielded privacy semantics —
+    /// callers must invoke via `InvokeShielded` (or transition
+    /// from a `Transparent` caller through the verifier-allowed
+    /// shielded-entrypoint surface). State writes are
+    /// committed under shielded encryption per §6.1.2 + §7.
+    Shielded,
+    /// Frame is executing under transparent privacy semantics —
+    /// callers must invoke via `InvokeTransparent` from another
+    /// transparent caller, or through the verifier-allowed
+    /// transparent-entrypoint surface. State writes are
+    /// committed in cleartext per §6.1.2.
+    Transparent,
+}
+
 /// Per-function execution frame.
 ///
 /// Carries the abstract machine state per whitepaper §6.2.1.4's
@@ -74,11 +107,22 @@ pub struct Frame {
     /// instruction sequence per §6.2.1.5. Advances one instruction
     /// at a time except on branch instructions.
     pub pc: u16,
+    /// Privacy mode of this frame per whitepaper §6.1.2 +
+    /// §6.2.1.6 Rule 7. Set at frame creation by the calling
+    /// `InvokeShielded` / `InvokeTransparent` handler; immutable
+    /// for the lifetime of the frame. Top-level transaction
+    /// frames default to [`PrivacyMode::Transparent`] per the
+    /// transparent-entrypoint convention; shielded callees must
+    /// be reached via `InvokeShielded` invocations.
+    pub privacy_mode: PrivacyMode,
 }
 
 impl Frame {
     /// Construct a new frame for `function_handle` with `local_count`
-    /// total local slots, all initially unoccupied.
+    /// total local slots, all initially unoccupied. The frame's
+    /// privacy mode defaults to [`PrivacyMode::Transparent`] —
+    /// callers that need a shielded frame should construct via
+    /// [`Self::new_with_privacy`].
     ///
     /// Per whitepaper §6.2.1.4, function arguments are passed via
     /// the operand stack (popped one per parameter in declaration
@@ -89,11 +133,26 @@ impl Frame {
     /// transferring control.
     #[must_use]
     pub fn new(function_handle: FunctionHandleIndex, local_count: usize) -> Self {
+        Self::new_with_privacy(function_handle, local_count, PrivacyMode::Transparent)
+    }
+
+    /// Construct a new frame with an explicit privacy mode.
+    /// Used by `InvokeShielded` (passes [`PrivacyMode::Shielded`])
+    /// and `InvokeTransparent` (passes [`PrivacyMode::Transparent`]);
+    /// `Bytecode::Call` and `Bytecode::CallGeneric` inherit the
+    /// caller's privacy mode.
+    #[must_use]
+    pub fn new_with_privacy(
+        function_handle: FunctionHandleIndex,
+        local_count: usize,
+        privacy_mode: PrivacyMode,
+    ) -> Self {
         Self {
             function_handle,
             stack: Vec::new(),
             locals: Rc::new(RefCell::new(vec![None; local_count])),
             pc: 0,
+            privacy_mode,
         }
     }
 
@@ -240,6 +299,31 @@ impl Frame {
                 reason: InvariantViolationReason::TypeMismatchOnStack,
             }),
         }
+    }
+
+    /// Pop a `vector<u8>` from the operand stack as a `Vec<u8>`.
+    ///
+    /// Used by Adamant-extension hash and signature handlers
+    /// (`Sha3_256`, `Blake3`, `Ed25519Verify`, `MlDsaVerify65`,
+    /// `BlsVerify`). Pops a vector container, validates every
+    /// element is a `RuntimeValue::U8`, and returns the byte
+    /// sequence as an owned `Vec<u8>`.
+    pub fn pop_vec_u8(&mut self) -> Result<Vec<u8>, VMError> {
+        let rc = self.pop_vector()?;
+        let elements =
+            Rc::try_unwrap(rc).map_or_else(|rc| rc.borrow().clone(), RefCell::into_inner);
+        let mut bytes = Vec::with_capacity(elements.len());
+        for e in elements {
+            match e {
+                RuntimeValue::U8(b) => bytes.push(b),
+                _ => {
+                    return Err(VMError::InvariantViolation {
+                        reason: InvariantViolationReason::TypeMismatchOnStack,
+                    })
+                }
+            }
+        }
+        Ok(bytes)
     }
 
     /// Pop a [`crate::runtime::Reference`] from the operand stack.

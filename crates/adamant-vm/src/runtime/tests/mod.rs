@@ -15,6 +15,7 @@
     reason = "test fixture patterns + verbatim spec quotes; same posture as Phase 5/6.2b interpreter.rs::tests"
 )]
 
+mod adamant_extensions;
 mod struct_ops;
 mod variant_ops;
 mod vector_ops;

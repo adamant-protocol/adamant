@@ -91,7 +91,7 @@ pub(in crate::runtime) mod test_helpers;
 mod tests;
 
 pub use error::{ArithmeticErrorReason, InvariantViolationReason, VMError};
-pub use frame::Frame;
+pub use frame::{Frame, PrivacyMode};
 pub use interpreter::{DispatchOutcome, InterpreterState};
 pub use runtime_value::{
     compare_unsigned, Container, Reference, RuntimeStructValue, RuntimeValue, RuntimeVariantValue,
