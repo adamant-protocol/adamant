@@ -57,9 +57,10 @@ pub mod stealth;
 pub mod view_key;
 
 pub use circuit::{
-    MerkleMembershipCircuit, MerkleMembershipPublicInputs, MerkleMembershipWitness,
-    NoteCommitmentCircuit, NoteCommitmentWitness, NullifierCircuit, NullifierDomainTags,
-    NullifierPublicInputs, NullifierWitness,
+    u64_to_bit_witnesses, MerkleMembershipCircuit, MerkleMembershipPublicInputs,
+    MerkleMembershipWitness, NoteCommitmentCircuit, NoteCommitmentWitness, NullifierCircuit,
+    NullifierDomainTags, NullifierPublicInputs, NullifierWitness, RangeCheck64Circuit,
+    RangeCheck64Witness,
 };
 pub use encrypted_note::{
     decapsulate_for_recipient, decrypt_note_for_recipient, encapsulate_for_recipient,
