@@ -32,7 +32,7 @@ pasta_curves = { workspace = true }
 # `ff` and `group` are the upstream forks' public-trait surface
 # (`ff::PrimeField`, `group::Group`). Pinned at the workspace
 # level via direct entries.
-ff = { version = "0.13", default-features = false, features = ["alloc"] }
+ff = { version = "0.13", default-features = false, features = ["alloc", "bits"] }
 group = { version = "0.13" }
 # `indexmap` 1.x is the version pinned by upstream halo2_proofs
 # 0.3.2; used by `proofs::dev` failure-emitter and a few `plonk`
@@ -63,22 +63,35 @@ maybe-rayon = { version = "0.1.0", default-features = false }
 tracing = "0.1"
 
 [dev-dependencies]
-# Dev-only deps used by upstream `halo2_proofs 0.3.2`'s test
-# modules. Mirrors upstream's `[dev-dependencies]` list at the
-# subset our forked tests reference.
+# Dev-only deps used by upstream test modules across the vendored
+# trees (`halo2_proofs 0.3.2` + `halo2_gadgets 0.3.1`).
 assert_matches = "1.5"
 proptest = { workspace = true }
 # `rand_core::OsRng` is gated by the `getrandom` feature.
 rand_core = { workspace = true, features = ["getrandom"] }
+# `rand 0.8` for `OsRng` reference in `poseidon::pow5::tests`.
+# Matches upstream halo2_gadgets's `[dev-dependencies]` rand
+# version.
+rand = { workspace = true }
 
 [features]
 # Mirrors upstream `halo2_poseidon`'s `test-dependencies` feature
-# gating the `poseidon::test_vectors` module. Adamant uses this
-# feature in cross-validation tests against the upstream tag.
+# gating the `poseidon::primitives::test_vectors` module. Adamant
+# uses this feature in cross-validation tests against the
+# upstream tag.
 test-dependencies = []
 # Multicore parallelism in `proofs` via `maybe-rayon`. Off by
 # default (matches upstream's optional posture).
 multicore = ["maybe-rayon/threads"]
+# Gates the upstream test modules in `utilities/*` that
+# reference parts of `halo2_gadgets` Adamant has not vendored
+# yet (`crate::ecc`, `crate::sinsemilla`, plus the upstream
+# `uint` dev-dep). Phase 6.8b.3 (ECC fork) re-enables the
+# subset that becomes available; the sinsemilla-dependent test
+# subset stays disabled because Adamant does not need
+# Sinsemilla (Orchard-specific; not used by the §7.3.2
+# validity circuit).
+vendored-test-suite = []
 
 # Lint posture for forked upstream code, mirroring the Phase
 # 5/5b.1a/b precedent for vendored Sui-Move crates (see

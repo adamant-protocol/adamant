@@ -161,6 +161,79 @@ confirming the two behavioural-change classes above
 (crate-attribute removal + `crate::` → `crate::proofs::`
 rewrite) do not alter the algorithmic surface.
 
+### Sub-arc 6.8b.2 — `halo2_gadgets` Pow5Chip + utilities
+
+**Source.** `halo2_gadgets` crate at version `0.3.1`, sourced
+from `https://crates.io/crates/halo2_gadgets` (upstream repo
+`https://github.com/zcash/halo2`, MIT OR Apache-2.0
+dual-licensed). Vendored sub-surface:
+
+- `src/poseidon.rs` (286 LOC) → `poseidon/mod.rs` (replacing
+  the prior 6.8b.0 mod.rs, which now lives at
+  `poseidon/primitives/mod.rs`).
+- `src/poseidon/pow5.rs` (917 LOC) → `poseidon/pow5.rs`.
+- `src/utilities.rs` (496 LOC) → `utilities/mod.rs`.
+- `src/utilities/cond_swap.rs`,
+  `src/utilities/decompose_running_sum.rs`,
+  `src/utilities/lookup_range_check.rs` → `utilities/`.
+
+**Restructure of Phase 6.8b.0 primitives.** The 6.8b.0 fork put
+the out-of-circuit primitives at `crates/adamant-halo2/src/poseidon/`.
+Upstream halo2_gadgets keeps the chip surface at the same
+module path and the primitives one level deeper at
+`poseidon::primitives::*`. Phase 6.8b.2 mirrors the upstream
+shape: the 6.8b.0 files moved into `poseidon/primitives/` and
+the new chip-surface files live at `poseidon/`. Adamant-privacy
+import switched accordingly:
+`adamant_halo2::poseidon::*` → `adamant_halo2::poseidon::primitives::*`.
+
+**Behavioural changes from upstream.**
+
+1. `pub use ::halo2_poseidon as primitives;` (upstream's
+   external-crate re-export at the `primitives` path) replaced
+   with `pub mod primitives;` pointing at the Adamant-owned
+   fork from sub-arc 6.8b.0.
+2. All `halo2_proofs::*` paths in the vendored chip + utilities
+   files rewritten to `crate::proofs::*` to refer to Adamant's
+   fork from sub-arc 6.8b.1.
+3. `primitives::test_only_permute`'s cfg gate widened from
+   `feature = "test-dependencies"` to `any(test, feature =
+   "test-dependencies")` so the Pow5Chip test in
+   `pow5.rs::tests::poseidon_hash` runs under plain `cargo
+   test` without requiring the feature flag. Inline comment in
+   `primitives/mod.rs` records this.
+4. **Test modules in `utilities/*` gated behind a new
+   `vendored-test-suite` feature.** These modules reference
+   parts of upstream halo2_gadgets that Adamant has not
+   vendored yet (`crate::ecc` at sub-arc 6.8b.3; the
+   `crate::sinsemilla` references stay permanently disabled —
+   Adamant does not need Sinsemilla per §7.3.2 scope). Per-
+   module gates record the exact reason. Re-enabling at sub-
+   arc 6.8b.3 is partial; the sinsemilla-dependent test
+   functions are excluded.
+
+**Upstream tests preserved.** Pow5Chip's own tests
+(`poseidon_hash`, `poseidon_hash_longer_input`) compile and
+pass against the fork. Workspace test count: 43 in
+`adamant-halo2` (was 39 at 6.8b.1; +4 from Pow5Chip + the
+re-enabled `test_only_permute` reference).
+
+**Workspace dep updates.**
+- `pasta_curves` workspace pin gains `bits` feature (required
+  by `utilities` for `PrimeFieldBits`).
+- `ff` direct dep gains `bits` feature (same requirement
+  surface).
+- `rand` 0.8 added as `adamant-halo2` dev-dep for
+  `pow5.rs::tests`'s `OsRng` reference.
+
+**Audit posture.** Pow5Chip is the in-circuit Poseidon
+permutation gadget that anchors the §7.3.2 validity circuit's
+note-commitment + nullifier hashes inside the proof. Algorithm
+review reduces to upstream halo2_gadgets's audit history
+(Zcash Orchard production deployment); fork-side review covers
+the four behavioural-change classes above plus the path
+rewrites.
+
 ## Refresh policy
 
 Upstream `halo2_poseidon` (and the broader Halo 2 ecosystem)

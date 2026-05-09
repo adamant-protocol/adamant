@@ -13,14 +13,14 @@
 //!
 //! # Sub-arc map
 //!
-//! | Sub-arc       | Surface                       | Status       |
-//! |---------------|-------------------------------|--------------|
-//! | 6.8b.0        | [`poseidon`] (out-of-circuit) | DONE         |
-//! | 6.8b.1        | [`proofs`] (PLONKish + IPA)   | THIS SUB-ARC |
-//! | 6.8b.2        | `poseidon::Pow5Chip`          | pending      |
-//! | 6.8b.3        | ECC chips for Pallas          | pending      |
-//! | 6.8b.4        | §7.3.2 validity circuit       | pending      |
-//! | 6.9b          | recursive proof composition   | pending      |
+//! | Sub-arc       | Surface                                    | Status       |
+//! |---------------|--------------------------------------------|--------------|
+//! | 6.8b.0        | [`poseidon::primitives`] (out-of-circuit)  | DONE         |
+//! | 6.8b.1        | [`proofs`] (PLONKish + IPA)                | DONE         |
+//! | 6.8b.2        | [`poseidon::Pow5Chip`] + [`utilities`]     | THIS SUB-ARC |
+//! | 6.8b.3        | ECC chips for Pallas                       | pending      |
+//! | 6.8b.4        | §7.3.2 validity circuit                    | pending      |
+//! | 6.9b          | recursive proof composition                | pending      |
 //!
 //! # Resistant-proof posture
 //!
@@ -35,3 +35,4 @@
 
 pub mod poseidon;
 pub mod proofs;
+pub mod utilities;

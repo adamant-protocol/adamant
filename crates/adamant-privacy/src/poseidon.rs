@@ -63,7 +63,14 @@
 //! convert SHA3-256 outputs / scalars / etc. to field elements
 //! via the constructors below.
 
-use adamant_halo2::poseidon::{ConstantLength, Hash, P128Pow5T3};
+// Phase 6.8b.2 restructured `adamant_halo2::poseidon`: the
+// out-of-circuit primitives moved under
+// `adamant_halo2::poseidon::primitives::*` (matching upstream
+// halo2_gadgets's API path), making room for the in-circuit
+// `Pow5Chip` surface at `adamant_halo2::poseidon::*`. Adamant-
+// privacy's out-of-circuit Poseidon helper consumes the
+// primitives path.
+use adamant_halo2::poseidon::primitives::{ConstantLength, Hash, P128Pow5T3};
 use pasta_curves::group::ff::PrimeField;
 use pasta_curves::pallas;
 use serde::{Deserialize, Serialize};
@@ -223,7 +230,7 @@ pub fn poseidon_hash<const L: usize>(inputs: [FieldBytes; L]) -> FieldBytes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adamant_halo2::poseidon::Spec;
+    use adamant_halo2::poseidon::primitives::Spec;
 
     /// Returns `true` iff the [`P128Pow5T3`] specification's
     /// full-round count and partial-round count match the §3.3.3
