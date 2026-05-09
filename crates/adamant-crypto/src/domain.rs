@@ -216,6 +216,26 @@ pub static OBJECT_ID: DomainTag = DomainTag::new(b"ADAMANT-v1-object-id");
 /// must hold.
 pub static TX_HASH: DomainTag = DomainTag::new(b"ADAMANT-v1-tx-hash");
 
+/// Note-metadata-hash domain tag, per whitepaper section 7.1.
+///
+/// Used with the BIP-340 tagged-SHA3-256 construction
+/// ([`crate::hash::sha3_256_tagged`]) to derive the
+/// `metadata_hash` input to the [Poseidon-based note-commitment
+/// formula](https://docs.rs/adamant-privacy) per §7.1:
+///
+/// `metadata_hash = tagged_hash_sha3(tag, BCS(NoteMetadata))`
+///
+/// The metadata-hash is then reduced to a Pallas base field
+/// element (per §3.3.3 amendment instance 31) and fed as the
+/// fifth Poseidon input alongside `value`, `asset_type`,
+/// `recipient`, and `randomness`. The tag-and-reduce pattern
+/// keeps note-metadata's tagged-hash separate from any other
+/// SHA3 use of the same byte content.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 6.1.
+pub static NOTE_METADATA_HASH: DomainTag = DomainTag::new(b"ADAMANT-v1-note-metadata-hash");
+
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and
 /// test-vector regressions.

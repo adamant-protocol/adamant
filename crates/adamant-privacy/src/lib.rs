@@ -41,6 +41,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod note;
 pub mod poseidon;
 
+pub use note::{derive_note_commitment, Note, NoteCommitment, NoteMetadata, StealthAddress};
 pub use poseidon::{poseidon_hash, FieldBytes, POSEIDON_OUTPUT_BYTES};
