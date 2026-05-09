@@ -287,6 +287,56 @@ pub static NULLIFIER_KEY_DERIVATION: DomainTag =
 pub static STEALTH_SHARED_SCALAR: DomainTag =
     DomainTag::new(b"ADAMANT-v1-stealth-shared-scalar");
 
+/// Master-seed → spending-key derivation domain tag, per
+/// whitepaper section 7.4.1.
+///
+/// Used as the salt for HKDF-SHA3 derivation of the spending
+/// scalar from a 32-byte master seed:
+///
+/// `tagged_shake_256(MASTER_SPENDING_KEY, master_seed, 64)` →
+/// reduce to `pallas::Scalar`.
+///
+/// Distinct from [`MASTER_VIEWING_KEY`] so the same master seed
+/// cannot collide spending- and viewing-key material under any
+/// single derivation. Per §3.3.1, adding/renaming domain tags is
+/// a hard fork. Registered at Phase 6.5.
+pub static MASTER_SPENDING_KEY: DomainTag = DomainTag::new(b"ADAMANT-v1-master-spending-key");
+
+/// Master-seed → viewing-keypair-seed derivation domain tag, per
+/// whitepaper section 7.4.1.
+///
+/// Used to derive the 64-byte ML-KEM-768 keypair seed
+/// (`sk_v_kem_seed` per §7.2.2) from the master seed:
+///
+/// `tagged_shake_256(MASTER_VIEWING_KEY, master_seed, 64)` →
+/// `ML-KEM-768.KeyGen(seed)`.
+///
+/// Distinct from [`MASTER_SPENDING_KEY`] so spending and viewing
+/// material derived from the same master seed are
+/// cryptographically separated. Per §3.3.1, adding/renaming
+/// domain tags is a hard fork. Registered at Phase 6.5.
+pub static MASTER_VIEWING_KEY: DomainTag = DomainTag::new(b"ADAMANT-v1-master-viewing-key");
+
+/// Sub-view-key HKDF-SHA3 salt domain tag, per whitepaper
+/// section 7.4.2 amendment (`domain_tag_subview`).
+///
+/// Used as the salt input to HKDF-SHA3-256 for sub-view-key
+/// derivation:
+///
+/// ```text
+/// sub_seed_S = HKDF-SHA3(
+///     salt = SUBVIEW_DERIVE_tag,
+///     ikm  = sk_v_kem_seed,
+///     info = BCS(S),
+///     L    = 64
+/// )
+/// ```
+///
+/// The 64-byte output is the ML-KEM-768.KeyGen seed for the
+/// scope-S sub-view-keypair. Per §3.3.1, adding/renaming domain
+/// tags is a hard fork. Registered at Phase 6.5.
+pub static SUBVIEW_DERIVE: DomainTag = DomainTag::new(b"ADAMANT-v1-subview-derive");
+
 /// Stealth-address view-tag domain tag, per whitepaper section 7.2.4.
 ///
 /// Used in `view_tag = SHA3_256(ss || tag_domain)[0]` where `ss`
