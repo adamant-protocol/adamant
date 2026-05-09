@@ -213,9 +213,25 @@ pub fn dispatch_instruction(
 /// restricting the post-quantum signature scheme to ML-DSA-65 per
 /// §3.4.2's "Level 3 is the appropriate balance" commitment.
 ///
-/// Deferred to 5/6.4 (privacy-circuit scaffold):
-/// - `GenerateProof`, `VerifyProof`, `RecursiveVerify`,
-///   `ReleaseSubViewKey`
+/// Deferred to Phase 6 `adamant-privacy` workstream (per Phase
+/// 5/6.4 plan-gate Option A — `adamant-crypto/src/zk.rs` is an
+/// 8-line stub at the time of this commit; full Halo 2 surface
+/// lands in Phase 6):
+/// - `GenerateProof(CircuitId)` (§6.2.1.4 line 410; §7.3.2
+///   validity circuit) — depends on Halo 2 prover
+/// - `VerifyProof(CircuitId)` (§6.2.1.4 line 411; §7.3.4
+///   verification cost) — depends on Halo 2 verifier
+/// - `RecursiveVerify` (§6.2.1.4 line 415; §8.5 recursive circuit
+///   signature) — depends on Halo 2 recursion + §8.5 substantive
+///   circuit-signature pinning
+/// - `ReleaseSubViewKey` (§6.2.1.4 line 412; §7.4.2 derivation)
+///   — depends on §7.4.2 `G_aux` pinning (spec-first verification
+///   25th instance candidate) + adamant-crypto-blst-extra public-
+///   API expansion (hash-to-scalar helper)
+///
+/// `CircuitId` pool placement is itself a §7 carry-forward per
+/// §6.2.1.4 amendment 0d3a957 footnote ("the resolution from
+/// index to circuit definition is the privacy layer's concern").
 ///
 /// Deferred to 5/6.5 (gas accounting):
 /// - `ChargeGas`, `RemainingGas`, `OutOfGas`

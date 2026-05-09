@@ -630,8 +630,10 @@ fn deferred_kzg_commit_surfaces_invalid_instruction() {
     assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
 }
 
-/// Privacy-circuit handlers (sample: GenerateProof) deferred to
-/// 5/6.4.
+/// Privacy-circuit handler `GenerateProof` deferred to Phase 6
+/// `adamant-privacy` (per Phase 5/6.4 plan-gate Option A —
+/// adamant-crypto/src/zk.rs is a stub at the time of this test;
+/// full Halo 2 surface lands in Phase 6).
 #[test]
 fn deferred_generate_proof_surfaces_invalid_instruction() {
     let module = empty_module();
@@ -641,6 +643,43 @@ fn deferred_generate_proof_surfaces_invalid_instruction() {
         AdamantBytecode::GenerateProof(crate::bytecode::CircuitId(0)),
         &module,
     );
+    assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
+}
+
+/// Privacy-circuit handler `VerifyProof` deferred to Phase 6
+/// `adamant-privacy` (Halo 2 verifier dependency).
+#[test]
+fn deferred_verify_proof_surfaces_invalid_instruction() {
+    let module = empty_module();
+    let mut state = state_with_transparent_frame(0);
+    let result = dispatch_adamant(
+        &mut state,
+        AdamantBytecode::VerifyProof(crate::bytecode::CircuitId(0)),
+        &module,
+    );
+    assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
+}
+
+/// Privacy-circuit handler `RecursiveVerify` deferred to Phase 6
+/// `adamant-privacy` (Halo 2 recursion + §8.5 recursive-circuit-
+/// signature pinning).
+#[test]
+fn deferred_recursive_verify_surfaces_invalid_instruction() {
+    let module = empty_module();
+    let mut state = state_with_transparent_frame(0);
+    let result = dispatch_adamant(&mut state, AdamantBytecode::RecursiveVerify, &module);
+    assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
+}
+
+/// Privacy-circuit handler `ReleaseSubViewKey` deferred to Phase 6
+/// `adamant-privacy` (or potentially a 5/6.4.b sub-arc if §7.4.2
+/// `G_aux` pinning lands as a spec-first verification 25th instance
+/// + adamant-crypto-blst-extra hash-to-scalar helper expansion).
+#[test]
+fn deferred_release_sub_view_key_surfaces_invalid_instruction() {
+    let module = empty_module();
+    let mut state = state_with_transparent_frame(0);
+    let result = dispatch_adamant(&mut state, AdamantBytecode::ReleaseSubViewKey, &module);
     assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
 }
 
