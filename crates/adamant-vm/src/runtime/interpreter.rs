@@ -120,6 +120,16 @@ pub enum DispatchOutcome {
     /// step 5. The call stack is empty; the dispatch loop's
     /// outer driver returns success.
     Halt,
+    /// `Bytecode::Call` was dispatched. The outer driver
+    /// resolves the function definition, pops arguments from
+    /// the caller's stack, creates a new frame, and pushes it
+    /// onto the call stack per Phase 5/6.2c.2.α frame-creation
+    /// design (Sui-VM-aligned `ExitCode::Call` pattern).
+    Call(adamant_bytecode_format::FunctionHandleIndex),
+    /// `Bytecode::CallGeneric` was dispatched. Analogous to
+    /// [`Self::Call`] but resolves the function via
+    /// `function_instantiations` pool.
+    CallGeneric(adamant_bytecode_format::FunctionInstantiationIndex),
 }
 
 /// Dispatch a single instruction against the interpreter state.
@@ -160,16 +170,13 @@ pub enum DispatchOutcome {
 pub fn dispatch_instruction(
     instruction: &BytecodeInstruction,
     state: &mut InterpreterState,
-    _module: &AdamantCompiledModule,
+    module: &AdamantCompiledModule,
 ) -> Result<DispatchOutcome, VMError> {
-    // The `_module` parameter is threaded through per Phase 5/6.2c.1
-    // foundation work (Q5/6.2c.2 disposition: `&'a AdamantCompiledModule`
-    // borrow lifetime). At sub-arc 5/6.2c.1, module-access handlers
-    // are not yet wired (they defer to 5/6.2c.2); the 38 self-
-    // contained handlers from 5/6.2b ignore `_module`. Adding the
-    // parameter now prevents a signature breaking change at 5/6.2c.2.
+    // Per Phase 5/6.2c.2.α: module-access handlers (LdConst, Call,
+    // CallGeneric) consume the module reference. The 38 self-
+    // contained handlers from 5/6.2b ignore it.
     match instruction {
-        BytecodeInstruction::Inherited(opcode) => dispatch_inherited(opcode, state),
+        BytecodeInstruction::Inherited(opcode) => dispatch_inherited(opcode, state, module),
         BytecodeInstruction::Adamant(_) => {
             // Adamant-extension handlers land at sub-arc 5/6.3
             // (non-privacy extensions) and 5/6.4 (privacy-circuit
@@ -204,6 +211,7 @@ pub fn dispatch_instruction(
 fn dispatch_inherited(
     opcode: &Bytecode,
     state: &mut InterpreterState,
+    module: &AdamantCompiledModule,
 ) -> Result<DispatchOutcome, VMError> {
     match opcode {
         // ---------- Stack / control flow ----------
@@ -394,11 +402,25 @@ fn dispatch_inherited(
             reason: InvariantViolationReason::DeprecatedOpcodePostVerification,
         }),
 
-        // ---------- Module-access handlers (defer to 5/6.2c) ----------
-        Bytecode::LdConst(_)
-        | Bytecode::Call(_)
-        | Bytecode::CallGeneric(_)
-        | Bytecode::Pack(_)
+        // ---------- Module-access handlers (Phase 5/6.2c.2.α) ----------
+        Bytecode::LdConst(idx) => dispatch_ld_const(state, module, *idx),
+        Bytecode::Call(idx) => {
+            // Per Q5/6.2c.2.2 frame-creation outer-driver pattern:
+            // dispatch advances pc past Call before signaling
+            // frame-creation to the outer driver. When the callee
+            // Returns, control resumes at caller's next instruction.
+            let frame = top_frame_mut(state)?;
+            advance_pc(frame);
+            Ok(DispatchOutcome::Call(*idx))
+        }
+        Bytecode::CallGeneric(idx) => {
+            let frame = top_frame_mut(state)?;
+            advance_pc(frame);
+            Ok(DispatchOutcome::CallGeneric(*idx))
+        }
+
+        // ---------- Module-access handlers (defer to 5/6.2c.2.β onward) ----------
+        Bytecode::Pack(_)
         | Bytecode::PackGeneric(_)
         | Bytecode::Unpack(_)
         | Bytecode::UnpackGeneric(_)
@@ -1097,8 +1119,223 @@ pub fn run(
         match dispatch_instruction(&instruction, state, module)? {
             DispatchOutcome::Continue => {}
             DispatchOutcome::Halt => return Ok(()),
+            DispatchOutcome::Call(handle) => do_call(state, module, handle)?,
+            DispatchOutcome::CallGeneric(idx) => do_call_generic(state, module, idx)?,
         }
     }
+}
+
+// ---------- Module-access handler helpers (Phase 5/6.2c.2.α) ----------
+
+/// Handle `Bytecode::LdConst` per whitepaper §6.2.1.4: "Push a
+/// `Constant` from the constant pool onto the stack." The
+/// constant's BCS-encoded `data` bytes are decoded per its
+/// declared `type_` (a `SignatureToken`) into a `RuntimeValue`.
+///
+/// Phase 5/6.2c.2.α handles the primitive-type constants
+/// (U8/U16/U32/U64/U128/U256, Bool, Address, plus
+/// `Vector<U8>` for byte-array constants). Generic / nested-
+/// container constants surface as `InvariantViolation`
+/// per `verifier-residual` until later sub-arcs extend the
+/// decoder.
+fn dispatch_ld_const(
+    state: &mut InterpreterState,
+    module: &AdamantCompiledModule,
+    idx: adamant_bytecode_format::ConstantPoolIndex,
+) -> Result<DispatchOutcome, VMError> {
+    let constant = crate::runtime::module_helpers::resolve_constant(module, idx)?;
+    let value = decode_constant(&constant.type_, &constant.data)?;
+    let frame = top_frame_mut(state)?;
+    frame.push_value(value);
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// Decode a constant's BCS-encoded byte data per its declared
+/// [`SignatureToken`] type into a [`RuntimeValue`].
+///
+/// Phase 5/6.2c.2.α primitive-type coverage:
+/// `Bool`, `U8`, `U16`, `U32`, `U64`, `U128`, `U256`, `Address`,
+/// `Vector<U8>`. Other `Vector<T>` element types and nested
+/// containers surface as `InvariantViolation::TypeMismatchOnStack`
+/// until handler-level decoding extends the surface.
+fn decode_constant(
+    token: &adamant_bytecode_format::SignatureToken,
+    data: &[u8],
+) -> Result<RuntimeValue, VMError> {
+    use adamant_bytecode_format::SignatureToken as T;
+    match token {
+        T::Bool => {
+            let v: bool = bcs::from_bytes(data).map_err(|_| VMError::InvariantViolation {
+                reason: InvariantViolationReason::TypeMismatchOnStack,
+            })?;
+            Ok(RuntimeValue::Bool(v))
+        }
+        T::U8 => {
+            let v: u8 = bcs::from_bytes(data).map_err(|_| VMError::InvariantViolation {
+                reason: InvariantViolationReason::TypeMismatchOnStack,
+            })?;
+            Ok(RuntimeValue::U8(v))
+        }
+        T::U16 => {
+            let v: u16 = bcs::from_bytes(data).map_err(|_| VMError::InvariantViolation {
+                reason: InvariantViolationReason::TypeMismatchOnStack,
+            })?;
+            Ok(RuntimeValue::U16(v))
+        }
+        T::U32 => {
+            let v: u32 = bcs::from_bytes(data).map_err(|_| VMError::InvariantViolation {
+                reason: InvariantViolationReason::TypeMismatchOnStack,
+            })?;
+            Ok(RuntimeValue::U32(v))
+        }
+        T::U64 => {
+            let v: u64 = bcs::from_bytes(data).map_err(|_| VMError::InvariantViolation {
+                reason: InvariantViolationReason::TypeMismatchOnStack,
+            })?;
+            Ok(RuntimeValue::U64(v))
+        }
+        T::U128 => {
+            let v: u128 = bcs::from_bytes(data).map_err(|_| VMError::InvariantViolation {
+                reason: InvariantViolationReason::TypeMismatchOnStack,
+            })?;
+            Ok(RuntimeValue::U128(v))
+        }
+        T::U256 => {
+            let v: [u8; 32] = bcs::from_bytes(data).map_err(|_| VMError::InvariantViolation {
+                reason: InvariantViolationReason::TypeMismatchOnStack,
+            })?;
+            Ok(RuntimeValue::U256(v))
+        }
+        T::Address => {
+            let v: adamant_types::Address =
+                bcs::from_bytes(data).map_err(|_| VMError::InvariantViolation {
+                    reason: InvariantViolationReason::TypeMismatchOnStack,
+                })?;
+            Ok(RuntimeValue::Address(v))
+        }
+        T::Vector(inner) if matches!(**inner, T::U8) => {
+            // Special-case: Vector<U8> is the most common constant
+            // shape (byte arrays); decode as Vec<u8> and lift to
+            // RuntimeValue::Container(Vector(...)) of U8 elements.
+            let bytes: Vec<u8> =
+                bcs::from_bytes(data).map_err(|_| VMError::InvariantViolation {
+                    reason: InvariantViolationReason::TypeMismatchOnStack,
+                })?;
+            let elements: Vec<RuntimeValue> = bytes.into_iter().map(RuntimeValue::U8).collect();
+            Ok(RuntimeValue::Container(
+                crate::runtime::runtime_value::Container::Vector(std::rc::Rc::new(
+                    core::cell::RefCell::new(elements),
+                )),
+            ))
+        }
+        _ => {
+            // Other SignatureToken variants (Vector<non-U8>,
+            // Datatype, references, etc.) surface as type mismatch.
+            // Extension lands at later sub-arcs if needed; the
+            // verifier's `constants` pass restricts constant types
+            // to a primitive-friendly subset.
+            Err(VMError::InvariantViolation {
+                reason: InvariantViolationReason::TypeMismatchOnStack,
+            })
+        }
+    }
+}
+
+/// Handle a `Bytecode::Call` outer-driver dispatch: resolve the
+/// function definition, pop arguments from the caller's stack,
+/// create a new [`Frame`] with arguments populated in locals
+/// slots `[0..arg_count]`, and push the frame onto the call
+/// stack.
+///
+/// Per whitepaper §6.2.1.4 + §6.2.2: "the abstract machine state
+/// per function frame is `(stack, locals, pc)`. ... function
+/// arguments are passed via the operand stack (popped one per
+/// parameter in declaration order, top-of-stack last)."
+fn do_call(
+    state: &mut InterpreterState,
+    module: &AdamantCompiledModule,
+    handle: adamant_bytecode_format::FunctionHandleIndex,
+) -> Result<(), VMError> {
+    // 1. Resolve the function handle to its parameter signature.
+    let func_handle =
+        module
+            .function_handles
+            .get(handle.0 as usize)
+            .ok_or(VMError::InvariantViolation {
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+            })?;
+    let params_sig = module
+        .signatures
+        .get(func_handle.parameters.0 as usize)
+        .ok_or(VMError::InvariantViolation {
+            reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+        })?;
+    let arg_count = params_sig.0.len();
+
+    // 2. Resolve the function definition (single-module case).
+    let func_def = crate::runtime::module_helpers::resolve_function_def(module, handle)?;
+    // 3. Native functions are forbidden by whitepaper §6.2.1.6
+    //    Rule 4. The validator should pre-empt; defensive case.
+    let code = func_def.code.as_ref().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::DeprecatedOpcodePostVerification,
+    })?;
+    // 4. Total locals = parameters + body locals.
+    let body_locals_sig =
+        module
+            .signatures
+            .get(code.locals.0 as usize)
+            .ok_or(VMError::InvariantViolation {
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+            })?;
+    let total_locals = arg_count + body_locals_sig.0.len();
+
+    // 5. Pop arguments from caller frame (top-of-stack is last arg).
+    let caller_frame = state.top_frame_mut().ok_or(VMError::InvariantViolation {
+        reason: InvariantViolationReason::StackUnderflow,
+    })?;
+    let mut args: Vec<RuntimeValue> = Vec::with_capacity(arg_count);
+    for _ in 0..arg_count {
+        args.push(caller_frame.pop_value()?);
+    }
+    // Reverse so args[0] is the first parameter (was bottom of pop).
+    args.reverse();
+
+    // 6. Create the new frame and populate parameter locals.
+    let new_frame = Frame::new(handle, total_locals);
+    for (i, arg) in args.into_iter().enumerate() {
+        let mut cell = new_frame.locals.borrow_mut();
+        cell[i] = Some(arg);
+    }
+
+    // 7. Push the new frame onto the call stack.
+    state.push_frame(new_frame);
+    Ok(())
+}
+
+/// Handle a `Bytecode::CallGeneric` outer-driver dispatch.
+///
+/// Phase 5/6.2c.2.α resolves generic instantiations through
+/// `function_instantiations` to obtain the underlying handle;
+/// type-argument substitution is handled at execution time
+/// (operand-stack values are already type-resolved per the
+/// verifier's `type_safety` pass; runtime carries no per-
+/// instantiation type tag).
+fn do_call_generic(
+    state: &mut InterpreterState,
+    module: &AdamantCompiledModule,
+    idx: adamant_bytecode_format::FunctionInstantiationIndex,
+) -> Result<(), VMError> {
+    // Resolve the instantiation to its underlying function handle.
+    let instantiation =
+        module
+            .function_instantiations
+            .get(idx.0 as usize)
+            .ok_or(VMError::InvariantViolation {
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+            })?;
+    // Delegate to do_call with the underlying handle.
+    do_call(state, module, instantiation.handle)
 }
 
 #[cfg(test)]
@@ -1395,13 +1632,109 @@ mod tests {
         assert_eq!(top(&state), RuntimeValue::Bool(false));
     }
 
-    /// LdConst defers to 5/6.2c (needs constant pool access).
+    /// LdConst on empty constant pool surfaces
+    /// IndexOutOfBoundsPostVerification per verifier-residual.
     #[test]
-    fn ld_const_defers_to_5_6_2c() {
+    fn ld_const_on_empty_pool_surfaces_index_out_of_bounds() {
         let mut state = state_with_frame(0);
         let err =
-            dispatch(&mut state, Bytecode::LdConst(ConstantPoolIndex::new(0))).expect_err("defers");
-        assert!(matches!(err, VMError::InvalidInstruction { .. }));
+            dispatch(&mut state, Bytecode::LdConst(ConstantPoolIndex::new(0))).expect_err("err");
+        assert!(matches!(
+            err,
+            VMError::InvariantViolation {
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+            }
+        ));
+    }
+
+    /// Whitepaper §6.2.1.4 (verbatim): "Push a `Constant` from
+    /// the constant pool onto the stack."
+    #[test]
+    fn ld_const_decodes_u64_constant() {
+        use adamant_bytecode_format::{Constant, SignatureToken};
+        let mut state = state_with_frame(0);
+        let mut module = empty_module();
+        let value: u64 = 0x1234_5678;
+        module.constant_pool.push(Constant {
+            type_: SignatureToken::U64,
+            data: bcs::to_bytes(&value).expect("bcs encode"),
+        });
+        dispatch_instruction(
+            &BytecodeInstruction::Inherited(Bytecode::LdConst(ConstantPoolIndex::new(0))),
+            &mut state,
+            &module,
+        )
+        .expect("ok");
+        assert_eq!(top(&state), RuntimeValue::U64(value));
+    }
+
+    #[test]
+    fn ld_const_decodes_bool_constant() {
+        use adamant_bytecode_format::{Constant, SignatureToken};
+        let mut state = state_with_frame(0);
+        let mut module = empty_module();
+        module.constant_pool.push(Constant {
+            type_: SignatureToken::Bool,
+            data: bcs::to_bytes(&true).expect("bcs encode"),
+        });
+        dispatch_instruction(
+            &BytecodeInstruction::Inherited(Bytecode::LdConst(ConstantPoolIndex::new(0))),
+            &mut state,
+            &module,
+        )
+        .expect("ok");
+        assert_eq!(top(&state), RuntimeValue::Bool(true));
+    }
+
+    #[test]
+    fn ld_const_decodes_address_constant() {
+        use adamant_bytecode_format::{Constant, SignatureToken};
+        use adamant_types::Address;
+        let mut state = state_with_frame(0);
+        let mut module = empty_module();
+        let addr = Address::from_bytes([0x42; 32]);
+        module.constant_pool.push(Constant {
+            type_: SignatureToken::Address,
+            data: bcs::to_bytes(&addr).expect("bcs encode"),
+        });
+        dispatch_instruction(
+            &BytecodeInstruction::Inherited(Bytecode::LdConst(ConstantPoolIndex::new(0))),
+            &mut state,
+            &module,
+        )
+        .expect("ok");
+        assert_eq!(top(&state), RuntimeValue::Address(addr));
+    }
+
+    /// LdConst with `Vector<U8>` decodes a byte-array constant
+    /// into a Vector container of U8 elements.
+    #[test]
+    fn ld_const_decodes_vector_u8_constant() {
+        use adamant_bytecode_format::{Constant, SignatureToken};
+        let mut state = state_with_frame(0);
+        let mut module = empty_module();
+        let bytes: Vec<u8> = vec![0x01, 0x02, 0x03];
+        module.constant_pool.push(Constant {
+            type_: SignatureToken::Vector(Box::new(SignatureToken::U8)),
+            data: bcs::to_bytes(&bytes).expect("bcs encode"),
+        });
+        dispatch_instruction(
+            &BytecodeInstruction::Inherited(Bytecode::LdConst(ConstantPoolIndex::new(0))),
+            &mut state,
+            &module,
+        )
+        .expect("ok");
+        if let RuntimeValue::Container(crate::runtime::runtime_value::Container::Vector(rc)) =
+            top(&state)
+        {
+            let elements = rc.borrow();
+            assert_eq!(elements.len(), 3);
+            assert_eq!(elements[0], RuntimeValue::U8(0x01));
+            assert_eq!(elements[1], RuntimeValue::U8(0x02));
+            assert_eq!(elements[2], RuntimeValue::U8(0x03));
+        } else {
+            panic!("expected Vector container");
+        }
     }
 
     // ============================================================
@@ -2073,21 +2406,169 @@ mod tests {
     // Module-access handlers defer to 5/6.2c
     // ============================================================
 
-    /// 5/6.2c sub-arc covers Call, CallGeneric, Pack, Unpack, refs,
-    /// borrows, vectors, variants. Until then they surface as
-    /// InvalidInstruction.
+    /// Whitepaper §6.2.1.4 (verbatim): "Call the function at
+    /// `FunctionHandleIndex`."
+    ///
+    /// Phase 5/6.2c.2.α: dispatch returns DispatchOutcome::Call;
+    /// outer driver (run) creates the new frame.
     #[test]
-    fn call_defers_to_5_6_2c() {
+    fn call_returns_dispatch_outcome_call() {
         let mut state = state_with_frame(0);
-        let err = dispatch(&mut state, Bytecode::Call(fh(0))).expect_err("defers");
-        assert!(matches!(err, VMError::InvalidInstruction { .. }));
+        let outcome = dispatch(&mut state, Bytecode::Call(fh(0))).expect("ok");
+        assert!(matches!(outcome, DispatchOutcome::Call(_)));
+        // pc was advanced past Call.
+        assert_eq!(pc(&state), 1);
     }
 
+    /// Reference ops still defer to 5/6.2c.2.β.
     #[test]
-    fn read_ref_defers_to_5_6_2c() {
+    fn read_ref_defers_to_5_6_2c_beta() {
         let mut state = state_with_frame(0);
         let err = dispatch(&mut state, Bytecode::ReadRef).expect_err("defers");
         assert!(matches!(err, VMError::InvalidInstruction { .. }));
+    }
+
+    // ============================================================
+    // do_call frame-creation outer-driver tests (5/6.2c.2.α)
+    // ============================================================
+
+    /// Whitepaper §6.2.1.4 (verbatim): "function arguments are
+    /// passed via the operand stack (popped one per parameter in
+    /// declaration order, top-of-stack last)."
+    ///
+    /// do_call resolves a single-module function call: pops
+    /// arguments, creates new frame with locals populated.
+    #[test]
+    fn do_call_pops_args_and_creates_frame() {
+        use adamant_bytecode_format::{
+            FunctionHandle, IdentifierIndex, ModuleHandleIndex, Signature, SignatureIndex,
+            SignatureToken,
+        };
+
+        let mut module = empty_module();
+        // Add a single FunctionHandle: 2 u64 parameters, no return,
+        // no type parameters.
+        module
+            .signatures
+            .push(Signature(vec![SignatureToken::U64, SignatureToken::U64])); // index 0 — parameters
+        module.signatures.push(Signature(vec![])); // index 1 — return
+        module.signatures.push(Signature(vec![])); // index 2 — body locals (empty)
+        module.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(0),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(1),
+            type_parameters: vec![],
+        });
+        // Add a function definition referencing handle 0 with empty
+        // body locals signature.
+        module
+            .function_defs
+            .push(crate::module::AdamantFunctionDefinition {
+                function: fh(0),
+                visibility: adamant_bytecode_format::Visibility::Private,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(crate::module::AdamantCodeUnit {
+                    locals: SignatureIndex(2),
+                    code: vec![],
+                    jump_tables: vec![],
+                }),
+            });
+
+        let mut state = state_with_frame(0);
+        // Push 2 arguments: 0x100 (first), 0x200 (second).
+        push_stack(
+            &mut state,
+            vec![RuntimeValue::U64(0x100), RuntimeValue::U64(0x200)],
+        );
+        // Dispatch Call — returns DispatchOutcome::Call.
+        let outcome = dispatch_instruction(
+            &BytecodeInstruction::Inherited(Bytecode::Call(fh(0))),
+            &mut state,
+            &module,
+        )
+        .expect("ok");
+        match outcome {
+            DispatchOutcome::Call(handle) => {
+                // Outer-driver dispatch.
+                do_call(&mut state, &module, handle).expect("ok");
+            }
+            other => panic!("expected Call outcome, got {other:?}"),
+        }
+        // Verify a new frame was pushed.
+        assert_eq!(state.frame_depth(), 2);
+        let new_frame = state.top_frame().expect("frame");
+        assert_eq!(new_frame.function_handle.0, 0);
+        // Parameters populated in locals[0..2].
+        let cell = new_frame.locals.borrow();
+        assert_eq!(cell[0], Some(RuntimeValue::U64(0x100)));
+        assert_eq!(cell[1], Some(RuntimeValue::U64(0x200)));
+    }
+
+    /// Native function (code = None) surfaces InvariantViolation
+    /// per Rule 4 verifier-residual.
+    #[test]
+    fn do_call_native_function_invariant_violation() {
+        use adamant_bytecode_format::{
+            FunctionHandle, IdentifierIndex, ModuleHandleIndex, Signature, SignatureIndex,
+        };
+        let mut module = empty_module();
+        module.signatures.push(Signature(vec![]));
+        module.signatures.push(Signature(vec![]));
+        module.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(0),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(1),
+            type_parameters: vec![],
+        });
+        module
+            .function_defs
+            .push(crate::module::AdamantFunctionDefinition {
+                function: fh(0),
+                visibility: adamant_bytecode_format::Visibility::Private,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: None, // native
+            });
+
+        let mut state = state_with_frame(0);
+        let err = do_call(&mut state, &module, fh(0)).expect_err("err");
+        assert!(matches!(
+            err,
+            VMError::InvariantViolation {
+                reason: InvariantViolationReason::DeprecatedOpcodePostVerification,
+            }
+        ));
+    }
+
+    /// do_call with FunctionHandleIndex out of bounds surfaces
+    /// IndexOutOfBoundsPostVerification.
+    #[test]
+    fn do_call_handle_out_of_bounds_invariant_violation() {
+        let module = empty_module();
+        let mut state = state_with_frame(0);
+        let err = do_call(&mut state, &module, fh(99)).expect_err("err");
+        assert!(matches!(
+            err,
+            VMError::InvariantViolation {
+                reason: InvariantViolationReason::IndexOutOfBoundsPostVerification,
+            }
+        ));
+    }
+
+    /// CallGeneric returns DispatchOutcome::CallGeneric.
+    #[test]
+    fn call_generic_returns_dispatch_outcome_call_generic() {
+        use adamant_bytecode_format::FunctionInstantiationIndex;
+        let mut state = state_with_frame(0);
+        let outcome = dispatch(
+            &mut state,
+            Bytecode::CallGeneric(FunctionInstantiationIndex::new(0)),
+        )
+        .expect("ok");
+        assert!(matches!(outcome, DispatchOutcome::CallGeneric(_)));
     }
 
     // ============================================================
