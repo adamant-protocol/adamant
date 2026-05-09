@@ -528,6 +528,59 @@ mod tests {
     }
 
     #[test]
+    fn ml_dsa_65_handler_returns_false_on_malformed_sig_length() {
+        // Audit-pass parity with the ed25519 malformed-length test.
+        // ML-DSA-65 signature is 3309 bytes per FIPS 204; passing
+        // any other length must return Bool(false), not abort.
+        let seed = [0x9a_u8; 32];
+        let signing = MlDsaSigningKey::from_seed(&seed);
+        let verifying = signing.verifying_key();
+
+        let mut state = InterpreterState::new();
+        let module = empty_module();
+        let mut ctx = make_ctx(
+            &mut state,
+            &module,
+            vec![
+                byte_vec_arg(&[0u8; 100]), // wrong length
+                byte_vec_arg(b"msg"),
+                byte_vec_arg(&verifying.to_bytes()),
+            ],
+        );
+        signature_verify_ml_dsa_65(&mut ctx).expect("ok");
+        assert!(matches!(
+            ctx.return_values.first().unwrap(),
+            RuntimeValue::Bool(false)
+        ));
+    }
+
+    #[test]
+    fn ml_dsa_65_handler_returns_false_on_malformed_pk_length() {
+        // Audit-pass parity: malformed public-key length must
+        // return Bool(false), not abort.
+        let seed = [0x9a_u8; 32];
+        let signing = MlDsaSigningKey::from_seed(&seed);
+        let sig = signing.sign(b"msg").expect("sign");
+
+        let mut state = InterpreterState::new();
+        let module = empty_module();
+        let mut ctx = make_ctx(
+            &mut state,
+            &module,
+            vec![
+                byte_vec_arg(&sig.to_bytes()),
+                byte_vec_arg(b"msg"),
+                byte_vec_arg(&[0u8; 100]), // wrong pk length
+            ],
+        );
+        signature_verify_ml_dsa_65(&mut ctx).expect("ok");
+        assert!(matches!(
+            ctx.return_values.first().unwrap(),
+            RuntimeValue::Bool(false)
+        ));
+    }
+
+    #[test]
     fn ml_dsa_65_handler_returns_false_on_tampered_message() {
         let seed = [0x9a_u8; 32];
         let signing = MlDsaSigningKey::from_seed(&seed);
