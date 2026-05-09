@@ -76,6 +76,7 @@
 //! [`HashMap`]: std::collections::HashMap
 
 pub mod error;
+pub mod executor;
 pub mod frame;
 pub mod gas;
 pub mod interpreter;
@@ -92,6 +93,7 @@ pub(in crate::runtime) mod test_helpers;
 mod tests;
 
 pub use error::{AbortReason, ArithmeticErrorReason, InvariantViolationReason, VMError};
+pub use executor::{commit_buffer, load_read_set};
 pub use frame::{Frame, PrivacyMode};
 pub use gas::GasTracker;
 pub use interpreter::{DispatchOutcome, InterpreterState};
