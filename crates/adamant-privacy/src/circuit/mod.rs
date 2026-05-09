@@ -46,9 +46,11 @@
 //! consensus layer (Phase 7+), not in-circuit — the chain's
 //! nullifier set is the gating check.
 
+pub mod merkle;
 pub mod note_commitment;
 pub mod nullifier;
 
+pub use merkle::{MerkleMembershipCircuit, MerkleMembershipPublicInputs, MerkleMembershipWitness};
 pub use note_commitment::{NoteCommitmentCircuit, NoteCommitmentWitness};
 pub use nullifier::{
     NullifierCircuit, NullifierDomainTags, NullifierPublicInputs, NullifierWitness,

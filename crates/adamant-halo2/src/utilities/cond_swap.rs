@@ -57,9 +57,13 @@ pub struct CondSwapConfig {
     swap: Column<Advice>,
 }
 
-#[cfg(test)]
 impl CondSwapConfig {
-    pub(crate) fn a(&self) -> Column<Advice> {
+    /// Adamant fork (Phase 6.8b.4c): widened from
+    /// `pub(crate)` (test-gated) to plain `pub` so downstream
+    /// circuits in adamant-privacy can copy-constrain into the
+    /// chip's `a` column (the cond-swap input). Matches the
+    /// same posture as `Pow5Config::state`'s 6.8b.4a widening.
+    pub fn a(&self) -> Column<Advice> {
         self.a
     }
 }

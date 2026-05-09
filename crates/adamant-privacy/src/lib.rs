@@ -57,6 +57,7 @@ pub mod stealth;
 pub mod view_key;
 
 pub use circuit::{
+    MerkleMembershipCircuit, MerkleMembershipPublicInputs, MerkleMembershipWitness,
     NoteCommitmentCircuit, NoteCommitmentWitness, NullifierCircuit, NullifierDomainTags,
     NullifierPublicInputs, NullifierWitness,
 };
