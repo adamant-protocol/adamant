@@ -469,8 +469,7 @@ pub static VALUE_COMMITMENT_BASE: DomainTag = DomainTag::new(b"ADAMANT-v1-vc-bas
 /// Per §3.3.1, adding/renaming domain tags is a hard fork.
 /// Registered at Phase 6.8b.4d-2 as part of the §7.3
 /// value-commitment-scheme amendment (instance 33).
-pub static VALUE_COMMITMENT_RANDOMNESS: DomainTag =
-    DomainTag::new(b"ADAMANT-v1-vc-randomness");
+pub static VALUE_COMMITMENT_RANDOMNESS: DomainTag = DomainTag::new(b"ADAMANT-v1-vc-randomness");
 
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and

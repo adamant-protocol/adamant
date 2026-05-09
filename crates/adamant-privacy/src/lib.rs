@@ -54,6 +54,7 @@ pub mod poseidon;
 pub mod recursive_proof;
 pub mod shielded_tx;
 pub mod stealth;
+pub mod value_commitment;
 pub mod view_key;
 
 pub use circuit::{
@@ -90,6 +91,11 @@ pub use stealth::{
     derive_shared_scalar, derive_stealth_address, derive_view_tag, recover_stealth_spending_key,
     Address, EncapsulatedSecret, SpendingPrivateKey, SpendingPublicKey, StealthAddressIsIdentity,
     StealthSecret, ViewTag,
+};
+pub use value_commitment::{
+    asset_value_generator, balance_lhs, commit as commit_value, randomness_generator, BalanceError,
+    FeeEntry as ValueCommitmentFeeEntry, ValueCommitment, ValueCommitmentRandomness,
+    VALUE_COMMITMENT_BYTES,
 };
 pub use view_key::{
     derive_spending_key, derive_sub_view_key, derive_sub_view_key_seed,
