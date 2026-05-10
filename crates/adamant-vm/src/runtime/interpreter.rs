@@ -24,7 +24,10 @@
 //!   Phase 6 (privacy layer §7) per Phase 5/6 plan-gate Q4
 //!   disposition
 
+use std::sync::Arc;
+
 use adamant_bytecode_format::{Bytecode, FunctionHandleIndex, U256 as FormatU256};
+use adamant_crypto::kzg::KzgSetup;
 
 use crate::bytecode::{BytecodeInstruction, GasDimension};
 use crate::module::AdamantCompiledModule;
@@ -61,6 +64,19 @@ pub struct InterpreterState {
     /// dimensions at zero); an empty tracker aborts on any
     /// positive charge per [`GasTracker::charge`] semantics.
     gas_tracker: GasTracker,
+    /// Genesis-fixed KZG trusted-setup parameters per whitepaper
+    /// §3.9.2 / §11. `None` until the runtime caller invokes
+    /// [`InterpreterState::set_kzg_setup`]; in production
+    /// validators load the setup at startup before accepting any
+    /// transaction. `KzgCommit` / `KzgVerify` instructions abort
+    /// with [`InvariantViolationReason::KzgSetupNotLoaded`] when
+    /// this field is `None`.
+    ///
+    /// `Arc`-wrapped for cheap sharing across multiple interpreter
+    /// instances per Phase 7+ consensus integration; a single
+    /// validator-process loads the setup once and shares it
+    /// across many transaction-execution states.
+    kzg_setup: Option<Arc<KzgSetup>>,
 }
 
 impl InterpreterState {
@@ -130,6 +146,27 @@ impl InterpreterState {
     #[must_use]
     pub fn gas_tracker(&self) -> &GasTracker {
         &self.gas_tracker
+    }
+
+    /// Install the KZG trusted-setup parameters per whitepaper
+    /// §3.9.2 / §11. Must be invoked at validator startup before
+    /// any transaction that may execute `KzgCommit` / `KzgVerify`
+    /// is admitted to the dispatch loop.
+    ///
+    /// `Arc`-wrapped so a single validator-process can share one
+    /// genesis-fixed setup across many interpreter states (Phase
+    /// 7+ consensus integration). `Arc::clone` is a refcount bump
+    /// on the calling side.
+    pub fn set_kzg_setup(&mut self, setup: Arc<KzgSetup>) {
+        self.kzg_setup = Some(setup);
+    }
+
+    /// Borrow the installed KZG trusted-setup parameters, if any.
+    /// Returns `None` until [`InterpreterState::set_kzg_setup`]
+    /// has been called.
+    #[must_use]
+    pub fn kzg_setup(&self) -> Option<&KzgSetup> {
+        self.kzg_setup.as_deref()
     }
 
     /// Charge `amount` units against `dimension`'s remaining
@@ -326,19 +363,19 @@ fn dispatch_adamant(
         // ---------- Sub-view-key derivation (Phase 5/6.4.b) ----------
         AB::ReleaseSubViewKey => dispatch_release_sub_view_key(state),
 
+        // ---------- KZG handlers (Phase 5/6.7) ----------
+        AB::KzgCommit => dispatch_kzg_commit(state),
+        AB::KzgVerify => dispatch_kzg_verify(state),
+
         // ---------- Deferred handlers ----------
-        // KzgCommit / KzgVerify defer to a follow-up Phase 5/6.X
-        // sub-arc (the math is shipped in `adamant-crypto::kzg`;
-        // wiring the Move-bytecode dispatch is a separate
-        // concern). GenerateProof / VerifyProof / RecursiveVerify
-        // defer to Phase 6 alongside §7's `CircuitId` resolution.
+        // GenerateProof / VerifyProof / RecursiveVerify defer to
+        // Phase 6.8b.4f / 6.9b alongside §7's `CircuitId`
+        // resolution and §8.5.2's recursive verifier circuit.
         // MlKemEncapsulate / MlKemDecapsulate defer to Phase 6
         // alongside §7's privacy-circuit deterministic-randomness
         // sourcing — encapsulation requires randomness whose
         // source is §7-specified per §6.2.4 determinism.
-        AB::KzgCommit
-        | AB::KzgVerify
-        | AB::GenerateProof(_)
+        AB::GenerateProof(_)
         | AB::VerifyProof(_)
         | AB::RecursiveVerify
         | AB::MlKemEncapsulate
@@ -2262,6 +2299,199 @@ fn dispatch_release_sub_view_key(state: &mut InterpreterState) -> Result<Dispatc
     frame.push_value(RuntimeValue::Container(container));
     advance_pc(frame);
     Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::Adamant(KzgCommit)` handler — Phase 5/6.7.
+///
+/// Per whitepaper §6.2.1.4 line 412: "Pops the vector; pushes a
+/// 48-byte commitment." The popped `vector<u8>` encodes the
+/// polynomial coefficients in coefficient-form: a sequence of
+/// 32-byte big-endian scalar field elements concatenated.
+/// Length must be a multiple of 32 (otherwise the bytes do not
+/// decode as a scalar vector).
+///
+/// Output: a 48-byte `vector<u8>` containing the canonical
+/// compressed G₁ encoding of the commitment per
+/// `adamant_crypto_blst_extra::G1Point::to_compressed`.
+///
+/// # Errors
+///
+/// - [`InvariantViolationReason::KzgSetupNotLoaded`] if no
+///   trusted setup has been installed via
+///   [`InterpreterState::set_kzg_setup`].
+/// - [`InvariantViolationReason::TypeMismatchOnStack`] if the
+///   popped `vector<u8>` length is not a multiple of 32 (the
+///   bytes do not decode as a scalar-vector).
+/// - Reuses [`InvariantViolationReason::TypeMismatchOnStack`]
+///   if any 32-byte chunk does not encode a canonical scalar
+///   field element (per `Scalar::from_bytes_be` failure).
+/// - [`KzgError::DegreeExceedsSetup`] (lifted to
+///   [`InvariantViolationReason::TypeMismatchOnStack`]) if the
+///   polynomial has more coefficients than the setup's
+///   `g1_powers`. Production validators should structurally
+///   bound polynomial size at the contract layer; this variant
+///   surfaces caller misuse.
+fn dispatch_kzg_commit(state: &mut InterpreterState) -> Result<DispatchOutcome, VMError> {
+    let setup = state
+        .kzg_setup
+        .as_ref()
+        .ok_or(VMError::InvariantViolation {
+            reason: InvariantViolationReason::KzgSetupNotLoaded,
+        })?
+        .clone();
+    let frame = top_frame_mut(state)?;
+    let bytes = frame.pop_vec_u8()?;
+    let polynomial = decode_polynomial(&bytes)?;
+    let commitment = adamant_crypto::kzg::commit(&setup, &polynomial).map_err(|_| {
+        VMError::InvariantViolation {
+            reason: InvariantViolationReason::TypeMismatchOnStack,
+        }
+    })?;
+    let bytes_out = commitment.0.to_compressed();
+    push_byte_vec(frame, &bytes_out);
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// `Bytecode::Adamant(KzgVerify)` handler — Phase 5/6.7.
+///
+/// Per whitepaper §6.2.1.4 line 413: "Pops the commitment, the
+/// opening, and the claimed value; pushes a `bool`." Stack
+/// layout (top-of-stack last):
+///
+/// ```text
+/// ..., commitment: vector<u8>(48),
+///      opening: vector<u8>(48),
+///      claimed_value: vector<u8>(64)   // z (32 BE) || y (32 BE)
+///      -> ..., bool
+/// ```
+///
+/// `claimed_value` is the concatenation of evaluation point `z`
+/// (32 big-endian bytes) followed by claimed evaluation `y` (32
+/// big-endian bytes). Both interpreted as canonical scalar
+/// field elements per `Scalar::from_bytes_be`.
+///
+/// Returns `Bool(false)` for any parse failure or verification
+/// mismatch (constant-time discipline matches the
+/// [`dispatch_ed25519_verify`] / [`dispatch_bls_verify_plain`]
+/// pattern: distinguishing failure modes leaks timing
+/// information per §3.9).
+///
+/// # Errors
+///
+/// - [`InvariantViolationReason::KzgSetupNotLoaded`] if no
+///   trusted setup has been installed.
+fn dispatch_kzg_verify(state: &mut InterpreterState) -> Result<DispatchOutcome, VMError> {
+    let setup = state
+        .kzg_setup
+        .as_ref()
+        .ok_or(VMError::InvariantViolation {
+            reason: InvariantViolationReason::KzgSetupNotLoaded,
+        })?
+        .clone();
+    let frame = top_frame_mut(state)?;
+    // Pop order: top-of-stack is `claimed_value`; pushed-last per
+    // §6.2.1.4 stack convention.
+    let claimed_value_bytes = frame.pop_vec_u8()?;
+    let opening_bytes = frame.pop_vec_u8()?;
+    let commitment_bytes = frame.pop_vec_u8()?;
+
+    let result = kzg_verify_plain(
+        &setup,
+        &commitment_bytes,
+        &opening_bytes,
+        &claimed_value_bytes,
+    );
+    frame.push_value(RuntimeValue::Bool(result));
+    advance_pc(frame);
+    Ok(DispatchOutcome::Continue)
+}
+
+/// Decode a `vector<u8>` byte buffer as a [`adamant_crypto::kzg::Polynomial`].
+///
+/// Length must be a multiple of 32; each 32-byte chunk is a
+/// canonical big-endian scalar field element.
+fn decode_polynomial(bytes: &[u8]) -> Result<adamant_crypto::kzg::Polynomial, VMError> {
+    if !bytes.len().is_multiple_of(32) {
+        return Err(VMError::InvariantViolation {
+            reason: InvariantViolationReason::TypeMismatchOnStack,
+        });
+    }
+    let coeff_count = bytes.len() / 32;
+    let mut coefficients = Vec::with_capacity(coeff_count);
+    for chunk in bytes.chunks_exact(32) {
+        let arr: [u8; 32] = chunk
+            .try_into()
+            .expect("chunks_exact(32) yields 32-byte slices");
+        let scalar = adamant_crypto_blst_extra::Scalar::from_bytes_be(&arr).map_err(|_| {
+            VMError::InvariantViolation {
+                reason: InvariantViolationReason::TypeMismatchOnStack,
+            }
+        })?;
+        coefficients.push(scalar);
+    }
+    Ok(adamant_crypto::kzg::Polynomial::new(coefficients))
+}
+
+/// Verify a KZG opening with input bytes as supplied by the AVM
+/// stack. Returns `false` on any parse error or verification
+/// mismatch (constant-time discipline).
+fn kzg_verify_plain(
+    setup: &KzgSetup,
+    commitment_bytes: &[u8],
+    opening_bytes: &[u8],
+    claimed_value_bytes: &[u8],
+) -> bool {
+    use adamant_crypto::kzg::{verify, Commitment, Proof};
+    use adamant_crypto_blst_extra::{G1Point, Scalar};
+
+    // Parse commitment: 48-byte compressed G₁ point.
+    let Ok(commitment_arr) = <[u8; 48]>::try_from(commitment_bytes) else {
+        return false;
+    };
+    let Ok(commitment_point) = G1Point::from_compressed(&commitment_arr) else {
+        return false;
+    };
+
+    // Parse opening proof: 48-byte compressed G₁ point.
+    let Ok(opening_arr) = <[u8; 48]>::try_from(opening_bytes) else {
+        return false;
+    };
+    let Ok(opening_point) = G1Point::from_compressed(&opening_arr) else {
+        return false;
+    };
+
+    // Parse claimed-value: 64 bytes, z (32 BE) || y (32 BE).
+    let Ok(claimed_arr) = <[u8; 64]>::try_from(claimed_value_bytes) else {
+        return false;
+    };
+    let mut z_bytes = [0u8; 32];
+    z_bytes.copy_from_slice(&claimed_arr[..32]);
+    let mut y_bytes = [0u8; 32];
+    y_bytes.copy_from_slice(&claimed_arr[32..]);
+    let Ok(z) = Scalar::from_bytes_be(&z_bytes) else {
+        return false;
+    };
+    let Ok(y) = Scalar::from_bytes_be(&y_bytes) else {
+        return false;
+    };
+
+    verify(
+        setup,
+        &Commitment(commitment_point),
+        &z,
+        &y,
+        &Proof(opening_point),
+    )
+}
+
+/// Push an arbitrary byte sequence as a `vector<u8>` onto the
+/// operand stack. Generalisation of [`push_hash_digest`] for
+/// non-32-byte outputs (e.g., 48-byte KZG commitments).
+fn push_byte_vec(frame: &mut Frame, bytes: &[u8]) {
+    let elements: Vec<RuntimeValue> = bytes.iter().copied().map(RuntimeValue::U8).collect();
+    let container = crate::runtime::runtime_value::Container::from_vec(elements);
+    frame.push_value(RuntimeValue::Container(container));
 }
 
 /// `Bytecode::Adamant(OutOfGas)` handler.

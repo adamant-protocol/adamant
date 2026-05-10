@@ -257,6 +257,20 @@ pub struct TransactionContext<'a> {
     /// [`crate::transaction::TxBody::created_objects`]'s implicit
     /// per-creation index.
     pub deploy_index: u64,
+    /// KZG trusted-setup parameters per whitepaper §3.9.2 / §11.
+    /// Used by `adamant::module::deploy` to compute the deployed
+    /// module's `proof_commitment` (a KZG commitment to the
+    /// bytecode polynomial) per §5.1.7. `None` only in tests; in
+    /// production the validator startup loads the genesis-fixed
+    /// `EthPoT` setup and threads it through to every transaction
+    /// context.
+    ///
+    /// Phase 5/6.8 closure: when `Some`, `module_deploy` computes
+    /// the real KZG commitment; when `None`, falls back to zero-
+    /// bytes placeholder (test convenience). Production validators
+    /// always load the setup at startup; the `None` branch should
+    /// never fire in consensus-binding paths.
+    pub kzg_setup: Option<&'a adamant_crypto::kzg::KzgSetup>,
 }
 
 /// Function pointer signature for a native-dispatched handler.

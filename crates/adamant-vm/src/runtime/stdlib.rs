@@ -405,6 +405,19 @@ fn module_deploy(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
             reason: InvariantViolationReason::TypeMismatchOnStack,
         }
     })?;
+    // Proof commitment for the deployed module is the §3.9.2 KZG
+    // commitment to the bytecode polynomial (§5.1.7). Phase 5/6.8
+    // closure wires the real commitment whenever the validator has
+    // loaded the trusted-setup parameters. Tests that don't load
+    // a setup fall back to zero-bytes placeholder; production
+    // validators always load the setup at startup so the fallback
+    // path is consensus-irrelevant.
+    let proof_commitment = match tx_ctx.kzg_setup {
+        Some(setup) => bytecode_to_proof_commitment(&bytecode, setup)?,
+        None => adamant_types::ProofCommitment::from_bytes(
+            [0u8; adamant_types::metadata::PROOF_COMMITMENT_BYTES],
+        ),
+    };
     let module_obj = adamant_types::Object {
         id: object_id,
         type_id: stdlib_module_type_id(),
@@ -418,15 +431,7 @@ fn module_deploy(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
             last_modified_height: 0,
             creator,
             storage_rent_paid_through: 0,
-            // Proof commitment for the deployed module is the
-            // §3.9.2 KZG commitment to the bytecode; production
-            // construction lands at Phase 6 alongside KZG
-            // dispatch + EthPoT setup ingestion. Phase 5/6.8.C
-            // ships zero-bytes placeholder consistent with the
-            // §7-deferred shielded-deployment path.
-            proof_commitment: adamant_types::ProofCommitment::from_bytes(
-                [0u8; adamant_types::metadata::PROOF_COMMITMENT_BYTES],
-            ),
+            proof_commitment,
         },
     };
 
@@ -551,6 +556,50 @@ fn module_freeze_native(ctx: &mut NativeContext<'_>) -> Result<(), VMError> {
 /// the genesis stdlib type registry. Pre-mainnet hardening item.
 fn stdlib_module_type_id() -> adamant_types::TypeId {
     adamant_types::TypeId::from_bytes([0u8; 32])
+}
+
+/// Compute the §5.1.7 / §3.9.2 KZG proof-commitment to the bytecode
+/// polynomial. Encodes `bytecode` as a sequence of 31-byte chunks,
+/// each padded to 32 bytes with a leading zero byte (which
+/// guarantees the chunk is canonically-encoded as a BLS12-381
+/// scalar field element — the field modulus is approximately
+/// 2^252, so any 32-byte big-endian value with the top byte zero
+/// is < the modulus). The chunks are the polynomial's
+/// coefficients in coefficient form; KZG commits to that
+/// polynomial under the trusted setup.
+///
+/// # Errors
+///
+/// Returns [`InvariantViolationReason::TypeMismatchOnStack`] if
+/// the bytecode polynomial's degree exceeds the setup's
+/// `g1_powers` length. Production validators load a setup at
+/// 2^16 = 65,536 max degree, which at 31 bytes per coefficient
+/// supports up to ~2 MB modules — comfortably above the
+/// §6.2.1.7 module-size structural limit.
+fn bytecode_to_proof_commitment(
+    bytecode: &[u8],
+    setup: &adamant_crypto::kzg::KzgSetup,
+) -> Result<adamant_types::ProofCommitment, VMError> {
+    use adamant_crypto::kzg::{commit, Polynomial};
+    use adamant_crypto_blst_extra::Scalar;
+
+    let mut coefficients = Vec::with_capacity(bytecode.len() / 31 + 1);
+    for chunk in bytecode.chunks(31) {
+        let mut padded = [0u8; 32];
+        // Big-endian: padded[0] = 0 (forces < BLS12-381 field modulus),
+        // padded[1..=chunk.len()] = chunk bytes.
+        padded[1..=chunk.len()].copy_from_slice(chunk);
+        let scalar = Scalar::from_bytes_be(&padded)
+            .expect("31-byte BE with zero top byte is always < BLS12-381 scalar field modulus");
+        coefficients.push(scalar);
+    }
+    let polynomial = Polynomial::new(coefficients);
+    let commitment = commit(setup, &polynomial).map_err(|_| VMError::InvariantViolation {
+        reason: InvariantViolationReason::TypeMismatchOnStack,
+    })?;
+    Ok(adamant_types::ProofCommitment::from_bytes(
+        commitment.0.to_compressed(),
+    ))
 }
 
 const MUTABILITY_METADATA_KEY: &[u8] = b"adamant.mutability";

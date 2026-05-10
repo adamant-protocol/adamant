@@ -233,6 +233,245 @@ fn sha3_and_blake3_produce_distinct_digests_for_same_input() {
 }
 
 // =====================================================================
+// KzgCommit / KzgVerify (Phase 5/6.7)
+// =====================================================================
+//
+// Whitepaper §6.2.1.4 lines 412-413:
+// - `KzgCommit` — pops a `vector<u8>` of polynomial coefficients
+//   (each 32-byte big-endian scalar), pushes a 48-byte commitment.
+// - `KzgVerify` — pops commitment, opening, claimed_value;
+//   pushes a `bool`. `claimed_value` is `z (32 BE) || y (32 BE)`.
+
+/// Build a small KZG setup for tests (max_degree = 8). Constructs
+/// the trusted-setup parameters manually with `tau = 7`, mirroring
+/// the `generate_for_testing` shape that lives `pub(crate)` in
+/// `adamant-crypto::kzg`. Production loads the genesis-fixed
+/// EthPoT setup at startup; this is test-only.
+fn test_kzg_setup() -> std::sync::Arc<adamant_crypto::kzg::KzgSetup> {
+    use adamant_crypto::kzg::KzgSetup;
+    use adamant_crypto_blst_extra::{G1Point, G2Point, Scalar};
+    let tau = Scalar::from_u32(7);
+    let max_degree = 8;
+    let g1 = G1Point::generator();
+    let g2 = G2Point::generator();
+    let mut g1_powers = Vec::with_capacity(max_degree + 1);
+    g1_powers.push(g1);
+    let mut tau_pow = Scalar::one();
+    for _ in 1..=max_degree {
+        tau_pow = tau_pow.mul(&tau);
+        g1_powers.push(g1.mul_scalar(&tau_pow));
+    }
+    let g2_tau = g2.mul_scalar(&tau);
+    let setup = KzgSetup::from_parameters(g1_powers, g2, g2_tau);
+    std::sync::Arc::new(setup)
+}
+
+/// Encode a polynomial as a `vec<u8>` for the AVM stack.
+fn encode_polynomial(coeffs: &[adamant_crypto_blst_extra::Scalar]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(coeffs.len() * 32);
+    for c in coeffs {
+        bytes.extend_from_slice(&c.to_bytes_be());
+    }
+    bytes
+}
+
+#[test]
+fn kzg_commit_produces_48_byte_commitment() {
+    use adamant_crypto_blst_extra::Scalar;
+    let module = empty_module();
+    let mut state = state_with_transparent_frame(0);
+    state.set_kzg_setup(test_kzg_setup());
+
+    // Polynomial p(x) = 3 + 5x + 2x^2.
+    let coeffs = vec![
+        Scalar::from_u32(3),
+        Scalar::from_u32(5),
+        Scalar::from_u32(2),
+    ];
+    let bytes = encode_polynomial(&coeffs);
+    push_stack(&mut state, vec![vec_u8(&bytes)]);
+
+    dispatch_adamant(&mut state, AdamantBytecode::KzgCommit, &module).expect("ok");
+
+    let commitment_bytes = extract_vec_u8(&top(&state));
+    assert_eq!(commitment_bytes.len(), 48);
+}
+
+#[test]
+fn kzg_commit_without_setup_aborts_with_setup_not_loaded() {
+    use adamant_crypto_blst_extra::Scalar;
+    let module = empty_module();
+    let mut state = state_with_transparent_frame(0);
+    // No set_kzg_setup() — setup is None.
+
+    let bytes = encode_polynomial(&[Scalar::from_u32(1)]);
+    push_stack(&mut state, vec![vec_u8(&bytes)]);
+
+    let result = dispatch_adamant(&mut state, AdamantBytecode::KzgCommit, &module);
+    assert!(matches!(
+        result,
+        Err(VMError::InvariantViolation {
+            reason: InvariantViolationReason::KzgSetupNotLoaded
+        })
+    ));
+}
+
+#[test]
+fn kzg_commit_with_non_multiple_of_32_bytes_surfaces_type_mismatch() {
+    let module = empty_module();
+    let mut state = state_with_transparent_frame(0);
+    state.set_kzg_setup(test_kzg_setup());
+
+    // 31 bytes — not a multiple of 32, so doesn't decode as scalar vector.
+    push_stack(&mut state, vec![vec_u8(&[0xAA; 31])]);
+
+    let result = dispatch_adamant(&mut state, AdamantBytecode::KzgCommit, &module);
+    assert!(matches!(
+        result,
+        Err(VMError::InvariantViolation {
+            reason: InvariantViolationReason::TypeMismatchOnStack
+        })
+    ));
+}
+
+#[test]
+fn kzg_commit_then_verify_round_trip() {
+    use adamant_crypto::kzg::{open, Polynomial};
+    use adamant_crypto_blst_extra::Scalar;
+
+    let module = empty_module();
+    let setup = test_kzg_setup();
+
+    // Polynomial p(x) = 4 + 6x + x^2.
+    let coeffs = vec![
+        Scalar::from_u32(4),
+        Scalar::from_u32(6),
+        Scalar::from_u32(1),
+    ];
+
+    // Step 1: KzgCommit via dispatch.
+    let mut commit_state = state_with_transparent_frame(0);
+    commit_state.set_kzg_setup(setup.clone());
+    push_stack(&mut commit_state, vec![vec_u8(&encode_polynomial(&coeffs))]);
+    dispatch_adamant(&mut commit_state, AdamantBytecode::KzgCommit, &module).expect("ok");
+    let commitment_bytes = extract_vec_u8(&top(&commit_state));
+    assert_eq!(commitment_bytes.len(), 48);
+
+    // Step 2: open at z = 3 off-circuit (math layer, not via dispatch).
+    let z = Scalar::from_u32(3);
+    let polynomial = Polynomial::new(coeffs);
+    let (y, proof) = open(&setup, &polynomial, &z).expect("open");
+    let opening_bytes = proof.0.to_compressed().to_vec();
+
+    // claimed_value = z (32 BE) || y (32 BE).
+    let mut claimed_bytes = Vec::with_capacity(64);
+    claimed_bytes.extend_from_slice(&z.to_bytes_be());
+    claimed_bytes.extend_from_slice(&y.to_bytes_be());
+
+    // Step 3: KzgVerify via dispatch.
+    let mut verify_state = state_with_transparent_frame(0);
+    verify_state.set_kzg_setup(setup);
+    push_stack(
+        &mut verify_state,
+        vec![
+            vec_u8(&commitment_bytes),
+            vec_u8(&opening_bytes),
+            vec_u8(&claimed_bytes),
+        ],
+    );
+    dispatch_adamant(&mut verify_state, AdamantBytecode::KzgVerify, &module).expect("ok");
+
+    let result = top(&verify_state);
+    assert!(matches!(result, RuntimeValue::Bool(true)));
+}
+
+#[test]
+fn kzg_verify_rejects_wrong_evaluation() {
+    use adamant_crypto::kzg::{open, Polynomial};
+    use adamant_crypto_blst_extra::Scalar;
+
+    let module = empty_module();
+    let setup = test_kzg_setup();
+
+    let coeffs = vec![
+        Scalar::from_u32(4),
+        Scalar::from_u32(6),
+        Scalar::from_u32(1),
+    ];
+    let polynomial = Polynomial::new(coeffs.clone());
+
+    let mut commit_state = state_with_transparent_frame(0);
+    commit_state.set_kzg_setup(setup.clone());
+    push_stack(&mut commit_state, vec![vec_u8(&encode_polynomial(&coeffs))]);
+    dispatch_adamant(&mut commit_state, AdamantBytecode::KzgCommit, &module).expect("ok");
+    let commitment_bytes = extract_vec_u8(&top(&commit_state));
+
+    let z = Scalar::from_u32(3);
+    let (_, proof) = open(&setup, &polynomial, &z).expect("open");
+    let opening_bytes = proof.0.to_compressed().to_vec();
+
+    // Tamper: use wrong y (the actual y is `4 + 6*3 + 9 = 31`; we'll
+    // claim y = 99).
+    let bad_y = Scalar::from_u32(99);
+    let mut claimed_bytes = Vec::with_capacity(64);
+    claimed_bytes.extend_from_slice(&z.to_bytes_be());
+    claimed_bytes.extend_from_slice(&bad_y.to_bytes_be());
+
+    let mut verify_state = state_with_transparent_frame(0);
+    verify_state.set_kzg_setup(setup);
+    push_stack(
+        &mut verify_state,
+        vec![
+            vec_u8(&commitment_bytes),
+            vec_u8(&opening_bytes),
+            vec_u8(&claimed_bytes),
+        ],
+    );
+    dispatch_adamant(&mut verify_state, AdamantBytecode::KzgVerify, &module).expect("ok");
+
+    let result = top(&verify_state);
+    assert!(matches!(result, RuntimeValue::Bool(false)));
+}
+
+#[test]
+fn kzg_verify_with_malformed_commitment_returns_false() {
+    let module = empty_module();
+    let mut state = state_with_transparent_frame(0);
+    state.set_kzg_setup(test_kzg_setup());
+
+    // 47 bytes — wrong length for compressed G1.
+    push_stack(
+        &mut state,
+        vec![
+            vec_u8(&[0xAA; 47]),
+            vec_u8(&[0xBB; 48]),
+            vec_u8(&[0xCC; 64]),
+        ],
+    );
+    dispatch_adamant(&mut state, AdamantBytecode::KzgVerify, &module).expect("ok");
+    let result = top(&state);
+    assert!(matches!(result, RuntimeValue::Bool(false)));
+}
+
+#[test]
+fn kzg_verify_without_setup_aborts() {
+    let module = empty_module();
+    let mut state = state_with_transparent_frame(0);
+    // No setup loaded.
+    push_stack(
+        &mut state,
+        vec![vec_u8(&[0u8; 48]), vec_u8(&[0u8; 48]), vec_u8(&[0u8; 64])],
+    );
+    let result = dispatch_adamant(&mut state, AdamantBytecode::KzgVerify, &module);
+    assert!(matches!(
+        result,
+        Err(VMError::InvariantViolation {
+            reason: InvariantViolationReason::KzgSetupNotLoaded
+        })
+    ));
+}
+
+// =====================================================================
 // Ed25519Verify
 // =====================================================================
 
@@ -646,18 +885,25 @@ fn call_inherits_caller_privacy_mode() {
 // Deferred handlers
 // =====================================================================
 
-/// Deferred handlers (3 unbacked crypto + 4 privacy circuit + 3
-/// gas) surface InvalidInstruction at runtime per the verifier-
-/// residual posture pending their respective foundation work.
+/// `KzgCommit` without a loaded KZG trusted-setup surfaces
+/// `KzgSetupNotLoaded` invariant violation. Phase 5/6.7 wired
+/// the dispatch handler; the deferred-handler test from prior
+/// phases is replaced by this setup-not-loaded test.
 ///
-/// Sample: KzgCommit deferred to alongside adamant-crypto KZG
-/// implementation per Q5/6.3 impl-gate Option γ disposition.
+/// Real KZG round-trip + tampered-evaluation-rejection coverage
+/// lives in the `kzg_*` test family above.
 #[test]
-fn deferred_kzg_commit_surfaces_invalid_instruction() {
+fn kzg_commit_without_setup_surfaces_setup_not_loaded() {
     let module = empty_module();
     let mut state = state_with_transparent_frame(0);
+    push_stack(&mut state, vec![vec_u8(&[0u8; 32])]);
     let result = dispatch_adamant(&mut state, AdamantBytecode::KzgCommit, &module);
-    assert!(matches!(result, Err(VMError::InvalidInstruction { .. })));
+    assert!(matches!(
+        result,
+        Err(VMError::InvariantViolation {
+            reason: InvariantViolationReason::KzgSetupNotLoaded
+        })
+    ));
 }
 
 /// Privacy-circuit handler `GenerateProof` deferred to Phase 6

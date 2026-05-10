@@ -36,5 +36,6 @@
 pub mod ecc;
 pub mod poseidon;
 pub mod proofs;
+pub mod recursion;
 pub mod sinsemilla;
 pub mod utilities;

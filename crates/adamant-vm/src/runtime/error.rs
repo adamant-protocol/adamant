@@ -423,6 +423,27 @@ pub enum InvariantViolationReason {
     /// resolution is not implementable, and this variant signals
     /// the boundary.
     ShieldedSenderRequiresPrivacyLayer,
+
+    /// `KzgCommit` or `KzgVerify` instruction was dispatched but
+    /// the runtime's KZG trusted-setup parameters per whitepaper
+    /// §3.9.2 / §11 (Ethereum KZG Powers of Tau ceremony output)
+    /// have not been loaded into [`super::interpreter::InterpreterState`].
+    ///
+    /// Per §11 the trusted setup is genesis-fixed and loaded at
+    /// validator startup. This variant fires only when the runtime
+    /// is misconfigured (e.g., a unit test invokes a KZG opcode
+    /// without first calling
+    /// [`super::interpreter::InterpreterState::set_kzg_setup`]).
+    /// Production validators must load the setup before accepting
+    /// any transaction that may invoke KZG bytecode; consensus-
+    /// binding behaviour is "transaction abort with this variant
+    /// when the setup is unavailable."
+    ///
+    /// Phase 5/6.7 wires the dispatch handlers and the runtime
+    /// resource hook. Genesis-state ingestion of the `EthPoT`
+    /// setup is a Phase 7+ consensus-integration item per
+    /// `adamant-crypto/src/kzg.rs` module docs.
+    KzgSetupNotLoaded,
 }
 
 /// Closed sub-reason enum for [`VMError::AbortError`].

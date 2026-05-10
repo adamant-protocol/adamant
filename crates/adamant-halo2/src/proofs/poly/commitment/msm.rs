@@ -135,6 +135,24 @@ impl<'a, C: CurveAffine> MSM<'a, C> {
 
     /// Perform multiexp and check that it results in zero
     pub fn eval(self) -> bool {
+        bool::from(self.eval_to_curve_point().is_identity())
+    }
+
+    /// Perform multiexp and return the resulting curve point
+    /// rather than the identity check. Used by Adamant's
+    /// pure-Pallas accumulator-folding recursive composition
+    /// (whitepaper §8.5.2 / Phase 6.9b) to fold an entire
+    /// proof's MSM down to a single point that can be persisted
+    /// across epoch boundaries.
+    ///
+    /// The recursive verifier absorbs the prior epoch's evaluated
+    /// point as an `(scalar=random_challenge, base=prior_point)`
+    /// term in the new MSM; the new MSM evaluates to identity iff
+    /// (a) all this-epoch proofs verify AND (b) the prior epoch's
+    /// accumulator was already identity. Chaining this across
+    /// epochs gives constant-size recursive proofs without
+    /// requiring an in-circuit Halo 2 verifier.
+    pub fn eval_to_curve_point(self) -> C::Curve {
         let len = self.g_scalars.as_ref().map(|v| v.len()).unwrap_or(0)
             + self.w_scalar.map(|_| 1).unwrap_or(0)
             + self.u_scalar.map(|_| 1).unwrap_or(0)
@@ -166,7 +184,7 @@ impl<'a, C: CurveAffine> MSM<'a, C> {
 
         assert_eq!(scalars.len(), len);
 
-        bool::from(best_multiexp(&scalars, &bases).is_identity())
+        best_multiexp(&scalars, &bases)
     }
 }
 

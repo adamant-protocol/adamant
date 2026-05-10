@@ -47,6 +47,7 @@
 pub mod assertion;
 pub mod circuit;
 pub mod encrypted_note;
+pub mod epoch_recursion;
 pub mod gnct;
 pub mod memo;
 pub mod note;

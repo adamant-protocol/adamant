@@ -11,6 +11,15 @@ publish.workspace = true
 [dependencies]
 adamant-bytecode-format = { workspace = true }
 adamant-crypto = { path = "../adamant-crypto" }
+# Direct dep on adamant-crypto-blst-extra needed by the Phase 5/6.7
+# `KzgCommit` / `KzgVerify` dispatch handlers in
+# `runtime/interpreter.rs`: handlers parse 32-byte and 48-byte byte
+# strings popped from the operand stack into `Scalar` and `G1Point`
+# respectively, then invoke `adamant_crypto::kzg::{commit, verify}`
+# on the parsed types. The blst-extra crate is already a transitive
+# dep via `adamant-crypto`; this declaration makes the type-level
+# dispatch surface (Scalar / G1Point) directly nameable.
+adamant-crypto-blst-extra = { path = "../adamant-crypto-blst-extra" }
 # adamant-state provides §5.1.1 derive_object_id, consumed by the
 # Phase 5/6.8.C `adamant::module::deploy` runtime stdlib handler
 # for ObjectId derivation of newly-deployed Module objects per the
