@@ -1,0 +1,23 @@
+[package]
+name = "adamant-consensus"
+description = "Consensus layer per whitepaper §8. Phase 7 deliverable: validator types, active set, DAG-BFT vertex structure, consensus VRF, threshold-encrypted mempool integration, recursive proof submission, slashing, and the §8.7 safety/liveness invariants. Phase 7.0 (this commit) ships the validator-identity foundation: ValidatorPublicKeys / ValidatorId / Stake / Validator / SecurityTier / GenesisCohortMarker / EpochNumber / RoundNumber / slashing types per §8.1.1–8.1.9."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+adamant-crypto = { path = "../adamant-crypto" }
+adamant-types = { path = "../adamant-types" }
+serde = { workspace = true }
+serde-big-array = { workspace = true }
+bcs = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }
+hex-literal = { workspace = true }
+
+[lints]
+workspace = true

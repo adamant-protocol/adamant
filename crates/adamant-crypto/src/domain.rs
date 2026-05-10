@@ -471,6 +471,21 @@ pub static VALUE_COMMITMENT_BASE: DomainTag = DomainTag::new(b"ADAMANT-v1-vc-bas
 /// value-commitment-scheme amendment (instance 33).
 pub static VALUE_COMMITMENT_RANDOMNESS: DomainTag = DomainTag::new(b"ADAMANT-v1-vc-randomness");
 
+/// Domain tag for the validator-identifier derivation per
+/// whitepaper §8.1.1.
+///
+/// Composition: `sha3_256_tagged(VALIDATOR_ID, BCS(ValidatorPublicKeys))`
+/// produces the canonical 32-byte `ValidatorId`. Mirrors the
+/// `ACCOUNT_ADDRESS` tagged-hash pattern (§4.2): a content-derived
+/// identifier that's reproducible from the validator's published
+/// public-key bundle. Two validators with identical public-key
+/// bundles produce identical `ValidatorId`s — by construction.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 7.0 as part of the §8.1.1 validator-
+/// identity foundation.
+pub static VALIDATOR_ID: DomainTag = DomainTag::new(b"ADAMANT-v1-validator-id");
+
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and
 /// test-vector regressions.

@@ -37,6 +37,7 @@ from pathlib import Path
 ADAMANT_CRATES = [
     "adamant-account",
     "adamant-bytecode-format",
+    "adamant-consensus",
     "adamant-crypto",
     "adamant-crypto-blst-extra",
     "adamant-privacy",

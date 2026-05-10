@@ -27,6 +27,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "adamant-consensus"
+version = "0.0.1"
+dependencies = [
+ "adamant-crypto",
+ "adamant-types",
+ "bcs",
+ "hex",
+ "hex-literal",
+ "serde",
+ "serde-big-array",
+]
+
+[[package]]
 name = "adamant-crypto"
 version = "0.0.1"
 dependencies = [
