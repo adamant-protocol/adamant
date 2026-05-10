@@ -23,3 +23,4 @@ target
 # Local Claude Code state (per-checkout settings, transcripts, etc.).
 # Must not enter the repo.
 .claude/
+__pycache__/
