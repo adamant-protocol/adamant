@@ -75,6 +75,8 @@
 //! file's shape closely; the inline commentary here is heavier than
 //! strictly necessary so Phase 4 has a worked example to mimic.
 
+#![forbid(unsafe_code)]
+
 use adamant_crypto::{domain, hash::sha3_256_tagged};
 use adamant_types::{Address, TxHash};
 use serde::Serialize;

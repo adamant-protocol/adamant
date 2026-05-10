@@ -187,6 +187,15 @@ impl U256 {
     /// `a[i] * b[j]` into an 8-limb (512-bit) buffer; the result
     /// fits in 256 bits if and only if the upper 4 limbs are all
     /// zero.
+    /// Checked 256-bit multiplication. Returns `None` on overflow,
+    /// `Some(product)` otherwise.
+    ///
+    /// Uses the schoolbook-multiplication ladder over 64-bit
+    /// limbs: `a[i] * b[j]` accumulates into `buffer[i+j]` /
+    /// `buffer[i+j+1]` per the standard 4×4-limb cross-product
+    /// pattern. The 8-limb result buffer's high 4 limbs must be
+    /// zero for a valid 256-bit product; non-zero high limbs
+    /// surface as `None` (overflow).
     #[must_use]
     #[allow(
         clippy::cast_possible_truncation,

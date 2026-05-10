@@ -80,6 +80,22 @@ pub const ML_DSA_87_SIGNATURE_BYTES: usize = 4627;
 // affect in-memory layout but not the BCS wire format, which is
 // the consensus surface; the trade-off is reviewed in the type's
 // doc comment.
+/// Adamant signature wire enum per whitepaper §3.4.
+///
+/// Variant tags are pinned at genesis-fixed BCS encoding values:
+/// `Ed25519 = 0x00` (§3.4.1), `MlDsa65 = 0x01` (§3.4.2 NIST FIPS 204
+/// final), `Bls = 0x02` (§3.4.3 BLS12-381 G2 signature).
+///
+/// The variant-size disparity (Ed25519 64 bytes vs ML-DSA 3309
+/// bytes vs BLS 96 bytes) means the in-memory `enum` carries the
+/// largest variant's footprint per Rust's enum layout. The
+/// `#[allow(clippy::large_enum_variant)]` attribute documents that
+/// the trade-off is intentional: boxing would change in-memory
+/// layout but NOT the BCS wire format (the consensus surface), so
+/// the cleaner direct-enum representation is preferred. If
+/// per-transaction allocation pressure ever becomes a measurable
+/// bottleneck pre-mainnet, the `Box<MlDsa65SignatureBytes>` shape
+/// can be revisited as a non-consensus optimization.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Signature {

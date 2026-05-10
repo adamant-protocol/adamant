@@ -41,6 +41,8 @@
 //! ([`adamant_crypto::domain::OBJECT_ID`]) and a different output
 //! type ([`ObjectId`]).
 
+#![forbid(unsafe_code)]
+
 pub mod rules;
 
 pub use rules::{

@@ -53,6 +53,8 @@
 //! live in `adamant-vm` because they are VM-specific and depend on
 //! types declared here.
 
+#![forbid(unsafe_code)]
+
 pub mod address;
 pub mod function_id;
 pub mod lifecycle;

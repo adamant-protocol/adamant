@@ -41,6 +41,8 @@
 //! submodule has no implementation yet; it lands when zk circuits arrive
 //! (Phase 6). See [`hash`] for the rationale on the split.
 
+#![forbid(unsafe_code)]
+
 pub mod bls;
 pub mod domain;
 pub mod hash;

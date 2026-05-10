@@ -65,6 +65,8 @@
 //! ([`adamant_crypto::domain::TX_HASH`]) and a different input
 //! shape ([`TxBody`]).
 
+#![forbid(unsafe_code)]
+
 pub mod bytecode;
 pub mod bytecode_wire;
 pub mod module;

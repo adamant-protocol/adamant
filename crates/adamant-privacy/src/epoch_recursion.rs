@@ -178,10 +178,8 @@ where
         .iter()
         .map(|rows| vec![rows.as_slice()])
         .collect();
-    let instances_borrowed: Vec<&[&[pallas::Base]]> = instances_per_proof
-        .iter()
-        .map(Vec::as_slice)
-        .collect();
+    let instances_borrowed: Vec<&[&[pallas::Base]]> =
+        instances_per_proof.iter().map(Vec::as_slice).collect();
     let proofs_borrowed: Vec<&[u8]> = proof_bytes.iter().map(Vec::as_slice).collect();
 
     let new_acc = fold_proofs(
