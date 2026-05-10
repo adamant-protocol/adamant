@@ -940,6 +940,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gen-fixed-base-tables"
+version = "0.0.1"
+dependencies = [
+ "adamant-crypto",
+ "adamant-halo2",
+ "pasta_curves",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

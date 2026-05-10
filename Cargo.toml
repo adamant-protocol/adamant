@@ -19,6 +19,11 @@ members = [
     "crates/adamant-crypto-blst-extra",
     "crates/adamant-halo2",
     "crates/adamant-privacy",
+    # Workspace tooling — outside the production-binary
+    # dependency graph per CLAUDE.md §14. Emits Rust source
+    # files into `crates/`; the emitted source is part of
+    # production, but these binaries are not.
+    "tools/gen-fixed-base-tables",
     "crates/adamant-state",
     "crates/adamant-types",
     "crates/adamant-vm",

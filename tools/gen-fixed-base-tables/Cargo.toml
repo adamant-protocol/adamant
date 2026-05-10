@@ -1,0 +1,21 @@
+[package]
+name = "gen-fixed-base-tables"
+description = "One-shot generator for the §7.3.1.2 value-commitment R-generator's fixed-base Lagrange tables. Runs find_zs_and_us(R, NUM_WINDOWS) once, formats the output as Rust source, writes to crates/adamant-privacy/src/circuit/value_commitment_chip_tables.rs."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# This binary lives under tools/, OUTSIDE the production-binary
+# dependency graph per CLAUDE.md §14 Adamant-native posture.
+# It is dev-tooling that emits Rust source files into crates/;
+# the emitted source files are themselves part of the production
+# binary, but this generator is not.
+
+[dependencies]
+adamant-crypto = { path = "../../crates/adamant-crypto" }
+adamant-halo2 = { path = "../../crates/adamant-halo2" }
+pasta_curves = { workspace = true }
+
+[lints]
+workspace = true

@@ -52,8 +52,10 @@ pub mod nullifier;
 pub mod range_check;
 pub mod shielded_input;
 pub mod shielded_output;
+pub mod validity;
 pub mod value_commitment;
 pub mod value_commitment_chip;
+pub mod value_commitment_chip_tables;
 
 pub use merkle::{MerkleMembershipCircuit, MerkleMembershipPublicInputs, MerkleMembershipWitness};
 pub use note_commitment::{NoteCommitmentCircuit, NoteCommitmentWitness};
@@ -65,6 +67,7 @@ pub use shielded_input::{
     ShieldedInputCircuit, ShieldedInputDomainTags, ShieldedInputPublicInputs, ShieldedInputWitness,
 };
 pub use shielded_output::{ShieldedOutputCircuit, ShieldedOutputWitness};
+pub use validity::{ValidityCircuit, ValidityDomainTags, ValidityPublicInputs, ValidityWitness};
 pub use value_commitment::{
     ValueCommitmentCircuit, ValueCommitmentPublicInputs, ValueCommitmentWitness,
 };

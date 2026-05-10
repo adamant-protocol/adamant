@@ -60,13 +60,15 @@
 use std::sync::OnceLock;
 
 use adamant_crypto::domain;
-use adamant_halo2::ecc::chip::constants::{find_zs_and_us, H, NUM_WINDOWS, NUM_WINDOWS_SHORT};
+use adamant_halo2::ecc::chip::constants::H;
 use adamant_halo2::ecc::chip::{BaseFieldElem, FixedPoint, FullScalar, ShortScalar};
 use adamant_halo2::ecc::FixedPoints;
 use pasta_curves::arithmetic::CurveExt;
 use pasta_curves::group::ff::PrimeField;
 use pasta_curves::group::Curve;
 use pasta_curves::pallas;
+
+use super::value_commitment_chip_tables as tables;
 
 /// Adamant's `FixedPoints` impl for the value-commitment
 /// ECC chip. The single load-bearing role is `FullScalar = R`,
@@ -101,25 +103,55 @@ fn r_generator_affine() -> pallas::Affine {
 }
 
 /// Per-window `(z, u)` values for `R` at `NUM_WINDOWS = 85`
-/// (full Pallas-scalar bit width, 3-bit windows). Computed
-/// once at first use via `find_zs_and_us`. Phase 6.8b.4d-2.c.2
-/// will replace this with hardcoded constants + a parity test.
+/// (full Pallas-scalar bit width, 3-bit windows).
+///
+/// Reads the hardcoded byte-level tables from
+/// [`super::value_commitment_chip_tables`] (generated once via
+/// `tools/gen-fixed-base-tables` per Phase 6.8b.4d-2.c.3a) and
+/// converts the per-entry `[u8; 32]` u-values to
+/// `pallas::Base` field elements at first use. `OnceLock`-
+/// cached to amortize the conversion across the process
+/// lifetime.
+///
+/// Switching from the prior runtime `find_zs_and_us`
+/// computation to hardcoded tables eliminates the ~7-minute
+/// startup cost the runtime path imposed (with full
+/// reproducibility — re-running the generator from
+/// `R = HashToCurve(...)` produces byte-identical output).
 fn r_zs_and_us_full() -> &'static Vec<(u64, [pallas::Base; H])> {
     static ZS_AND_US: OnceLock<Vec<(u64, [pallas::Base; H])>> = OnceLock::new();
     ZS_AND_US.get_or_init(|| {
-        find_zs_and_us(r_generator_affine(), NUM_WINDOWS)
-            .expect("find_zs_and_us must succeed for the registered R generator at NUM_WINDOWS")
+        tables::R_FULL_SCALAR_Z
+            .iter()
+            .zip(tables::R_FULL_SCALAR_U.iter())
+            .map(|(z, u_bytes_window)| {
+                let mut us = [pallas::Base::from(0u64); H];
+                for (slot, bytes) in us.iter_mut().zip(u_bytes_window.iter()) {
+                    *slot = tables::parse_pallas_base(bytes);
+                }
+                (*z, us)
+            })
+            .collect()
     })
 }
 
 /// Per-window `(z, u)` values for `R` at `NUM_WINDOWS_SHORT`
-/// (64-bit signed scalar). Stub support for the
-/// [`RShortScalar`] never-invoked code path.
+/// (64-bit signed scalar). Same hardcoded-tables pattern as
+/// [`r_zs_and_us_full`].
 fn r_zs_and_us_short() -> &'static Vec<(u64, [pallas::Base; H])> {
     static ZS_AND_US: OnceLock<Vec<(u64, [pallas::Base; H])>> = OnceLock::new();
     ZS_AND_US.get_or_init(|| {
-        find_zs_and_us(r_generator_affine(), NUM_WINDOWS_SHORT)
-            .expect("find_zs_and_us must succeed at NUM_WINDOWS_SHORT")
+        tables::R_SHORT_SCALAR_Z
+            .iter()
+            .zip(tables::R_SHORT_SCALAR_U.iter())
+            .map(|(z, u_bytes_window)| {
+                let mut us = [pallas::Base::from(0u64); H];
+                for (slot, bytes) in us.iter_mut().zip(u_bytes_window.iter()) {
+                    *slot = tables::parse_pallas_base(bytes);
+                }
+                (*z, us)
+            })
+            .collect()
     })
 }
 
@@ -222,6 +254,7 @@ impl FixedPoint<pallas::Affine> for RBaseField {
 mod tests {
     use super::*;
     use crate::value_commitment::randomness_generator;
+    use adamant_halo2::ecc::chip::constants::NUM_WINDOWS;
 
     /// `r_generator_affine()` matches the off-circuit
     /// [`crate::value_commitment::randomness_generator`] — both
@@ -239,7 +272,6 @@ mod tests {
     /// is slow (~minutes) — `#[ignore]`-d until the
     /// pre-mainnet hardening sub-arc hardcodes the tables.
     #[test]
-    #[ignore = "triggers find_zs_and_us(R, NUM_WINDOWS); slow"]
     fn r_full_scalar_zs_and_us_count() {
         let zs_and_us = r_zs_and_us_full();
         assert_eq!(zs_and_us.len(), NUM_WINDOWS);
@@ -250,7 +282,6 @@ mod tests {
     /// `r_full_scalar_zs_and_us_count` — triggers
     /// find_zs_and_us.
     #[test]
-    #[ignore = "triggers find_zs_and_us(R, NUM_WINDOWS); slow"]
     fn r_full_scalar_zs_and_us_consistent_lengths() {
         let r = RFullScalar;
         let zs = r.z();
