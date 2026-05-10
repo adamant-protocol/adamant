@@ -67,7 +67,11 @@ pub use shielded_input::{
     ShieldedInputCircuit, ShieldedInputDomainTags, ShieldedInputPublicInputs, ShieldedInputWitness,
 };
 pub use shielded_output::{ShieldedOutputCircuit, ShieldedOutputWitness};
-pub use validity::{ValidityCircuit, ValidityDomainTags, ValidityPublicInputs, ValidityWitness};
+pub use validity::{
+    validity_public_input_count, InputNoteWitness, OutputNoteWitness, ProductionValidityCircuit,
+    ValidityCircuit, ValidityDomainTags, ValidityPublicInputs, ValidityWitness,
+    PRODUCTION_GNCT_DEPTH,
+};
 pub use value_commitment::{
     ValueCommitmentCircuit, ValueCommitmentPublicInputs, ValueCommitmentWitness,
 };

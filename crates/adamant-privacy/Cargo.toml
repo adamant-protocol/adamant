@@ -45,5 +45,13 @@ hex-literal = { workspace = true }
 getrandom = { version = "0.4", features = ["std", "sys_rng"] }
 subtle = { workspace = true }
 
+[features]
+# Gate behind this feature to opt into MockProver runs at the
+# production GNCT depth (DEPTH=64 → K~17 → ~131k rows). Default
+# `cargo test` skips them; `cargo test -p adamant-privacy
+# --features expensive-tests` runs them. See
+# `circuit::validity` module docs for rationale.
+expensive-tests = []
+
 [lints]
 workspace = true
