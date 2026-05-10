@@ -44,6 +44,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod assertion;
 pub mod circuit;
 pub mod encrypted_note;
 pub mod gnct;
@@ -53,6 +54,7 @@ pub mod nullifier;
 pub mod poseidon;
 pub mod proving;
 pub mod recursive_proof;
+pub mod shielded_contract;
 pub mod shielded_tx;
 pub mod stealth;
 pub mod value_commitment;

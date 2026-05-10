@@ -332,6 +332,115 @@ pub fn derive_sub_view_key(parent_viewing_seed: &ViewingSeed, scope_info: &[u8])
     }
 }
 
+// ---------- Typed scope descriptors (§7.4.1) ----------
+
+/// Canonical sub-view-key scope descriptor per whitepaper §7.4.1.
+///
+/// §7.4.1 enumerates four standard scope shapes:
+///
+/// - `time_window_view_key` — visibility into `[t1, t2]` only.
+/// - `counterparty_view_key` — visibility into transactions with
+///   a specific counterparty only.
+/// - `amount_threshold_view_key` — visibility into amounts above
+///   a threshold only.
+/// - `compliance_view_key` — visibility into transactions matching
+///   a ruleset only.
+///
+/// The §7.4.2 derivation hashes the BCS encoding of the scope into
+/// the sub-view-key seed. Two wallets that want interoperable
+/// sub-view-keys for the same scope semantics must agree on the
+/// canonical BCS shape — this enum locks that shape in for the four
+/// standard scopes. Application-defined scopes outside this list
+/// pass raw bytes through [`derive_sub_view_key`] directly.
+///
+/// # Spec basis
+///
+/// §7.4.2 says "`S` is the structured scope descriptor (e.g.
+/// `{"start": t1, "end": t2}` for a time-windowed key); `BCS(S)`
+/// is its canonical encoding per §5.1.8." The protocol only
+/// commits to the BCS bytes; the chain has no sub-view-key
+/// awareness (§7.4.2).
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum ViewKeyScope {
+    /// Time-windowed visibility: notes received in `[start, end]`
+    /// (inclusive both ends). Both bounds are wall-clock-style
+    /// `u64` epoch-seconds; the wallet enforces what "time" means
+    /// in its UI (the chain has no timestamp-on-note awareness per
+    /// §7.4.2).
+    TimeWindow {
+        /// Inclusive start of the window.
+        start: u64,
+        /// Inclusive end of the window.
+        end: u64,
+    },
+    /// Counterparty-bound visibility: notes whose stealth-address
+    /// recipient OR sender (wallet's choice — the chain has no
+    /// counterparty-on-note structure) matches the given 32-byte
+    /// counterparty identifier. Identifier shape is application-
+    /// defined; common choices are an `Address` (§4.x) or a
+    /// public-key fingerprint.
+    Counterparty {
+        /// 32-byte counterparty identifier.
+        counterparty: [u8; 32],
+    },
+    /// Amount-threshold visibility: notes whose value `≥ threshold`.
+    /// `threshold` is a `u64` value (consistent with the §7.3.2
+    /// statement-5 range bound).
+    AmountThreshold {
+        /// Minimum value (inclusive).
+        threshold: u64,
+    },
+    /// Compliance-ruleset visibility: notes matching an
+    /// application-defined rule set. Rule-content is opaque BCS
+    /// bytes; wallets / compliance backends agree on the shape.
+    Compliance {
+        /// Opaque BCS-encoded rule descriptor.
+        ruleset: Vec<u8>,
+    },
+}
+
+impl ViewKeyScope {
+    /// Canonical BCS encoding of this scope per §5.1.8.
+    ///
+    /// Two parties that want interoperable sub-view-keys for the
+    /// same logical scope must call this. The byte content is what
+    /// flows into the §7.4.2 HKDF `info` parameter.
+    ///
+    /// # Panics
+    ///
+    /// `bcs::to_bytes` only fails on
+    /// non-`Serialize`-implementable types or on serde-error-
+    /// returning custom impls. This enum is a pure data type with
+    /// derived `Serialize`; serialization always succeeds.
+    #[must_use]
+    pub fn to_bcs(&self) -> Vec<u8> {
+        bcs::to_bytes(self).expect("ViewKeyScope is BCS-serializable by construction")
+    }
+
+    /// Decode a previously [`ViewKeyScope::to_bcs`]-encoded scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns `bcs::Error` if `bytes` is not a canonical BCS
+    /// encoding of `ViewKeyScope`.
+    pub fn from_bcs(bytes: &[u8]) -> Result<Self, bcs::Error> {
+        bcs::from_bytes(bytes)
+    }
+}
+
+/// Derive a sub-view-key from a typed [`ViewKeyScope`].
+///
+/// Convenience wrapper around [`derive_sub_view_key`] that
+/// canonically BCS-encodes the scope before passing to the HKDF
+/// `info` step.
+#[must_use]
+pub fn derive_sub_view_key_typed(
+    parent_viewing_seed: &ViewingSeed,
+    scope: &ViewKeyScope,
+) -> SubViewKey {
+    derive_sub_view_key(parent_viewing_seed, &scope.to_bcs())
+}
+
 #[cfg(test)]
 #[allow(clippy::similar_names)]
 mod tests {
@@ -663,5 +772,116 @@ mod tests {
             domain::SUBVIEW_DERIVE.as_bytes(),
             b"ADAMANT-v1-subview-derive"
         );
+    }
+
+    // ---------- Typed scope-descriptor tests (§7.4.1) ----------
+
+    #[test]
+    fn view_key_scope_bcs_round_trip() {
+        let scopes = [
+            ViewKeyScope::TimeWindow {
+                start: 1_700_000_000,
+                end: 1_800_000_000,
+            },
+            ViewKeyScope::Counterparty {
+                counterparty: [0x42; 32],
+            },
+            ViewKeyScope::AmountThreshold {
+                threshold: 1_000_000,
+            },
+            ViewKeyScope::Compliance {
+                ruleset: b"any-rule".to_vec(),
+            },
+        ];
+        for scope in &scopes {
+            let bytes = scope.to_bcs();
+            let decoded = ViewKeyScope::from_bcs(&bytes).expect("BCS round-trip succeeds");
+            assert_eq!(scope, &decoded);
+        }
+    }
+
+    /// Distinct scopes produce distinct BCS encodings, and therefore
+    /// distinct sub-view-key seeds. This is the integrity guarantee
+    /// for typed scopes.
+    #[test]
+    fn view_key_scope_distinct_scopes_produce_distinct_seeds() {
+        let parent = derive_viewing_seed(&fixed_master_seed());
+
+        let s1 = ViewKeyScope::TimeWindow { start: 1, end: 2 };
+        let s2 = ViewKeyScope::TimeWindow { start: 1, end: 3 };
+        let s3 = ViewKeyScope::AmountThreshold { threshold: 1 };
+        let s4 = ViewKeyScope::AmountThreshold { threshold: 2 };
+
+        let seed1 = derive_sub_view_key_seed(&parent, &s1.to_bcs());
+        let seed2 = derive_sub_view_key_seed(&parent, &s2.to_bcs());
+        let seed3 = derive_sub_view_key_seed(&parent, &s3.to_bcs());
+        let seed4 = derive_sub_view_key_seed(&parent, &s4.to_bcs());
+
+        // Both same-shape variants with different params and
+        // different-shape variants must all give distinct seeds.
+        let seeds = [&seed1, &seed2, &seed3, &seed4];
+        for (i, a) in seeds.iter().enumerate() {
+            for b in seeds.iter().skip(i + 1) {
+                assert_ne!(a.as_bytes(), b.as_bytes());
+            }
+        }
+    }
+
+    /// `derive_sub_view_key_typed` agrees with the manual
+    /// `derive_sub_view_key(seed, &scope.to_bcs())` form. Pin so a
+    /// future refactor of either path doesn't silently diverge.
+    #[test]
+    fn derive_sub_view_key_typed_matches_raw_path() {
+        let parent = derive_viewing_seed(&fixed_master_seed());
+        let scope = ViewKeyScope::Counterparty {
+            counterparty: [0x77; 32],
+        };
+
+        let typed = derive_sub_view_key_typed(&parent, &scope);
+        let raw = derive_sub_view_key(&parent, &scope.to_bcs());
+
+        // Compare via the shared encapsulation-key bytes
+        // (DecapsulationKey doesn't impl Eq directly, but the EK
+        // is round-trippable via to_bytes / ct_eq).
+        let typed_ek_bytes = typed.encapsulation_key.to_bytes();
+        let raw_ek_bytes = raw.encapsulation_key.to_bytes();
+        assert_eq!(typed_ek_bytes, raw_ek_bytes);
+    }
+
+    /// `to_bcs` is deterministic across runs (BCS is canonical
+    /// per §5.1.8). Pin so a hash-randomisation drift would
+    /// surface here.
+    #[test]
+    fn view_key_scope_to_bcs_deterministic() {
+        let scope = ViewKeyScope::TimeWindow {
+            start: 1_700_000_000,
+            end: 1_800_000_000,
+        };
+        let a = scope.to_bcs();
+        let b = scope.to_bcs();
+        assert_eq!(a, b);
+    }
+
+    /// Variant tags must be stable across BCS encodings. If the
+    /// enum-variant order changes, every sub-view-key in the wild
+    /// becomes unrecoverable. Pin the on-the-wire tag bytes for
+    /// the four standard variants.
+    #[test]
+    fn view_key_scope_bcs_variant_tags_pinned() {
+        // BCS encodes enum variants as a u8 (or ULEB128) tag. Order
+        // declared in the enum: TimeWindow=0, Counterparty=1,
+        // AmountThreshold=2, Compliance=3.
+        let tw = ViewKeyScope::TimeWindow { start: 0, end: 0 }.to_bcs();
+        let cp = ViewKeyScope::Counterparty {
+            counterparty: [0u8; 32],
+        }
+        .to_bcs();
+        let at = ViewKeyScope::AmountThreshold { threshold: 0 }.to_bcs();
+        let cm = ViewKeyScope::Compliance { ruleset: vec![] }.to_bcs();
+
+        assert_eq!(tw[0], 0);
+        assert_eq!(cp[0], 1);
+        assert_eq!(at[0], 2);
+        assert_eq!(cm[0], 3);
     }
 }

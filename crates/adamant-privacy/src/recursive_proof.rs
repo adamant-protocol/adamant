@@ -83,6 +83,73 @@
 //! The mode is observable on-chain from the proof submission
 //! source (prover bounty vs validator-fallback) per §8.5.4
 //! "Transition is automatic."
+//!
+//! # 6.9b foundation audit (Phase 6.10b session)
+//!
+//! Spec basis: §8.5.2 requires "the recursive proof at epoch N
+//! verifies the recursive proof from epoch N-1" — i.e., the
+//! Halo 2 verifier is implemented **as a circuit**, and that
+//! circuit's proof is the next recursive proof. This needs
+//! in-circuit primitives that the upstream IPA design exposes
+//! out-of-circuit but not yet in-circuit.
+//!
+//! ## What `adamant-halo2` exposes today
+//!
+//! ✓ **Out-of-circuit IPA primitives.** Mature and in use by
+//! Phase 6.8b.5's `prove_shielded_tx` / `verify_shielded_tx`:
+//! - [`adamant_halo2::proofs::poly::commitment::verifier::Guard`] —
+//!   verifier-side accumulator that defers the costly MSM until
+//!   batch finalization.
+//! - [`adamant_halo2::proofs::poly::commitment::verifier::Accumulator`] —
+//!   evaluation claim + verifier challenges, the standard
+//!   recursive-composition handle.
+//! - [`adamant_halo2::proofs::poly::commitment::MSM`] — the
+//!   multi-scalar-mul accumulator type both Guard and
+//!   Accumulator compose against.
+//!
+//! ## What 6.9b needs to add
+//!
+//! ✗ **In-circuit recursive verifier.** Translation of the
+//! `verify_proof` body (which currently runs out-of-circuit on
+//! `Guard<C, E>`) into a Halo 2 circuit operating on assigned
+//! cells:
+//! - In-circuit MSM gadget (multi-scalar mul as advice rows
+//!   plus a custom gate).
+//! - In-circuit transcript replay (Blake2b → Poseidon
+//!   substitution because the in-circuit Halo 2 verifier needs
+//!   a circuit-friendly transcript hash; this is the standard
+//!   Halo 2 recursive-composition trade-off).
+//! - In-circuit IPA opening verification (the `compute_s`
+//!   inner-product reduction).
+//! - In-circuit bit-decomposition of verifier challenges
+//!   (already partially supported by `adamant_halo2::ecc`'s
+//!   `LookupRangeCheckConfig`).
+//!
+//! ✗ **Pasta-cycle binding.** §8.5.2 says "Pallas-curve proof
+//! can be verified in a Vesta-curve circuit and vice versa".
+//! Today both validity and assertion circuits live on
+//! `pallas::Base` only; we have no Vesta-base circuit
+//! infrastructure. 6.9b decision-point: pure-Pallas
+//! accumulators (homogeneous; verifier still needs cross-cycle
+//! deferred MSM) vs Pallas-Vesta cross-cycle (heterogeneous,
+//! standard Halo 2 recursion shape, larger fork scope). This
+//! is a CLAUDE.md §14.4-style spec-author decision.
+//!
+//! ## Bridging strategy at this foundation
+//!
+//! - The wire types already in this module are posture-
+//!   independent: opaque bytes for the proof, structured
+//!   public-input triple for the verifier. They support both
+//!   the homogeneous and heterogeneous recursion shapes.
+//! - The Phase 6.8b.5 `proving::ValidityKeySet` keygen pattern
+//!   generalizes to recursive circuits without API changes —
+//!   adding `RecursiveKeySet` + `prove_recursive` /
+//!   `verify_recursive` is a same-shape extension.
+//! - The cross-cycle MSM deferral that the existing `Guard`
+//!   already enables is the foundation for the homogeneous
+//!   recursion path; if the spec-author chooses heterogeneous,
+//!   a parallel Vesta-side circuit infrastructure has to land
+//!   in `adamant-halo2`.
 
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
