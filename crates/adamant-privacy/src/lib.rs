@@ -51,6 +51,7 @@ pub mod memo;
 pub mod note;
 pub mod nullifier;
 pub mod poseidon;
+pub mod proving;
 pub mod recursive_proof;
 pub mod shielded_tx;
 pub mod stealth;

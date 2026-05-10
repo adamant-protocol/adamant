@@ -21,6 +21,11 @@ adamant-types = { path = "../adamant-types" }
 # §7.3.2 validity-circuit gadgets.
 adamant-halo2 = { path = "../adamant-halo2" }
 pasta_curves = { workspace = true }
+# `rand_core` 0.6 trait surface — required by `adamant-halo2`'s
+# `plonk::create_proof` whose `R: RngCore` bound is the
+# rand_core-0.6 trait (Halo 2 / Pasta-cycle inheritance).
+# Production callers pass an OS RNG via this trait surface.
+rand_core = { workspace = true }
 # rand_core 0.10 alias used by `encrypted_note::encrypt_note_for_recipient`'s
 # `CryptoRng` bound — matches the RustCrypto-ecosystem trait surface
 # `ml-kem` consumes for the encapsulation RNG (see
@@ -43,6 +48,10 @@ hex-literal = { workspace = true }
 # `subtle` is already in the workspace's locked bounded-ecosystem
 # set per CLAUDE.md §14.1 (Cat B).
 getrandom = { version = "0.4", features = ["std", "sys_rng"] }
+# `rand` 0.8 surfaces an `OsRng` whose `RngCore` impl matches
+# the `rand_core` 0.6 trait surface that `adamant_halo2`'s
+# `plonk::create_proof` consumes. Test-only.
+rand = { workspace = true }
 subtle = { workspace = true }
 
 [features]
