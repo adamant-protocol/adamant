@@ -1,0 +1,4 @@
+# Per-run output from verify.cmd / verify.sh.
+# The harness is committed; the output files it produces are
+# transient and re-generated on every run, so they are ignored.
+out/
