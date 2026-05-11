@@ -76,6 +76,7 @@ pub mod slashing;
 pub mod slot;
 pub mod tier;
 pub mod validator;
+pub mod vertex;
 
 pub use active_set::{ActiveSet, ActiveSetError, ACTIVE_SET_FLOOR, ACTIVE_SET_LAUNCH_CEILING};
 pub use epoch::{EpochNumber, RoundNumber};
@@ -93,3 +94,7 @@ pub use slashing::{slashing_penalty_basis_points, SlashOffence, BASIS_POINTS_DEN
 pub use slot::{Slot, SlotId, SlotStatus, SlotTransfer};
 pub use tier::SecurityTier;
 pub use validator::{Stake, Validator, MIN_VALIDATOR_STAKE_LAUNCH};
+pub use vertex::{
+    DecryptionShare, PartialProofWitness, TransactionEnvelope, UnsignedVertex, Vertex,
+    VertexBuilder, VertexId, VertexSignature, BLS_SIGNATURE_BYTES, VERTEX_ID_BYTES,
+};

@@ -486,6 +486,23 @@ pub static VALUE_COMMITMENT_RANDOMNESS: DomainTag = DomainTag::new(b"ADAMANT-v1-
 /// identity foundation.
 pub static VALIDATOR_ID: DomainTag = DomainTag::new(b"ADAMANT-v1-validator-id");
 
+/// Domain tag for the DAG-vertex identifier derivation per
+/// whitepaper §8.3.1.
+///
+/// Composition: `sha3_256_tagged(VERTEX_ID, BCS(UnsignedVertex))`
+/// produces the canonical 32-byte `VertexId`. The hash is over
+/// the unsigned vertex body — `(author, round, parents,
+/// transactions, threshold_shares, proof_witness)` — so the
+/// vertex id is stable before signing. The vertex's BLS
+/// signature signs the `VertexId`; verifiers re-derive the id
+/// from the body and check the signature against it. This is
+/// the standard "id-from-body, signature-over-id" pattern.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 7.3 as part of the §8.3.1 DAG-vertex
+/// foundation.
+pub static VERTEX_ID: DomainTag = DomainTag::new(b"ADAMANT-v1-vertex-id");
+
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and
 /// test-vector regressions.
