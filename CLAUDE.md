@@ -396,6 +396,7 @@ Workspace tests: 2,388 passing, 0 failed, 1 ignored. Clippy `-D warnings`: clean
 |---|---|---|---|
 | **7.0** | §8.1.1–8.1.9 | validator identity + types | **CLOSED** |
 | **7.1** | §8.1.3, 8.1.5, 8.1.8 | active set + slot mgmt + slot transfer + liveness detection | **CLOSED** |
+| **7.2** | §8.2, 8.3.2, 8.3.3 | epoch/round scheduling + commit-wave indexing + quorum threshold | **CLOSED** |
 | 7.2 | §8.2, 8.3.2 | epoch / round semantics | pending |
 | 7.3 | §8.3.1 | DAG vertex structure | pending |
 | 7.4 | §8.6 | consensus VRF | pending |
@@ -452,6 +453,34 @@ Phase 7.1 surface:
 39 new tests in adamant-consensus covering: BCS round-trips + byte-size pins for Slot and SlotTransfer, SlotStatus variant tags, slot participation-clock monotonicity, liveness-failure boundary at "more than 2 missed" (2 OK, 3 FAILED), standby-slot exemption from liveness failure, ActiveSet floor / ceiling constant pins (7 and 75 matching `GENESIS_COHORT_SIZE`), empty/dormant set has tier=None, at-floor activation produces Tier I, FCFS registration overflow into standby, double-registration rejection, slot-id monotonicity + stability across remove+re-add, liveness-failed-at scanner, remove_active + advance_standby pairing, FIFO standby advancement, apply_transfer slot-id preservation per §8.1.8 step 3, unknown-slot rejection, unregistered-buyer rejection, seller-id-mismatch rejection, ActiveSet BCS round-trip, tier transitions across §8.1.7 boundaries (7→14 Tier I, 15→29 Tier II, 30+ Tier III).
 
 Phase 7 progression: **7.0 + 7.1 closed**; 10 sub-arcs remaining (7.2 epoch/round semantics, 7.3 DAG vertex, 7.4 VRF, 7.5 VDF, 7.6 threshold mempool, 7.7 DAG-BFT core, 7.8 networking, 7.9 light client, 7.10 slashing wiring, 7.11 integration). Workspace LOC 57,748 → 58,427 (+679). Doc coverage stays at 100.0% across 9 Adamant-authored crates (1,001 → 1,035 pub items).
+
+**Phase 7.2 closure (commit `a68d59b`)** — epoch/round scheduling + commit-wave indexing + quorum threshold per whitepaper §8.2 + §8.3.2 + §8.3.3. Pure arithmetic layer; no consensus state, no DAG, no vertex production (those consume the helpers here). Workspace tests 2,479 → 2,508 (+29); adamant-consensus LOC 1,466 → 1,867 (+401); pub items 82 → 109 (+27).
+
+Phase 7.2 surface:
+
+Timing constants per §8.2 verbatim:
+- `ROUND_DURATION_TARGET_MS = 250` (sub-second finality target — 4-6 rounds = ~1-1.5s shared-state finality).
+- `ROUNDS_PER_EPOCH = 144` (~36 seconds per epoch, calibrated per §8.2 trade-off between DKG cost, active-set responsiveness, and reward-distribution granularity).
+- `EPOCH_DURATION_TARGET_MS = 36_000` (derived).
+- `COMMIT_WAVE_PERIOD_ROUNDS = 4` per §8.3.3 default.
+- `QUORUM_NUMERATOR = 2`, `QUORUM_DENOMINATOR = 3` for the "2/3+1" supermajority.
+
+Quorum threshold per §8.3.1:
+- `quorum_threshold(n) -> floor(2n/3) + 1`. Canonical-size pins: `n=7→5`, `n=15→11`, `n=30→21`, `n=75→51`, `n=100→67`. Alignment-with-§8.4 test confirms `n=15` yields quorum=11 (matching threshold-encryption viability boundary "t-of-N for some honest threshold t" calibrated for N≥15).
+
+`EpochSchedule { genesis_round, rounds_per_epoch }`:
+- `launch()` (144 rounds, genesis round 0); `new()` for hard-fork-style re-anchoring.
+- `epoch_of(round)`, `first_round_of(epoch)`, `last_round_of(epoch)`, `is_epoch_boundary(round)`, `round_within_epoch(round)`.
+- BCS-serialisable.
+
+`WaveIndex(u64)` + `CommitWaveSchedule { genesis_round, period_rounds }`:
+- `launch()` (4-round period); `new()` for parameterised tests.
+- `wave_of(round)`, `first_round_of(wave)`, `anchor_round_of(wave)` (last round of wave — where the §8.6 VRF-elected anchor vertex lives per §8.3.3 step 1), `is_anchor_round(round)`, `round_within_wave(round)`.
+- BCS-serialisable.
+
+29 new tests covering: timing-constant pins, quorum-threshold canonical sizes, §8.4 threshold-encryption alignment, EpochSchedule launch defaults, epoch-boundary detection at rounds 0/144/288/14_400, first/last-round arithmetic, round-within-epoch cycling, custom-genesis re-anchoring, EpochSchedule BCS round-trip, zero-rounds-per-epoch panic, wave indexing at canonical rounds (0..3 wave 0, 4..7 wave 1), anchor-round invariant (`anchor_round - first_round + 1 == COMMIT_WAVE_PERIOD_ROUNDS` across waves 0..10), CommitWaveSchedule + WaveIndex BCS round-trips, epoch-and-wave alignment pin (wave 35 anchor = epoch 0's last round 143; wave 36 first = epoch 1's first round 144).
+
+Phase 7 progression: **7.0 + 7.1 + 7.2 closed**; 9 sub-arcs remaining (7.3 DAG vertex, 7.4 VRF, 7.5 VDF, 7.6 threshold mempool, 7.7 DAG-BFT core, 7.8 networking, 7.9 light client, 7.10 slashing wiring, 7.11 integration). Workspace LOC 58,427 → 58,828 (+401). Doc coverage stays at 100.0% across 9 Adamant-authored crates (1,035 → 1,062 pub items).
 
 ---
 
