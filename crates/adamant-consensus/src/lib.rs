@@ -71,6 +71,7 @@ pub mod active_set;
 pub mod epoch;
 pub mod genesis;
 pub mod identity;
+pub mod schedule;
 pub mod slashing;
 pub mod slot;
 pub mod tier;
@@ -82,6 +83,11 @@ pub use genesis::{GenesisCohortMarker, GENESIS_COHORT_MARKER_BYTES, GENESIS_COHO
 pub use identity::{
     ValidatorId, ValidatorPublicKeys, BLS_PUBLIC_KEY_BYTES, ED25519_PUBLIC_KEY_BYTES,
     ML_DSA_PUBLIC_KEY_BYTES, VALIDATOR_ID_BYTES, VALIDATOR_PUBLIC_KEYS_BYTES,
+};
+pub use schedule::{
+    quorum_threshold, CommitWaveSchedule, EpochSchedule, WaveIndex, COMMIT_WAVE_PERIOD_ROUNDS,
+    EPOCH_DURATION_TARGET_MS, QUORUM_DENOMINATOR, QUORUM_NUMERATOR, ROUNDS_PER_EPOCH,
+    ROUND_DURATION_TARGET_MS,
 };
 pub use slashing::{slashing_penalty_basis_points, SlashOffence, BASIS_POINTS_DENOMINATOR};
 pub use slot::{Slot, SlotId, SlotStatus, SlotTransfer};
