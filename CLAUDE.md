@@ -397,6 +397,7 @@ Workspace tests: 2,388 passing, 0 failed, 1 ignored. Clippy `-D warnings`: clean
 | **7.0** | §8.1.1–8.1.9 | validator identity + types | **CLOSED** |
 | **7.1** | §8.1.3, 8.1.5, 8.1.8 | active set + slot mgmt + slot transfer + liveness detection | **CLOSED** |
 | **7.2** | §8.2, 8.3.2, 8.3.3 | epoch/round scheduling + commit-wave indexing + quorum threshold | **CLOSED** |
+| **7.3** | §8.3.1 | DAG vertex structure (Vertex, VertexId, BCS-encoded body, BLS sig) | **CLOSED** |
 | 7.2 | §8.2, 8.3.2 | epoch / round semantics | pending |
 | 7.3 | §8.3.1 | DAG vertex structure | pending |
 | 7.4 | §8.6 | consensus VRF | pending |
@@ -481,6 +482,26 @@ Quorum threshold per §8.3.1:
 29 new tests covering: timing-constant pins, quorum-threshold canonical sizes, §8.4 threshold-encryption alignment, EpochSchedule launch defaults, epoch-boundary detection at rounds 0/144/288/14_400, first/last-round arithmetic, round-within-epoch cycling, custom-genesis re-anchoring, EpochSchedule BCS round-trip, zero-rounds-per-epoch panic, wave indexing at canonical rounds (0..3 wave 0, 4..7 wave 1), anchor-round invariant (`anchor_round - first_round + 1 == COMMIT_WAVE_PERIOD_ROUNDS` across waves 0..10), CommitWaveSchedule + WaveIndex BCS round-trips, epoch-and-wave alignment pin (wave 35 anchor = epoch 0's last round 143; wave 36 first = epoch 1's first round 144).
 
 Phase 7 progression: **7.0 + 7.1 + 7.2 closed**; 9 sub-arcs remaining (7.3 DAG vertex, 7.4 VRF, 7.5 VDF, 7.6 threshold mempool, 7.7 DAG-BFT core, 7.8 networking, 7.9 light client, 7.10 slashing wiring, 7.11 integration). Workspace LOC 58,427 → 58,828 (+401). Doc coverage stays at 100.0% across 9 Adamant-authored crates (1,035 → 1,062 pub items).
+
+**Phase 7.3 closure (commit `d87e383`)** — DAG vertex structure per whitepaper §8.3.1. Ships the consensus message format that DAG-BFT operates on. Workspace tests 2,508 → 2,533 (+25); adamant-consensus LOC 1,867 → 2,691 (+824); pub items 109 → 142 (+33).
+
+Phase 7.3 surface:
+
+- `vertex::VertexId` — 32-byte content-derived identifier per §8.3.1. Derived via `sha3_256_tagged(VERTEX_ID, BCS(UnsignedVertex))`. The id is over the *unsigned* body so it's stable before signing; signing happens over the id.
+- `vertex::UnsignedVertex { author, round, parents, transactions, threshold_shares, proof_witness }` — the §8.3.1 body verbatim. Field order is consensus-binding.
+- `vertex::Vertex { body, signature }` — complete signed vertex.
+- `vertex::VertexSignature` — 48-byte BLS12-381 G1-compressed signature per §3.4.3.
+- `vertex::TransactionEnvelope`, `vertex::DecryptionShare`, `vertex::PartialProofWitness` — opaque-bytes payload wrappers. Phase 7.3 doesn't introspect inner content; transactions stay BCS-encoded `Transaction` (or §8.4 ciphertext) bytes; decryption shares get their full BLS structure at Phase 7.6; proof witnesses get their `RecursiveAccumulator` partial-state structure at Phase 7.7. **This opacity keeps adamant-consensus free of adamant-vm / adamant-privacy dependencies** per the layered-architecture posture in CLAUDE.md §14.
+- `UnsignedVertex::derive_id()` — content-derived VertexId via tagged-hash.
+- `UnsignedVertex::has_quorum(active_set_size)` — §8.3.1 quorum predicate using `quorum_threshold` from Phase 7.2. Genesis-round (round=0) vertices exempt per §8.3.2.
+- `UnsignedVertex::parents_are_distinct()` — set-semantics validation.
+- `VertexBuilder` — ergonomic chainable construction (`add_parent` / `add_transaction` / `add_threshold_share` / `with_proof_witness` / `with_signature` / `build_unsigned` / `build`).
+
+New domain tag in adamant-crypto: `domain::VERTEX_ID = "ADAMANT-v1-vertex-id"` for vertex content-addressing per §8.3.1.
+
+25 new tests covering: byte-width pins (VertexId=32, BLS sig=48), VertexId BCS round-trip + hex Debug, `derive_id` determinism + per-field sensitivity (changing any byte of author/round/parents/transactions flips the id), `VERTEX_ID` domain-tag separation from `VALIDATOR_ID`, `has_quorum` at canonical active-set sizes (n=7→5, n=15→11, n=75→51), genesis-round (round=0) exemption from quorum requirement, `parents_are_distinct` empty / unique / duplicate cases, BCS round-trips for all vertex types + envelopes, VertexBuilder happy path + missing-signature panic, equivocation-relevant invariant (same `(author, round)` but different bodies produce distinct VertexIds — foundation for §8.1.5 equivocation detection), content-addressing invariant (identical bodies → identical ids).
+
+Phase 7 progression: **7.0 + 7.1 + 7.2 + 7.3 closed**; 8 sub-arcs remaining (7.4 VRF, 7.5 VDF, 7.6 threshold mempool, 7.7 DAG-BFT core, 7.8 networking, 7.9 light client, 7.10 slashing wiring, 7.11 integration). Workspace LOC 58,828 → 59,652 (+824). Doc coverage stays at 100.0% across 9 Adamant-authored crates (1,062 → 1,095 pub items).
 
 ---
 
