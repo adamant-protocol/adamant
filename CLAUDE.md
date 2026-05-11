@@ -395,7 +395,7 @@ Workspace tests: 2,388 passing, 0 failed, 1 ignored. Clippy `-D warnings`: clean
 | Sub-arc | Spec | Surface | Status |
 |---|---|---|---|
 | **7.0** | §8.1.1–8.1.9 | validator identity + types | **CLOSED** |
-| 7.1 | §8.1.3, 8.1.5, 8.1.8 | active set + slot mgmt + slashing types | pending |
+| **7.1** | §8.1.3, 8.1.5, 8.1.8 | active set + slot mgmt + slot transfer + liveness detection | **CLOSED** |
 | 7.2 | §8.2, 8.3.2 | epoch / round semantics | pending |
 | 7.3 | §8.3.1 | DAG vertex structure | pending |
 | 7.4 | §8.6 | consensus VRF | pending |
@@ -426,6 +426,32 @@ New domain tag in adamant-crypto: `domain::VALIDATOR_ID = b"ADAMANT-v1-validator
 52 unit tests in adamant-consensus covering BCS round-trips, byte-size pins, variant-tag pins, boundary conditions for SecurityTier transitions (especially the 14→15 threshold-encryption-viability boundary aligning with §8.4 + §8.1.7), slashing-penalty values, genesis-cohort position bounds (rejects 0 and >75), and a known-answer test for ValidatorId derivation that re-derives the formula from scratch.
 
 **Audit-script extension**: `tools/workspace-audit/audit.py` updated to include `adamant-consensus` in the crate roster. Workspace doc coverage stays at 100.0% across all 9 Adamant-authored crates (1,001 pub items, 0 undocumented).
+
+**Phase 7.1 closure (commit `731265d`)** — active set + slot management + slot transfer + liveness detection per whitepaper §8.1.3 + §8.1.5 + §8.1.8. Workspace tests 2,440 → 2,479 (+39); adamant-consensus LOC 787 → 1,466 (+679); pub items 48 → 82 (+34).
+
+Phase 7.1 surface:
+
+- `slot::SlotId` — `u16` newtype per §8.1.3.
+- `slot::SlotStatus` — closed enum {Active, Standby, Inactive} with pinned BCS variant tags (0x00 / 0x01 / 0x02). Reordering is a hard fork.
+- `slot::Slot` — per-slot record {id, validator_id, bound_at_epoch, last_participation_epoch, status}. BCS-canonical 51 bytes. Lifecycle: Standby → Active → Inactive.
+- `slot::Slot::is_liveness_failed(current_epoch)` — §8.1.5 detector. "More than 2 consecutive missed epochs" ⇔ `current - last_participation > 3`. Pin: 2 missed = OK, 3 missed = FAILED. Only active slots can fail liveness per §8.1.3.
+- `slot::SlotTransfer` — §8.1.8 atomic transfer record {slot_id, seller_validator_id, buyer_validator_id, initiated_at_epoch}. `effective_at_epoch = initiated + 1` (transfer takes effect at next epoch boundary per §8.1.8 step 3). BCS-canonical 74 bytes.
+- `active_set::ACTIVE_SET_FLOOR = 7` (constitutional per §8.1.3; below this the chain is dormant per §8.1.6 / §8.7.1).
+- `active_set::ACTIVE_SET_LAUNCH_CEILING = 75` (soft, per §8.1.3; matches `GENESIS_COHORT_SIZE` exactly).
+- `active_set::ActiveSet` — in-memory data structure {active: Vec<Slot>, standby: VecDeque<Slot>, ceiling, next_slot_id}. BCS-serialisable for chain-state commitments at Phase 7.7.
+- `active_set::ActiveSetError` — typed errors {AlreadyRegistered, NotRegistered, UnknownSlot, BuyerNotRegistered}.
+- `ActiveSet::register` — FCFS admission per §8.1.3: if `active.len() < ceiling` validator enters active; else standby queue (FIFO).
+- `ActiveSet::remove_active` — frees a slot (liveness failure / equivocation / unbonding).
+- `ActiveSet::advance_standby` — promotes front-of-queue standby validator at epoch boundary.
+- `ActiveSet::record_participation` — updates active validator's `last_participation_epoch`.
+- `ActiveSet::liveness_failed_at` — scan for §8.1.5 liveness-failure violators.
+- `ActiveSet::apply_transfer` — §8.1.8 atomic slot transfer: buyer (from standby) takes seller's active slot; slot id + ordering preserved; seller removed; buyer's previous standby entry removed.
+- `ActiveSet::tier` — §8.1.7 SecurityTier signal computed from `active_size`.
+- `ActiveSet::is_dormant` — `active_size < ACTIVE_SET_FLOOR` per §8.1.6 / §8.7.1.
+
+39 new tests in adamant-consensus covering: BCS round-trips + byte-size pins for Slot and SlotTransfer, SlotStatus variant tags, slot participation-clock monotonicity, liveness-failure boundary at "more than 2 missed" (2 OK, 3 FAILED), standby-slot exemption from liveness failure, ActiveSet floor / ceiling constant pins (7 and 75 matching `GENESIS_COHORT_SIZE`), empty/dormant set has tier=None, at-floor activation produces Tier I, FCFS registration overflow into standby, double-registration rejection, slot-id monotonicity + stability across remove+re-add, liveness-failed-at scanner, remove_active + advance_standby pairing, FIFO standby advancement, apply_transfer slot-id preservation per §8.1.8 step 3, unknown-slot rejection, unregistered-buyer rejection, seller-id-mismatch rejection, ActiveSet BCS round-trip, tier transitions across §8.1.7 boundaries (7→14 Tier I, 15→29 Tier II, 30+ Tier III).
+
+Phase 7 progression: **7.0 + 7.1 closed**; 10 sub-arcs remaining (7.2 epoch/round semantics, 7.3 DAG vertex, 7.4 VRF, 7.5 VDF, 7.6 threshold mempool, 7.7 DAG-BFT core, 7.8 networking, 7.9 light client, 7.10 slashing wiring, 7.11 integration). Workspace LOC 57,748 → 58,427 (+679). Doc coverage stays at 100.0% across 9 Adamant-authored crates (1,001 → 1,035 pub items).
 
 ---
 
