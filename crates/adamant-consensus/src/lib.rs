@@ -67,13 +67,16 @@
              prose context makes the identifier unambiguous"
 )]
 
+pub mod active_set;
 pub mod epoch;
 pub mod genesis;
 pub mod identity;
 pub mod slashing;
+pub mod slot;
 pub mod tier;
 pub mod validator;
 
+pub use active_set::{ActiveSet, ActiveSetError, ACTIVE_SET_FLOOR, ACTIVE_SET_LAUNCH_CEILING};
 pub use epoch::{EpochNumber, RoundNumber};
 pub use genesis::{GenesisCohortMarker, GENESIS_COHORT_MARKER_BYTES, GENESIS_COHORT_SIZE};
 pub use identity::{
@@ -81,5 +84,6 @@ pub use identity::{
     ML_DSA_PUBLIC_KEY_BYTES, VALIDATOR_ID_BYTES, VALIDATOR_PUBLIC_KEYS_BYTES,
 };
 pub use slashing::{slashing_penalty_basis_points, SlashOffence, BASIS_POINTS_DENOMINATOR};
+pub use slot::{Slot, SlotId, SlotStatus, SlotTransfer};
 pub use tier::SecurityTier;
 pub use validator::{Stake, Validator, MIN_VALIDATOR_STAKE_LAUNCH};
