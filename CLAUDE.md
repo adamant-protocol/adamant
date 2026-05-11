@@ -398,6 +398,7 @@ Workspace tests: 2,388 passing, 0 failed, 1 ignored. Clippy `-D warnings`: clean
 | **7.1** | §8.1.3, 8.1.5, 8.1.8 | active set + slot mgmt + slot transfer + liveness detection | **CLOSED** |
 | **7.2** | §8.2, 8.3.2, 8.3.3 | epoch/round scheduling + commit-wave indexing + quorum threshold | **CLOSED** |
 | **7.3** | §8.3.1 | DAG vertex structure (Vertex, VertexId, BCS-encoded body, BLS sig) | **CLOSED** |
+| **7.4** | §8.6 | consensus VRF (BLS-aggregate share/output/verify/randomness) | **CLOSED** |
 | 7.2 | §8.2, 8.3.2 | epoch / round semantics | pending |
 | 7.3 | §8.3.1 | DAG vertex structure | pending |
 | 7.4 | §8.6 | consensus VRF | pending |
@@ -502,6 +503,33 @@ New domain tag in adamant-crypto: `domain::VERTEX_ID = "ADAMANT-v1-vertex-id"` f
 25 new tests covering: byte-width pins (VertexId=32, BLS sig=48), VertexId BCS round-trip + hex Debug, `derive_id` determinism + per-field sensitivity (changing any byte of author/round/parents/transactions flips the id), `VERTEX_ID` domain-tag separation from `VALIDATOR_ID`, `has_quorum` at canonical active-set sizes (n=7→5, n=15→11, n=75→51), genesis-round (round=0) exemption from quorum requirement, `parents_are_distinct` empty / unique / duplicate cases, BCS round-trips for all vertex types + envelopes, VertexBuilder happy path + missing-signature panic, equivocation-relevant invariant (same `(author, round)` but different bodies produce distinct VertexIds — foundation for §8.1.5 equivocation detection), content-addressing invariant (identical bodies → identical ids).
 
 Phase 7 progression: **7.0 + 7.1 + 7.2 + 7.3 closed**; 8 sub-arcs remaining (7.4 VRF, 7.5 VDF, 7.6 threshold mempool, 7.7 DAG-BFT core, 7.8 networking, 7.9 light client, 7.10 slashing wiring, 7.11 integration). Workspace LOC 58,828 → 59,652 (+824). Doc coverage stays at 100.0% across 9 Adamant-authored crates (1,062 → 1,095 pub items).
+
+**Phase 7.4 closure (commit `77b33fc`)** — BLS-aggregate consensus VRF per whitepaper §8.6. Real cryptographic implementation through `adamant_crypto::bls` (not stubs): each validator BLS-signs the canonical input; a quorum's signatures aggregate; the aggregate is publicly verifiable via `fast_aggregate_verify`; randomness extracted via tagged-hash. Workspace tests 2,533 → 2,556 (+23); adamant-consensus LOC 2,691 → 3,550 (+859); pub items 142 → 169 (+27).
+
+Phase 7.4 surface:
+
+- `vrf::VrfInput` — typed enum {`EpochBoundary{epoch, previous_epoch_proof}`, `RoundAnchor{round, previous_round_vrf}`} per §8.6.1 inputs verbatim. BCS variant tags pinned (0x00 / 0x01) — reordering is a hard fork.
+- `vrf::VrfInput::canonical_message() -> [u8; 32]` — `sha3_256_tagged(VRF_INPUT, BCS(self))`. Defence-in-depth domain separation: inner `VRF_INPUT` tag separates from other BLS-signed messages; BLS's own `BLS_SIG_HASH_TO_CURVE` DST separates the BLS layer.
+- `vrf::VrfShare { validator_id, signature_bytes: [u8; 48] }` — one validator's BLS-G1 signature on the canonical input message. BCS encoding: 32 + 48 = 80 bytes.
+- `vrf::VrfShare::compute(id, sk, input)` — sign with the validator's BLS secret key.
+- `vrf::VrfShare::verify(input, pk) -> bool` — constant-time discipline matches Ed25519/BLS verify pattern (returns bool, no error detail).
+- `vrf::VrfOutput { aggregate_signature_bytes, contributors }` — aggregate BLS signature + deterministically-sorted contributor list. Contributors sorted lexicographically by `ValidatorId` (which now derives `Ord + PartialOrd`).
+- `vrf::aggregate_shares(shares) -> Result<VrfOutput>` — BLS-G1 aggregation. Rejects empty / duplicate / malformed.
+- `vrf::verify_output(input, output, public_keys) -> Result` — `fast_aggregate_verify` against `output.contributors`-aligned public keys.
+- `vrf::output_randomness(output) -> [u8; 32]` — `sha3_256_tagged(VRF_OUTPUT, aggregate_sig)`. Canonical uniform-random extraction for downstream consumers.
+- `vrf::select_index(randomness, n) -> usize` — deterministic 0..n selection for anchor election. Acceptable bias `< 4e-16` at n ≤ 75.
+- `vrf::VrfError` — typed errors {EmptyShareSet, DuplicateContributor, MalformedShareSignature, AggregationFailure, PublicKeyArityMismatch, MalformedPublicKey, InvalidAggregate}.
+- `vrf::VRF_RANDOMNESS_BYTES = 32`.
+
+New domain tags in adamant-crypto:
+- `domain::VRF_INPUT = "ADAMANT-v1-vrf-input"` for VRF input-message commitment.
+- `domain::VRF_OUTPUT = "ADAMANT-v1-vrf-output"` for VRF output-randomness extraction.
+
+Identity refinement: `ValidatorId` now derives `Ord + PartialOrd` for the deterministic-contributor-sort path in `aggregate_shares`. Backwards-compatible (additive derive).
+
+23 new tests covering: variant-tag pins, BCS round-trips, canonical-message determinism + domain-tag separation, distinct-variant message distinctness, real BLS share compute+verify round-trip, share verification rejects wrong input + wrong pubkey, aggregate rejects empty / duplicate / malformed, deterministic contributor ordering regardless of input order, aggregate verify succeeds for valid quorum + fails on wrong input + fails on arity mismatch, **VRF determinism pin** (same shares → same output → same randomness — §8.6 random-oracle property), randomness uses VRF_OUTPUT tag, distinct inputs produce distinct randomness, `select_index` range / determinism / non-zero panic.
+
+Phase 7 progression: **7.0 + 7.1 + 7.2 + 7.3 + 7.4 closed**; 7 sub-arcs remaining (7.5 VDF, 7.6 threshold mempool, 7.7 DAG-BFT core, 7.8 networking, 7.9 light client, 7.10 slashing wiring, 7.11 integration). Workspace LOC 59,652 → 60,511 (+859). Doc coverage stays at 100.0% across 9 Adamant-authored crates (1,095 → 1,122 pub items).
 
 ---
 
