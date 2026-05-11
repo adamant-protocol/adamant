@@ -1,0 +1,28 @@
+Adamant workspace audit — C:\Users\ryan\Desktop\projects\adamant
+
+crate                               LOC  pub items    doc cov  forbid  TODOs  unwrap
+------------------------------------------------------------------------------------------
+adamant-account                     111          1     100.0%     yes      0       0
+adamant-bytecode-format            3351        209     100.0%     yes      2       0
+adamant-consensus                  2834        168     100.0%     yes      0       0
+adamant-crypto                     3463        182     100.0%     yes      0       0
+adamant-crypto-blst-extra           571         37     100.0%      NO      0       0
+adamant-privacy                    8009        271     100.0%     yes      0      30
+adamant-state                       606          8     100.0%     yes      0       0
+adamant-types                      1239         61     100.0%     yes      0       0
+adamant-vm                        39890        199     100.0%     yes      1       7
+------------------------------------------------------------------------------------------
+TOTAL                             60074       1136     100.0%       -      3       -
+
+  adamant-bytecode-format TODOs:
+    adamant-bytecode-format/src/format_common.rs:96 // position in the u32. It should always be `0x05XX_XXXX`
+    adamant-bytecode-format/src/format_common.rs:97 // where `XX_XXXX` is the version digits.
+  adamant-vm TODOs:
+    adamant-vm/src/validator/function_pass/type_safety.rs:1285 // Upstream marks this as "TODO: this is more of
+
+Notes:
+  - adamant-crypto-blst-extra is exempt from forbid(unsafe_code) (it's the BLS12-381 FFI wrapper; unsafe is documented per-block with SAFETY comments).
+  - 'doc cov' percentages count `pub` items in non-test code with `///` doc comments; non-doc `//` comments and multi-line attributes are walked through correctly.
+  - 'unwrap' is a heuristic count of `.unwrap()` outside `mod tests` blocks; many are justified (e.g., `try_into` on slices with proven length). Use as a quick scan, not gospel.
+
+STRICT MODE: all checks pass.
