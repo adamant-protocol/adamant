@@ -34,6 +34,14 @@ chacha20poly1305 = { workspace = true }
 rand_core = { workspace = true }
 subtle = { workspace = true }
 zeroize = { workspace = true }
+# BCS canonical serialisation (whitepaper §5.1.8) for §3.8 time-lock VDF
+# wire types (`vdf` module). Phase 7.5.0 introduces the BCS dep so the
+# Wesolowski wire surface — `TimeLockParameters`, `ClassGroupElement`,
+# `WesolowskiProof`, `TimeLockEnvelope`, `TimeLockDecryption` — round-
+# trips through the same canonical encoding as every other consensus-
+# stable Adamant type.
+bcs = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }

@@ -536,6 +536,69 @@ pub static VRF_OUTPUT: DomainTag = DomainTag::new(b"ADAMANT-v1-vrf-output");
 /// foundation.
 pub static VRF_INPUT: DomainTag = DomainTag::new(b"ADAMANT-v1-vrf-input");
 
+/// Domain tag for the canonical commitment to the chain-state-
+/// fixed time-lock VDF parameters per whitepaper §3.8.2 and
+/// §11.2.8.
+///
+/// Composition: `sha3_256_tagged(TIME_LOCK_PARAMETERS, BCS(TimeLockParameters))`
+/// produces the 32-byte parameter-commitment value used in the
+/// genesis-state commitment per §11.2.8 ("class group of unknown
+/// order... derived deterministically from the genesis state...
+/// using a hash-to-class-group construction") and re-derived by
+/// every node at startup to confirm parameter agreement. Any
+/// drift in the parameter bytes — discriminant, time parameter
+/// T, base generator — surfaces as a parameter-commitment
+/// mismatch at the chain-state-commitment level.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 7.5 as part of the §3.8 + §8.4.4
+/// time-lock VDF foundation.
+pub static TIME_LOCK_PARAMETERS: DomainTag = DomainTag::new(b"ADAMANT-v1-time-lock-parameters");
+
+/// Domain tag for the Fiat-Shamir prime-challenge derivation
+/// in the Wesolowski VDF proof construction per whitepaper §3.8.1.
+///
+/// Composition: the prime challenge `ℓ` for the proof
+/// `(g, h, T) → π` is derived as
+/// `ℓ = HashToPrime(tagged_shake_256(WESOLOWSKI_CHALLENGE, BCS((g, h, T))))`
+/// where `HashToPrime` is the standard reject-resample search
+/// over the SHAKE-256 output (Wesolowski 2019 §3, IETF VDF
+/// draft). The tagged-SHAKE prefix pins the challenge derivation
+/// to this specific protocol context: VDF challenges cannot
+/// collide with any other domain-separated SHAKE consumer in
+/// the protocol.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 7.5 as part of the §3.8 + §8.4.4
+/// time-lock VDF foundation. The prime-search procedure itself
+/// is pinned at Phase 7.5.1 when the class-group arithmetic
+/// lands; the tag is registered now so the eventual
+/// challenge-derivation byte string is consensus-stable from
+/// the moment the math is added.
+pub static WESOLOWSKI_CHALLENGE: DomainTag = DomainTag::new(b"ADAMANT-v1-wesolowski-challenge");
+
+/// Domain tag for the symmetric-key derivation in time-lock
+/// envelope encryption per whitepaper §3.8.1.
+///
+/// Composition: `key = shake_256_tagged(TIME_LOCK_SYMMETRIC_KEY, BCS(ClassGroupElement(h)), 32)`
+/// derives the 32-byte ChaCha20-Poly1305 key from the VDF
+/// solution `h = g^(2^T)`. The user computes `h` during
+/// encryption (paying the T-sequential-squaring cost
+/// up-front); the round anchor (§8.4.4) re-derives `h` during
+/// decryption. Both arrive at the same symmetric key because
+/// the input is the same `h` value under canonical class-group
+/// encoding (pinned at Phase 7.5.1).
+///
+/// Distinct from [`THRESHOLD_KDF`] (§3.6.1) so a time-lock-
+/// derived key and a threshold-derived key from numerically
+/// related inputs cannot collide.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 7.5 as part of the §3.8 + §8.4.4
+/// time-lock VDF foundation.
+pub static TIME_LOCK_SYMMETRIC_KEY: DomainTag =
+    DomainTag::new(b"ADAMANT-v1-time-lock-symmetric-key");
+
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and
 /// test-vector regressions.

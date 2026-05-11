@@ -35,6 +35,7 @@
 //! | [`ml_kem`]         | 3.7                | ML-KEM-768 key encapsulation          |
 //! | [`zk`]             | 3.9.1              | Halo 2 zk-SNARKs                      |
 //! | [`kzg`]            | 3.9.2              | KZG vector and polynomial commitments |
+//! | [`vdf`]            | 3.8                | Wesolowski time-lock VDF (foundation) |
 //! | [`domain`]         | 3.3.1              | Centralised domain-tag registry       |
 //!
 //! `hash::poseidon` is rendered as plain text in this map because the
@@ -52,4 +53,5 @@ pub mod sig_classical;
 pub mod sig_pq;
 pub mod symmetric;
 pub mod threshold;
+pub mod vdf;
 pub mod zk;

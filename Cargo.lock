@@ -44,6 +44,7 @@ name = "adamant-crypto"
 version = "0.0.1"
 dependencies = [
  "adamant-crypto-blst-extra",
+ "bcs",
  "blake3",
  "blst",
  "chacha20poly1305",
@@ -58,6 +59,7 @@ dependencies = [
  "proptest",
  "rand_core 0.10.1",
  "rand_core 0.6.4",
+ "serde",
  "sha3 0.10.9",
  "subtle",
  "zeroize",
