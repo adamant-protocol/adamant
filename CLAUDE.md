@@ -399,10 +399,8 @@ Workspace tests: 2,388 passing, 0 failed, 1 ignored. Clippy `-D warnings`: clean
 | **7.2** | §8.2, 8.3.2, 8.3.3 | epoch/round scheduling + commit-wave indexing + quorum threshold | **CLOSED** |
 | **7.3** | §8.3.1 | DAG vertex structure (Vertex, VertexId, BCS-encoded body, BLS sig) | **CLOSED** |
 | **7.4** | §8.6 | consensus VRF (BLS-aggregate share/output/verify/randomness) | **CLOSED** |
-| 7.2 | §8.2, 8.3.2 | epoch / round semantics | pending |
-| 7.3 | §8.3.1 | DAG vertex structure | pending |
-| 7.4 | §8.6 | consensus VRF | pending |
-| 7.5 | §3.8, 8.4.4 | time-lock VDF | pending (large) |
+| **7.5.0** | §3.8, 8.4.4 | time-lock VDF foundation — wire types + domain tags (`adamant-crypto::vdf`) | **CLOSED** |
+| 7.5.1+ | §3.8, 8.4.4 | class-group arithmetic + hash-to-class-group + evaluate/prove/verify + envelope wiring | pending (multi-session) |
 | 7.6 | §3.6, 8.4 | threshold mempool + two-regime hysteresis | pending |
 | 7.7 | §8.3, 8.7 | DAG-BFT consensus core | pending (large) |
 | 7.8 | §9 | networking + transaction propagation | pending |
@@ -530,6 +528,36 @@ Identity refinement: `ValidatorId` now derives `Ord + PartialOrd` for the determ
 23 new tests covering: variant-tag pins, BCS round-trips, canonical-message determinism + domain-tag separation, distinct-variant message distinctness, real BLS share compute+verify round-trip, share verification rejects wrong input + wrong pubkey, aggregate rejects empty / duplicate / malformed, deterministic contributor ordering regardless of input order, aggregate verify succeeds for valid quorum + fails on wrong input + fails on arity mismatch, **VRF determinism pin** (same shares → same output → same randomness — §8.6 random-oracle property), randomness uses VRF_OUTPUT tag, distinct inputs produce distinct randomness, `select_index` range / determinism / non-zero panic.
 
 Phase 7 progression: **7.0 + 7.1 + 7.2 + 7.3 + 7.4 closed**; 7 sub-arcs remaining (7.5 VDF, 7.6 threshold mempool, 7.7 DAG-BFT core, 7.8 networking, 7.9 light client, 7.10 slashing wiring, 7.11 integration). Workspace LOC 59,652 → 60,511 (+859). Doc coverage stays at 100.0% across 9 Adamant-authored crates (1,095 → 1,122 pub items).
+
+**Phase 7.5.0 closure** — Wesolowski time-lock VDF foundation per whitepaper §3.8 + §8.4.4. Phase 7.5 is genuinely large (the Wesolowski VDF over class groups of imaginary quadratic order involves binary-quadratic-form arithmetic, NUDPL squaring, hash-to-class-group deterministic setup, Fiat-Shamir prime-challenge derivation, and a full evaluate/prove/verify operation set — thousands of LOC of Adamant-native cryptography per CLAUDE.md §14 and Principle VI). Sub-arc 7.5.0 ships the **consensus-stable wire foundation only** (same pattern as Phase 6.8a / 7.3): wire types, domain tags, BCS-pinned encoding, comprehensive type-level tests. Class-group arithmetic and the operations layered on top land at sub-arcs 7.5.1–7.5.6 in subsequent sessions.
+
+Phase 7.5.0 surface (in `adamant-crypto::vdf`):
+
+- `TimeLockParameters { discriminant: Vec<u8>, time_parameter_t: u64 }` — the genesis-fixed parameter bundle per §3.8.1 "Setup" + §3.8.2. `discriminant` is the class-group discriminant `D` in big-endian two's-complement (256 bytes for the §3.8.2 ≥2048-bit canonical width). `time_parameter_t` per §3.8.2 (`T ∈ [2_000_000, 7_500_000]`, calibrated empirically before genesis per CLAUDE.md Section 10 "Calibration work pending").
+- `TimeLockParameters::parameter_commitment()` — re-derives the 32-byte chain-state commitment over the parameter set via `sha3_256_tagged(TIME_LOCK_PARAMETERS, BCS(self))`. Every node re-derives at startup and compares against the genesis-published commitment; drift surfaces as a parameter-commitment mismatch.
+- `ClassGroupElement { encoded: Vec<u8> }` — opaque length-prefixed encoding of a single class-group element (canonical reduced binary quadratic form `(a, b)` per §3.8.1; internal layout pinned at Phase 7.5.1 when the arithmetic implementation lands). Derives `Hash` for mempool deduplication; equality is byte-equality (Phase 7.5.1's reduction invariant makes byte-equality and group-equality equivalent — the property §8.1.5 equivocation detection relies on).
+- `WesolowskiProof { pi: ClassGroupElement }` — single class-group element `π = g^q` where `q = ⌊2^T / ℓ⌋` for the Fiat-Shamir prime challenge `ℓ`. Verification (Phase 7.5.5) checks `π^ℓ · g^r ≡ h`.
+- `TimeLockEnvelope { puzzle, ciphertext, well_formedness_proof }` — user-submitted encryption per §3.8.1 step 2 + §8.4.4 ("Encryption"). `puzzle = g`, `ciphertext` is the ChaCha20-Poly1305 ciphertext under the §3.5 AEAD with key derived from `h`, `well_formedness_proof` rejects malformed envelopes per §3.8.1 ("required only to prevent malformed envelopes, not for security against time-locked decryption").
+- `TimeLockDecryption { solution, evaluation_proof }` — anchor-published decryption per §3.8.1 step 3 + §8.4.4 Mitigation B ("Decryption-publication binding"). `solution = h`, `evaluation_proof` allows public verification per §3.8.3 ("publicly verifiable"). Per §8.4.4 the decryption is bound atomically to the anchor's vertex; equivocation is slashable at 100% per §8.1.5 `SlashOffence::Equivocation` (Phase 7.10 wiring).
+- `VdfError` — typed errors {`MalformedEncoding`, `ParameterMismatch`, `ProofVerificationFailed`, `DecryptionFailed`}. Variants pin here; Phase 7.5.1+ adds operation sites that produce them. Implements `Display` + `std::error::Error`. Variants are non-`#[non_exhaustive]` per consensus-critical surface discipline.
+
+New domain tags in `adamant-crypto::domain`:
+
+- `TIME_LOCK_PARAMETERS = b"ADAMANT-v1-time-lock-parameters"` — for the genesis-state parameter commitment per §11.2.8.
+- `WESOLOWSKI_CHALLENGE = b"ADAMANT-v1-wesolowski-challenge"` — for the Fiat-Shamir prime-challenge derivation `ℓ = HashToPrime(tagged_shake_256(WESOLOWSKI_CHALLENGE, BCS((g, h, T))))` per Wesolowski 2019 §3. Tag registers now; prime-search procedure pins at Phase 7.5.4.
+- `TIME_LOCK_SYMMETRIC_KEY = b"ADAMANT-v1-time-lock-symmetric-key"` — for `key = shake_256_tagged(TIME_LOCK_SYMMETRIC_KEY, BCS(h), 32)` symmetric-key derivation from the VDF solution. Distinct from `THRESHOLD_KDF` (§3.6.1) so time-lock-derived and threshold-derived keys from numerically related inputs cannot collide.
+
+17 unit tests covering: `TimeLockParameters` BCS round-trip + BCS layout pin (length-prefixed Vec<u8> + LE u64), `ClassGroupElement` BCS round-trip + byte-preserving `from_bytes` + byte-equality + `Hash` for set-membership, `WesolowskiProof` BCS round-trip, `TimeLockEnvelope` BCS round-trip + field-order pin (`puzzle | ciphertext | well_formedness_proof` in that order — reordering would be a consensus-breaking change and surfaces as a failing test), `TimeLockDecryption` BCS round-trip, `parameter_commitment` uses the `TIME_LOCK_PARAMETERS` tag + is deterministic + distinguishes distinct parameters (different T, different discriminant bytes) + is domain-separated from plain SHA3, `VdfError` produces distinct meaningful display messages across all four variants + implements `std::error::Error`, fixture-T falls in the §3.8.2 calibration range.
+
+`adamant-crypto` gains a production dep on `bcs` + `serde` (workspace pins) for the BCS round-trip path; both are already in the bounded ecosystem per CLAUDE.md §14.1 Category B / E (canonical serialisation per §5.1.8). No new cryptography crate added.
+
+Per Adamant's "never ship stub crypto functions" discipline (CLAUDE.md Section 4: "no `unwrap()` outside tests... no silent failures"), `vdf` exposes **no `evaluate` / `prove` / `verify` functions** at 7.5.0. Phase 7.5.1+ adds them as honest, tested implementations against these consensus-stable wire types. Adamant-native posture (CLAUDE.md §14 Decision pending for Phase 7.5.1 plan-gate): class-group arithmetic in Rust requires only big-integer arithmetic and the protocol's existing SHA3 / SHAKE primitives; the implementation will be Adamant-native, not pulled from an external `class_group` / `rsa-vdf` crate (same shape as KZG per §3.9.2 amendment instance 30). Whether the BigInt layer is `num-bigint` (Cat E workspace-utility) or Adamant-native is a spec-author plan-gate question at sub-arc 7.5.1 start.
+
+Phase 7 progression: **7.0 + 7.1 + 7.2 + 7.3 + 7.4 closed; 7.5.0 closed**. 7 sub-arcs remaining (7.5.1+ VDF math, 7.6 threshold mempool, 7.7 DAG-BFT core, 7.8 networking, 7.9 light client, 7.10 slashing wiring, 7.11 integration).
+
+Phase 7.5.0 metrics: adamant-crypto LOC 3,183 → 3,463 (+280; +3 new domain tags + new vdf module + module wiring); adamant-crypto pub items 166 → 182 (+16 — 4 new types + 1 helper method + 4 VdfError variants exposed + 3 new domain tags via re-export visibility + lib.rs module). Workspace tests 2,556 → 2,573 (+17 vdf tests). Doc coverage stays at 100.0% across 9 Adamant-authored crates. Resistant-proof guards (`no_sui_in_production_deps`, `no_upstream_halo2_in_production_deps`): both pass.
+
+**Pre-mainnet workstream items registered at Phase 7.5.0:** (a) §3.8.2 time-parameter `T` calibration — the exact `T ∈ [2_000_000, 7_500_000]` value is calibrated empirically against consensus-grade hardware before genesis; (b) §11.2.8 hash-to-class-group construction — the deterministic derivation from genesis state is pinned at sub-arc 7.5.2 (spec-author plan-gate; may require a §11.2.8 amendment to enumerate the exact derivation algorithm parallel to the §6.2.1.7 structural-limits pattern); (c) class-group arithmetic BigInt-layer choice — spec-author plan-gate at sub-arc 7.5.1 start (Adamant-native vs `num-bigint` Cat E workspace-utility).
 
 ---
 
