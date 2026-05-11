@@ -148,7 +148,7 @@ impl core::fmt::Debug for ValidatorPublicKeys {
 /// validator's cryptographic identity (the keys it signs consensus
 /// messages with). The mapping `ValidatorId ↔ Address` is recorded
 /// in the on-chain `Validator` object (§8.1.2 / [`crate::Validator`]).
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct ValidatorId([u8; VALIDATOR_ID_BYTES]);
 
 impl ValidatorId {

@@ -503,6 +503,39 @@ pub static VALIDATOR_ID: DomainTag = DomainTag::new(b"ADAMANT-v1-validator-id");
 /// foundation.
 pub static VERTEX_ID: DomainTag = DomainTag::new(b"ADAMANT-v1-vertex-id");
 
+/// Domain tag for randomness extraction from the consensus VRF
+/// output per whitepaper §8.6.
+///
+/// Composition: `sha3_256_tagged(VRF_OUTPUT, aggregate_signature_bytes)`
+/// produces the canonical 32-byte uniform randomness consumed by
+/// anchor election (§8.3.3) and active-set selection (§8.1.3).
+/// Domain-separating the randomness extractor from raw BLS
+/// signature bytes ensures the resulting randomness is bound to
+/// the VRF-output context — distinct from any other use of BLS
+/// signatures across the protocol.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 7.4 as part of the §8.6 consensus-VRF
+/// foundation.
+pub static VRF_OUTPUT: DomainTag = DomainTag::new(b"ADAMANT-v1-vrf-output");
+
+/// Domain tag for the canonical VRF-input message that
+/// validators BLS-sign per whitepaper §8.6.1.
+///
+/// Composition: `sha3_256_tagged(VRF_INPUT, BCS(VrfInput))`
+/// produces the canonical 32-byte message that each validator
+/// BLS-signs. The two-layer tagged-hash (this tag for the
+/// pre-BLS message commitment, plus BLS's own
+/// `BLS_SIG_HASH_TO_CURVE` DST) provides defence-in-depth
+/// domain separation: VRF inputs cannot be confused with other
+/// BLS-signed messages (vertex signatures, threshold-mempool
+/// shares, etc.) at either layer.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 7.4 as part of the §8.6 consensus-VRF
+/// foundation.
+pub static VRF_INPUT: DomainTag = DomainTag::new(b"ADAMANT-v1-vrf-input");
+
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and
 /// test-vector regressions.

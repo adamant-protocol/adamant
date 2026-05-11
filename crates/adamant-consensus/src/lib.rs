@@ -77,6 +77,7 @@ pub mod slot;
 pub mod tier;
 pub mod validator;
 pub mod vertex;
+pub mod vrf;
 
 pub use active_set::{ActiveSet, ActiveSetError, ACTIVE_SET_FLOOR, ACTIVE_SET_LAUNCH_CEILING};
 pub use epoch::{EpochNumber, RoundNumber};
@@ -97,4 +98,8 @@ pub use validator::{Stake, Validator, MIN_VALIDATOR_STAKE_LAUNCH};
 pub use vertex::{
     DecryptionShare, PartialProofWitness, TransactionEnvelope, UnsignedVertex, Vertex,
     VertexBuilder, VertexId, VertexSignature, BLS_SIGNATURE_BYTES, VERTEX_ID_BYTES,
+};
+pub use vrf::{
+    aggregate_public_keys, aggregate_shares, output_randomness, select_index, verify_output,
+    VrfError, VrfInput, VrfOutput, VrfShare, VRF_RANDOMNESS_BYTES,
 };
