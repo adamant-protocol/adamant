@@ -409,6 +409,7 @@ Workspace tests: 2,388 passing, 0 failed, 1 ignored. Clippy `-D warnings`: clean
 | **7.5.3** | §3.8.7 (new) | Wesolowski VDF evaluate / prove / verify | **CLOSED** |
 | **7.5.4** | §3.8.8 (new) | time-lock envelope encryption (encrypt / decrypt / verify_decryption) | **CLOSED** |
 | **7.5** | §3.8 | time-lock VDF workstream | **CLOSED end-to-end** |
+| **7.6** | §3.6, §8.4, §3.8.5 | threshold-mempool regime hysteresis + wire types | **CLOSED** |
 | 7.6 | §3.6, 8.4 | threshold mempool + two-regime hysteresis | pending |
 | 7.7 | §8.3, 8.7 | DAG-BFT consensus core | pending (large) |
 | 7.8 | §9 | networking + transaction propagation | pending |
@@ -732,6 +733,25 @@ Phase 7.5.4 metrics: vdf module tests 183 → 204 passing (+21). adamant-crypto 
 **Phase 7.5 cumulative closure**: 4 sub-arcs (7.5.0 wire types + 7.5.1 a/b/c/d class-group arithmetic + 7.5.2 a/b deterministic setup + 7.5.3 Wesolowski operations + 7.5.4 envelope). Total vdf module 17 → 204 tests across the workstream. adamant-crypto LOC ~3,463 → ~9,000 (+~5,500 across Phase 7.5). 4 new domain tags registered (TIME_LOCK_PARAMETERS, WESOLOWSKI_CHALLENGE, TIME_LOCK_SYMMETRIC_KEY, CLASS_GROUP_DISCRIMINANT, CLASS_GROUP_ELEMENT_SEED — actually 5). 3 new whitepaper subsections (§3.8.6 + §3.8.7 + §3.8.8). 3 new Cat E workspace utilities added (num-bigint, num-integer, num-traits). All adamant-native (no external VDF / class-group / number-theory crates pulled in).
 
 **Next sub-arc — Phase 7.6**: threshold mempool + two-regime hysteresis at the §8.4.2 viability boundary (switch to threshold at `N ≥ 15`; switch back to time-lock at `N < 10`). The §3.6 threshold-encryption primitives are already in place from prior phases; Phase 7.6 wires them into the §8.4 mempool flow alongside the time-lock regime shipped in Phase 7.5.
+
+**Phase 7.6 closure (commit `de95aa5`)** — threshold-mempool regime hysteresis + wire types per §3.6 + §8.4 + §3.8.5. No spec amendment needed: §8.4 (Encrypted mempool) and §3.8.5 (Transition to threshold encryption) already specify both the two-regime structure and the hysteresis rule at the level this implementation pins. Phase 7.6 ships the consensus-state-binding types + state-machine arithmetic that Phase 7.7 (DAG-BFT consensus core) will consume.
+
+Phase 7.6 surface (in `adamant-consensus::mempool`):
+
+- `Regime` closed enum (`TimeLock = 0x00`, `Threshold = 0x01`) with consensus-binding BCS variant tags. Adding a variant is a hard fork.
+- `RegimeState { current: Regime }` — consensus state carrying the regime across epoch boundaries. `at_activation()` returns `TimeLock` (per §8.1.6 the chain activates at `N = 7 < 15`).
+- `RegimeState::transition(active_set_size: usize) -> Self` — pure function applying §3.8.5 hysteresis: `TimeLock` switches to `Threshold` at `N ≥ 15`; `Threshold` switches back to `TimeLock` at `N < 10`; hysteresis band `[10, 14]` keeps the prior regime.
+- `ThresholdMempoolEnvelope { identity, ciphertext_header: [u8; 96], ciphertext }` — wire type for §8.4.3 threshold-encrypted envelopes. The 96-byte header matches `adamant_crypto::threshold::CIPHERTEXT_HEADER_BYTES`; `ciphertext` carries 12-byte nonce prefix + AEAD body (same layout as the Phase 7.5 `TimeLockEnvelope`).
+- `MempoolEnvelope` closed enum: `TimeLock(TimeLockEnvelope) = 0x00`, `Threshold(ThresholdMempoolEnvelope) = 0x01`. Canonical envelope-on-the-wire shape the §8.3 DAG vertex's `transactions` field will carry. `.regime() -> Regime` for caller-side dispatch.
+- Consensus-binding constants pinned: `THRESHOLD_ACTIVATION_FLOOR = 15` (§8.4.2 viability boundary), `THRESHOLD_DEACTIVATION_FLOOR = 10` (§3.8.5 hysteresis floor), `THRESHOLD_CIPHERTEXT_HEADER_BYTES = 96` (re-exported from crypto layer).
+
+Two compile-time invariants enforced via const-block assertions: `THRESHOLD_DEACTIVATION_FLOOR < THRESHOLD_ACTIVATION_FLOOR` (otherwise the hysteresis band is empty), and `THRESHOLD_DEACTIVATION_FLOOR > ACTIVE_SET_FLOOR` (otherwise the deactivation falls below the §8.7.1 dormancy threshold and regime selection is moot).
+
+25 unit tests covering: constant pins, BCS variant tags + round-trips for `Regime` / `RegimeState` / `ThresholdMempoolEnvelope` / `MempoolEnvelope`, **exhaustive hysteresis transition matrix** (every boundary value `7..15` from both starting regimes), no-flap property (walk through `N = 14 → 15 → 14 → 10 → 9` and confirm chain visits both regimes correctly), idempotence at steady state, ciphertext-header width pin, `.regime()` dispatch.
+
+Phase 7.6 metrics: adamant-consensus 168 → 193 tests passing (+25). adamant-consensus LOC ~3,000 → ~3,600 (+~600 — mempool module + tests). No spec amendment; no new domain tags; no new workspace dependencies. Workspace clippy + fmt + strict audit + both resistant-proof guards all pass.
+
+**Phase 7 progression (cumulative)**: 7.0 + 7.1 + 7.2 + 7.3 + 7.4 + 7.5 (all sub-arcs) + 7.6 closed. The §8.4 encrypted-mempool foundation is complete at the type + state-machine level. **Next: Phase 7.7** — DAG-BFT consensus core (the large sub-arc per the §8.3 + §8.7 spec). Phase 7.7 wires together everything shipped so far: vertices (7.3), VRF anchor election (7.4), time-lock + threshold envelopes (7.5 + 7.6), through Mysticeti-style commit waves with §8.7 safety / liveness invariants.
 
 **Phase 6 hygiene follow-up (commit `0cc2848`)** — `adamant-halo2` ECC chip tests gated behind `expensive-tests` feature. Four forked-upstream tests (`ecc::chip::constants::tests::lagrange_coeffs`, `zs_and_us`, `ecc::chip::mul_fixed::short::tests::invalid_magnitude_sign`, `ecc::tests::ecc_chip`) reconstruct full fixed-base Lagrange-coefficient tables and run MockProver at k=13 across the ECC chip surface; debug-mode runtime exceeds 60s each and was blocking workspace test runs at 20+ minutes after Phase 6.8b.3 vendored them in byte-faithfully. New `expensive-tests = []` feature on `adamant-halo2` (mirrors the `adamant-privacy` posture introduced at Phase 6.8b.5); each test carries `#[cfg_attr(not(feature = "expensive-tests"), ignore = "...")]`. Empirical result: `cargo test -p adamant-halo2 --lib` reports 58 passed + 4 ignored in 3.6s (down from 20+ min hang); full workspace `cargo test` completes cleanly. Tests still compile so the upstream byte-faithful posture and refactor-checking are preserved — only the runtime ignore flag flips. Test-time only; no production-binary impact. Resistant-proof guards continue to pass; workspace audit strict mode passes; doc coverage remains 100% across 9 Adamant-authored crates.
 
