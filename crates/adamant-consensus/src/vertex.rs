@@ -482,6 +482,31 @@ impl Vertex {
     pub fn has_quorum(&self, active_set_size: usize) -> bool {
         self.body.has_quorum(active_set_size)
     }
+
+    /// Forwards to [`UnsignedVertex::parents_are_distinct`].
+    /// Convenience accessor for downstream consensus code that
+    /// holds a `Vertex` rather than the bare body.
+    #[must_use]
+    pub fn parents_are_distinct(&self) -> bool {
+        self.body.parents_are_distinct()
+    }
+
+    /// The vertex's unsigned body. Exposed for the Phase 7.7+
+    /// consensus path, which inspects body-level fields beyond
+    /// the convenience accessors above (e.g., `transactions`,
+    /// `threshold_shares`, `proof_witness`).
+    #[must_use]
+    pub const fn body(&self) -> &UnsignedVertex {
+        &self.body
+    }
+
+    /// The vertex's BLS signature. Exposed for the Phase 7.7+
+    /// DAG-state insertion path, which BLS-verifies the
+    /// signature against the author's public key.
+    #[must_use]
+    pub const fn signature(&self) -> &VertexSignature {
+        &self.signature
+    }
 }
 
 // ---------------------------------------------------------------

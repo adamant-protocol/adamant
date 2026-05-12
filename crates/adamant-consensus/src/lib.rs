@@ -68,6 +68,7 @@
 )]
 
 pub mod active_set;
+pub mod dag;
 pub mod epoch;
 pub mod genesis;
 pub mod identity;
@@ -81,6 +82,7 @@ pub mod vertex;
 pub mod vrf;
 
 pub use active_set::{ActiveSet, ActiveSetError, ACTIVE_SET_FLOOR, ACTIVE_SET_LAUNCH_CEILING};
+pub use dag::{DagError, DagState};
 pub use epoch::{EpochNumber, RoundNumber};
 pub use genesis::{GenesisCohortMarker, GENESIS_COHORT_MARKER_BYTES, GENESIS_COHORT_SIZE};
 pub use identity::{
