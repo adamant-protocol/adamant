@@ -892,7 +892,7 @@ Pipeline shape at Phase 7.7 closure: vertices flow into `DagState`; the §8.6 BL
 - **7.10** — slashing wiring + economics per §8.1.5 + §10 (equivocation evidence extraction from `DagError::EquivocationDetected`; slashing transactions; §10 tokenomics flow into the validator-stake state machine).
 - **7.11** — end-to-end integration (all Phase 7 sub-systems wired together; multi-validator regression suite).
 
-**Next sub-arc — Phase 7.8**: networking + transaction propagation per §9. **Posture decision pending** (CLAUDE.md §14.4 Decision pending for Phase 7 networking plan-gate): `libp2p` (bounded-ecosystem-equivalent for networking infrastructure) vs Adamant-native protocol stack. Will surface for spec-author deliberation at Phase 7.8 start.
+**Next sub-arc — Phase 7.8**: networking + transaction propagation per §9. **§14.4 Decision 4 resolved as Option A** (admit `libp2p` to Category E networking-infrastructure tier); see §14.1 + §14.4 Decision 4. Phase 7.8 splits into sub-arcs: **7.8.0** networking-substrate-agnostic wire-format types (this sub-arc); **7.8.1** libp2p integration + gossipsub topics + propagation; **7.8.2** anti-DoS + fee-floor + submission-proof per §9.5; **7.8.3** discovery + bootstrap per §9.6; **7.8.4** mempool design per §9.7.
 
 **Phase 6 hygiene follow-up (commit `0cc2848`)** — `adamant-halo2` ECC chip tests gated behind `expensive-tests` feature. Four forked-upstream tests (`ecc::chip::constants::tests::lagrange_coeffs`, `zs_and_us`, `ecc::chip::mul_fixed::short::tests::invalid_magnitude_sign`, `ecc::tests::ecc_chip`) reconstruct full fixed-base Lagrange-coefficient tables and run MockProver at k=13 across the ECC chip surface; debug-mode runtime exceeds 60s each and was blocking workspace test runs at 20+ minutes after Phase 6.8b.3 vendored them in byte-faithfully. New `expensive-tests = []` feature on `adamant-halo2` (mirrors the `adamant-privacy` posture introduced at Phase 6.8b.5); each test carries `#[cfg_attr(not(feature = "expensive-tests"), ignore = "...")]`. Empirical result: `cargo test -p adamant-halo2 --lib` reports 58 passed + 4 ignored in 3.6s (down from 20+ min hang); full workspace `cargo test` completes cleanly. Tests still compile so the upstream byte-faithful posture and refactor-checking are preserved — only the runtime ignore flag flips. Test-time only; no production-binary impact. Resistant-proof guards continue to pass; workspace audit strict mode passes; doc coverage remains 100% across 9 Adamant-authored crates.
 
@@ -1052,7 +1052,15 @@ Locked set:
 - `getrandom 0.2.9` (RNG entropy abstraction; CSPRNG plumbing).
 - `thiserror 1.0.24` (error type derivation; macro-only).
 
-Decision rule: **infrastructure-tier crates are acceptable when they are mature, non-consensus, and where reimplementation is audit-net-negative. Consensus-adjacent crates (e.g., `ethnum` for U256) are pre-mainnet revisit candidates: confirm at hardening time whether reimplementation is warranted.**
+**Networking-infrastructure tier** (admitted at the Phase 7.8 plan-gate per §14.4 Decision 4):
+
+- `libp2p` (umbrella crate; feature-gated to the §9.2.2-pinned subset: `quic`, `tcp`, `noise`, `yamux`, `kad`, `gossipsub`, `identify`, `dns`, `macros`).
+
+Networking infrastructure is admitted to Category E under the §9.2.1 Principle-VI invocation in the whitepaper: *"Implementing each of these from scratch would consume engineering effort with no marginal benefit. libp2p is a known-good choice."* The architectural framing: network-layer correctness is **delivery**, not state-transition correctness. Two nodes running different `libp2p` versions still agree on the chain because consensus is BLS-signed and the DAG is content-addressed — the resistant-proof rationale that drove the Halo 2 fork (Decision 1, Path C2) and the Sui-Move fork (§13) does not apply with the same force here, and the spec settled the choice in advance.
+
+Exact version pinning lands at Phase 7.8.1 (libp2p integration; Phase 7.8.0 is networking-substrate-agnostic wire-format types).
+
+Decision rule: **infrastructure-tier crates are acceptable when they are mature, non-consensus, and where reimplementation is audit-net-negative. Consensus-adjacent crates (e.g., `ethnum` for U256) are pre-mainnet revisit candidates: confirm at hardening time whether reimplementation is warranted. Networking-infrastructure crates (`libp2p` ecosystem) are admitted per §9.2.1 Principle-VI rationale; future networking primitives require spec-author ratification.**
 
 ### 14.2 The discipline — single-rule decision tree
 
@@ -1135,6 +1143,24 @@ Two options:
 
 **Recommendation**: pending spec-author deliberation at pre-mainnet hardening. The §3.9.2 amendment did not change setup-source language; that's a separate constitutional-impact deliberation.
 
+#### Decision 4 — `libp2p` at Phase 7.8 plan-gate (RESOLVED — Option A: admit to Category E)
+
+Whitepaper §9.2 specifies `libp2p` as the network substrate verbatim, with §9.2.1 explicitly invoking Principle VI: *"Implementing each of these from scratch would consume engineering effort with no marginal benefit. libp2p is a known-good choice (Principle VI: standard primitives, novel synthesis)."* The §9.2.2 configuration is pinned: QUIC primary + TCP fallback, Noise XX, Yamux, Kademlia DHT, gossipsub v1.1.
+
+The spec-level *use* of `libp2p` is settled. The §14.4 plan-gate question was the *dependency posture*: admit `libp2p` to the bounded ecosystem (Category B/E-style), or fork it into an Adamant-owned crate parallel to the Sui-Move (`adamant-bytecode-format`) and Halo 2 (`adamant-halo2`) precedents.
+
+Three options were considered:
+
+- **Option A — Admit `libp2p` to Category E locked-set.** Pragmatic; the spec already invokes Principle VI for this exact choice. Pin specific versions; treat the libp2p ecosystem as networking-infrastructure tier (parallel to how `petgraph` is treated for graph algorithms). Risk: libp2p has substantial transitive-dep surface; expands audit scope materially. **Selected.**
+- **Option B — Fork `libp2p` into `adamant-network`.** Matches the Halo 2 / Sui-Move resistant-proof posture (§13, §14.3). Rejected: libp2p is much larger than `move-binary-format` or `halo2_proofs` (50-100k+ LOC); networking is not consensus-binding the way crypto is — two nodes running different libp2p versions still converge on the same chain state as long as gossip propagates, because consensus is BLS-signed and the DAG is content-addressed. The resistant-proof rationale that drove the prior forks does not apply with the same force here, and the engineering cost of the fork is disproportionate to the marginal independence gain.
+- **Option C — Adamant-native networking from scratch.** Rejected: explicitly forbidden by §9.2.1 ("does not roll its own peer-to-peer stack"); violates Principle VI.
+
+**Resolution**: **Option A**. The spec already settled the choice with the §9.2.1 Principle-VI invocation. The §14.1 Category E locked-set is extended with a **networking-infrastructure tier** admitting `libp2p` (umbrella crate, feature-gated to the §9.2.2-pinned subset). Networking-layer correctness is delivery, not state-transition correctness — the resistant-proof framework's audit-surface concerns are addressed at the consensus + crypto layers above.
+
+**Mechanical guardrail**: networking-infrastructure crates are categorically distinct from production-consensus crates. The locked set is `libp2p` only at this Decision; expansion to additional networking primitives (e.g., a separate `quinn` direct dep, a separate DHT crate) requires fresh spec-author ratification parallel to the §14.4 plan-gate pattern.
+
+**Exact version pinning** lands at Phase 7.8.1 (libp2p integration). Phase 7.8.0 is networking-substrate-agnostic wire-format types (the `adamant-network` crate's foundation layer) and does not yet pull in `libp2p` as a runtime dep — mirrors the Phase 7.5.0 / 7.3 / 7.6 wire-foundation pattern.
+
 ### 14.5 Phase-by-phase build map
 
 The following map records which phases are complete, in progress, or pending, with explicit Category labels for each major deliverable. Categories are A (Adamant-native required), B (bounded ecosystem), C (Adamant-native bridge layer), D (test-time only), E (workspace utility). The map is canonical-record forward planning; spec-author may revise scope at any phase plan-gate.
@@ -1174,7 +1200,7 @@ The following map records which phases are complete, in progress, or pending, wi
 - DAG-BFT consensus — Cat A required.
 - Threshold-encrypted mempool — Cat A on Cat B primitives.
 - Time-lock VDF — Cat A required.
-- P2P networking — **Posture decision pending**: `libp2p` (bounded-ecosystem-equivalent for networking infrastructure) vs Adamant-native protocol stack. Decide at Phase 7 networking plan-gate.
+- P2P networking — **Posture Decision 4 resolved as Option A**: `libp2p` admitted to Category E networking-infrastructure tier per §14.1 + §14.4 Decision 4. Lands at Phase 7.8.1 with exact-pinned version; Phase 7.8.0 (wire-format types) is substrate-agnostic.
 - Validator-set management — Cat A required.
 
 **Pre-mainnet hardening**
