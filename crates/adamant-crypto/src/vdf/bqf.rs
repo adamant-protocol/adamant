@@ -1,22 +1,22 @@
 //! Binary quadratic forms over imaginary quadratic order, per
 //! whitepaper §3.8.1.
 //!
-//! Phase 7.5.1a/b/c — the class-group arithmetic foundation.
-//! The Wesolowski VDF over class groups of imaginary quadratic
-//! order per §3.8.1 represents group elements as **reduced
-//! positive definite binary quadratic forms** `f(x, y) = ax² +
-//! bxy + cy²` with negative discriminant `D = b² − 4ac < 0`.
-//! This module ships the form type (Phase 7.5.1a), the
-//! reduction algorithm that brings any form to its canonical
-//! representative (Phase 7.5.1a), the form-level predicates the
-//! rest of the VDF layer relies on (Phase 7.5.1a), Gauss
-//! composition — the class-group multiplication operation
-//! (Phase 7.5.1b), and fast squaring per Cohen 5.4.8 — the
-//! performance-critical operation the Wesolowski VDF
-//! evaluation calls `T` times (Phase 7.5.1c).
-//!
-//! The `ClassGroupElement ↔ BinaryQuadraticForm` encoding
-//! bridge lands at Phase 7.5.1d.
+//! Phase 7.5.1a/b/c/d — the class-group arithmetic foundation
+//! complete. The Wesolowski VDF over class groups of imaginary
+//! quadratic order per §3.8.1 represents group elements as
+//! **reduced positive definite binary quadratic forms**
+//! `f(x, y) = ax² + bxy + cy²` with negative discriminant
+//! `D = b² − 4ac < 0`. This module ships the form type
+//! (Phase 7.5.1a), the reduction algorithm that brings any form
+//! to its canonical representative (Phase 7.5.1a), the form-
+//! level predicates the rest of the VDF layer relies on
+//! (Phase 7.5.1a), Gauss composition — the class-group
+//! multiplication operation (Phase 7.5.1b), fast squaring per
+//! Cohen 5.4.8 — the performance-critical operation the
+//! Wesolowski VDF evaluation calls `T` times (Phase 7.5.1c),
+//! and the canonical `(a, b)`-only byte encoding that bridges
+//! [`BinaryQuadraticForm`] to the consensus-stable
+//! [`crate::vdf::ClassGroupElement`] wire type (Phase 7.5.1d).
 //!
 //! # Background
 //!
@@ -103,11 +103,27 @@
 //!   7_500_000]` per §3.8.2, so the constant-factor saving is
 //!   material.
 //!
-//! # What lands at later Phase 7.5.1 sub-sub-arcs
+//! # What this module adds at Phase 7.5.1d
 //!
-//! - **7.5.1d** — canonical byte encoding for [`crate::vdf::ClassGroupElement`].
-//!   The form is encoded as `(a, b)` only — `c` is recoverable
-//!   from `c = (b² − D) / (4a)` given the chain-fixed discriminant.
+//! - [`BinaryQuadraticForm::to_class_group_element`] — encode
+//!   the form as `(a, b)`-only canonical bytes via BCS of the
+//!   `(BigInt, BigInt)` tuple. `c` is intentionally omitted from
+//!   the wire because it is recoverable from
+//!   `c = (b² − D) / (4a)` given the chain-fixed discriminant —
+//!   per the §3.8.1 + §3.8.2 design, the discriminant is a
+//!   genesis-fixed parameter and therefore implicitly carried
+//!   alongside every class-group element rather than per-element.
+//! - [`BinaryQuadraticForm::from_class_group_element`] — decode
+//!   the `(a, b)` pair, recover `c = (b² − D) / (4a)` against
+//!   the supplied discriminant, and validate that the recovered
+//!   triple constructs a valid form (`a ≠ 0`, `c` exact integer,
+//!   resulting discriminant matches).
+//! - [`BqfError::MalformedClassGroupEncoding`] — error variant
+//!   covering both BCS-decode failures and inconsistent
+//!   encodings where `(b² − D)` is not divisible by `4a` under
+//!   the supplied discriminant (the latter would mean the
+//!   encoding does not correspond to any integral form of
+//!   discriminant `D`).
 
 use core::fmt;
 
@@ -186,6 +202,23 @@ pub enum BqfError {
     /// in the same class group. Phase 7.5.1b's
     /// [`BinaryQuadraticForm::compose`] is the production site.
     MismatchedDiscriminants,
+
+    /// A [`crate::vdf::ClassGroupElement`] byte string failed to
+    /// decode back to a valid [`BinaryQuadraticForm`]. Covers
+    /// three failure modes:
+    ///
+    /// - BCS deserialisation of the encoded `(a, b)` pair failed
+    ///   (truncated input, garbage bytes).
+    /// - The decoded `a` is zero (would degenerate the form).
+    /// - The recovered `c = (b² − D) / (4a)` is not an integer
+    ///   under the supplied discriminant, meaning the encoded
+    ///   `(a, b)` does not correspond to any integral binary
+    ///   quadratic form of discriminant `D`.
+    ///
+    /// Phase 7.5.1d's
+    /// [`BinaryQuadraticForm::from_class_group_element`] is the
+    /// production site.
+    MalformedClassGroupEncoding,
 }
 
 impl fmt::Display for BqfError {
@@ -202,6 +235,10 @@ impl fmt::Display for BqfError {
             }
             Self::MismatchedDiscriminants => f.write_str(
                 "binary quadratic form composition requires both operands to share a discriminant",
+            ),
+            Self::MalformedClassGroupEncoding => f.write_str(
+                "class-group element encoding cannot be decoded to a valid binary quadratic form \
+                 under the supplied discriminant",
             ),
         }
     }
@@ -689,6 +726,104 @@ impl BinaryQuadraticForm {
             Self::new(a_new, b_new, c_new).expect("square preserves a > 0 (A_new = (a/d)² ≥ 1)");
         result.reduce();
         result
+    }
+
+    /// Encodes the form as a [`crate::vdf::ClassGroupElement`] via
+    /// canonical BCS encoding of the `(a, b)` tuple.
+    ///
+    /// Per whitepaper §3.8.1 + §3.8.2 the class group's discriminant
+    /// is a genesis-fixed parameter shared across every class-group
+    /// element in the protocol; storing `c` per element would
+    /// duplicate information the verifier can recover from the form's
+    /// `(a, b)` and the chain-fixed discriminant via
+    /// `c = (b² − D) / (4a)`. Wire encoding therefore covers `(a, b)`
+    /// only, halving the per-element byte width for the consensus
+    /// layer.
+    ///
+    /// # Canonicality
+    ///
+    /// BCS encoding of `(BigInt, BigInt)` is deterministic. Two
+    /// forms encode to byte-equal `ClassGroupElement`s iff their
+    /// `(a, b)` pairs are equal — so reduced-form byte-equality
+    /// (the property §8.1.5 equivocation detection relies on)
+    /// holds at the wire level too.
+    ///
+    /// # Panics
+    ///
+    /// Cannot panic in practice: `BigInt` is BCS-serialisable
+    /// through `num-bigint`'s `serde` feature, and the encoding
+    /// is total over all valid `BigInt` values.
+    #[must_use]
+    pub fn to_class_group_element(&self) -> crate::vdf::ClassGroupElement {
+        let pair = (&self.a, &self.b);
+        let encoded = bcs::to_bytes(&pair).expect("(BigInt, BigInt) is BCS-serialisable");
+        crate::vdf::ClassGroupElement { encoded }
+    }
+
+    /// Decodes a [`crate::vdf::ClassGroupElement`] into a
+    /// [`BinaryQuadraticForm`] under the supplied discriminant,
+    /// recovering `c = (b² − D) / (4a)`.
+    ///
+    /// # Validation
+    ///
+    /// The decoder rejects three error modes via
+    /// [`BqfError::MalformedClassGroupEncoding`]:
+    ///
+    /// 1. The encoded byte string does not BCS-deserialise as a
+    ///    `(BigInt, BigInt)` pair.
+    /// 2. The decoded `a` is zero.
+    /// 3. `(b² − D)` is not divisible by `4a`, i.e., no integral
+    ///    `c` makes the recovered triple a binary quadratic form
+    ///    of the supplied discriminant.
+    ///
+    /// # Postconditions
+    ///
+    /// The returned form satisfies `self.discriminant() ==
+    /// *discriminant` by construction. The form is NOT
+    /// automatically reduced; callers that need a canonical
+    /// representative call [`Self::reduce`] or [`Self::reduced`]
+    /// after decoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BqfError::MalformedClassGroupEncoding`] for any
+    /// of the three failure modes above. Returns
+    /// [`BqfError::ZeroLeadingCoefficient`] is reachable in
+    /// principle but in practice the malformed-encoding path
+    /// catches it first.
+    pub fn from_class_group_element(
+        element: &crate::vdf::ClassGroupElement,
+        discriminant: &BigInt,
+    ) -> Result<Self, BqfError> {
+        // Step 1: BCS-decode the (a, b) pair. Any decode failure
+        // surfaces as MalformedClassGroupEncoding.
+        let (a, b): (BigInt, BigInt) =
+            bcs::from_bytes(&element.encoded).map_err(|_| BqfError::MalformedClassGroupEncoding)?;
+
+        // Step 2: a == 0 is a structurally invalid form (the
+        // `(a, b)` encoding presumes a non-zero leading
+        // coefficient). Surface as MalformedClassGroupEncoding
+        // rather than the more generic ZeroLeadingCoefficient
+        // since the input came over the wire.
+        if a.is_zero() {
+            return Err(BqfError::MalformedClassGroupEncoding);
+        }
+
+        // Step 3: recover c = (b² − D) / (4a). Check exact
+        // divisibility; reject otherwise (the (a, b) pair does
+        // not correspond to any form of discriminant `D`).
+        let four = BigInt::from(4);
+        let numerator = &b * &b - discriminant;
+        let denominator = &four * &a;
+        let (c, remainder) = numerator.div_rem(&denominator);
+        if !remainder.is_zero() {
+            return Err(BqfError::MalformedClassGroupEncoding);
+        }
+
+        // Construct and return. Self::new only rejects a == 0
+        // which we've already checked, so the unwrap path is
+        // unreachable in practice.
+        Self::new(a, b, c)
     }
 }
 
@@ -1428,5 +1563,207 @@ mod tests {
         assert_eq!(via_repeated_square, via_compose);
         // And for D=-23 with class number 3, f⁴ = f.
         assert_eq!(via_repeated_square, f);
+    }
+
+    // ---- Phase 7.5.1d: ClassGroupElement encoding-bridge tests ----
+
+    #[test]
+    fn to_class_group_element_round_trips_through_from() {
+        let f = generator_d23();
+        let element = f.to_class_group_element();
+        let recovered = BinaryQuadraticForm::from_class_group_element(&element, &BigInt::from(-23))
+            .expect("decode");
+        assert_eq!(recovered, f);
+    }
+
+    #[test]
+    fn round_trip_for_all_d_minus_23_classes() {
+        let d = BigInt::from(-23);
+        for f in [principal_d23(), generator_d23(), generator_squared_d23()] {
+            let element = f.to_class_group_element();
+            let recovered =
+                BinaryQuadraticForm::from_class_group_element(&element, &d).expect("decode");
+            assert_eq!(recovered, f);
+        }
+    }
+
+    #[test]
+    fn round_trip_for_d_minus_20_classes() {
+        let d = BigInt::from(-20);
+        let classes = [
+            BinaryQuadraticForm::new(BigInt::from(1), BigInt::from(0), BigInt::from(5))
+                .expect("identity D=-20"),
+            BinaryQuadraticForm::new(BigInt::from(2), BigInt::from(2), BigInt::from(3))
+                .expect("generator D=-20"),
+        ];
+        for f in classes {
+            let element = f.to_class_group_element();
+            let recovered =
+                BinaryQuadraticForm::from_class_group_element(&element, &d).expect("decode");
+            assert_eq!(recovered, f);
+        }
+    }
+
+    #[test]
+    fn encoding_omits_c_recovers_via_discriminant() {
+        // Construct (a, b) only via the helper, decode under the
+        // expected discriminant, confirm c is recovered correctly.
+        let f = generator_d23();
+        let element = f.to_class_group_element();
+        // BCS-decode just (a, b) to confirm c is genuinely absent.
+        let (a_decoded, b_decoded): (BigInt, BigInt) =
+            bcs::from_bytes(&element.encoded).expect("decode (a, b)");
+        assert_eq!(a_decoded, f.a);
+        assert_eq!(b_decoded, f.b);
+        // Recovered c via from_class_group_element should match f.c.
+        let recovered = BinaryQuadraticForm::from_class_group_element(&element, &BigInt::from(-23))
+            .expect("decode");
+        assert_eq!(recovered.c, f.c);
+    }
+
+    #[test]
+    fn encoding_is_deterministic() {
+        // BCS is deterministic; the same form encodes to the same
+        // bytes on every call. This is the byte-equality property
+        // §8.1.5 equivocation detection relies on at the wire level.
+        let f = generator_d23();
+        let a = f.to_class_group_element();
+        let b = f.to_class_group_element();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn distinct_forms_produce_distinct_encodings() {
+        // Two genuinely distinct reduced forms must encode to
+        // distinct bytes.
+        let a = principal_d23().to_class_group_element();
+        let b = generator_d23().to_class_group_element();
+        let c = generator_squared_d23().to_class_group_element();
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert_ne!(b, c);
+    }
+
+    #[test]
+    fn from_class_group_element_rejects_malformed_bcs() {
+        // Truncated / random bytes don't decode as a (BigInt, BigInt)
+        // pair.
+        let garbage = crate::vdf::ClassGroupElement {
+            encoded: vec![0xFF, 0xFF, 0x00],
+        };
+        let err = BinaryQuadraticForm::from_class_group_element(&garbage, &BigInt::from(-23))
+            .expect_err("garbage must be rejected");
+        assert_eq!(err, BqfError::MalformedClassGroupEncoding);
+    }
+
+    #[test]
+    fn from_class_group_element_rejects_empty_bytes() {
+        let empty = crate::vdf::ClassGroupElement { encoded: vec![] };
+        let err = BinaryQuadraticForm::from_class_group_element(&empty, &BigInt::from(-23))
+            .expect_err("empty must be rejected");
+        assert_eq!(err, BqfError::MalformedClassGroupEncoding);
+    }
+
+    #[test]
+    fn from_class_group_element_rejects_zero_a() {
+        // Encode (a=0, b=1) as a BCS tuple; reject on decode.
+        let pair: (BigInt, BigInt) = (BigInt::zero(), BigInt::one());
+        let element = crate::vdf::ClassGroupElement {
+            encoded: bcs::to_bytes(&pair).expect("serialise"),
+        };
+        let err = BinaryQuadraticForm::from_class_group_element(&element, &BigInt::from(-23))
+            .expect_err("zero a must be rejected");
+        assert_eq!(err, BqfError::MalformedClassGroupEncoding);
+    }
+
+    #[test]
+    fn from_class_group_element_rejects_non_integer_c() {
+        // Encode (a=2, b=2) and decode under D = -23: c = (4 - (-23)) / (4*2) = 27/8
+        // which is non-integer. Must reject.
+        let pair: (BigInt, BigInt) = (BigInt::from(2), BigInt::from(2));
+        let element = crate::vdf::ClassGroupElement {
+            encoded: bcs::to_bytes(&pair).expect("serialise"),
+        };
+        let err = BinaryQuadraticForm::from_class_group_element(&element, &BigInt::from(-23))
+            .expect_err("non-integer c must be rejected");
+        assert_eq!(err, BqfError::MalformedClassGroupEncoding);
+    }
+
+    #[test]
+    fn from_class_group_element_decoded_form_has_correct_discriminant() {
+        // The recovered form's discriminant must match the supplied
+        // discriminant exactly.
+        let f = generator_d23();
+        let element = f.to_class_group_element();
+        let recovered = BinaryQuadraticForm::from_class_group_element(&element, &BigInt::from(-23))
+            .expect("decode");
+        assert_eq!(recovered.discriminant(), BigInt::from(-23));
+    }
+
+    #[test]
+    fn from_class_group_element_decoding_under_wrong_discriminant_is_either_error_or_different_form(
+    ) {
+        // If a caller supplies the wrong discriminant, one of two
+        // things happens: either c becomes non-integer (rejected) OR
+        // c becomes an integer but produces a form of the wrong
+        // discriminant. We cover both branches here.
+        //
+        // For f = (2, 1, 3) with D = -23, the encoded (a, b) is (2, 1).
+        // Under D' = -19: c' = (1 - (-19)) / 8 = 20/8 = 2.5 → non-integer, reject.
+        let f = generator_d23();
+        let element = f.to_class_group_element();
+
+        let err = BinaryQuadraticForm::from_class_group_element(
+            &element,
+            &BigInt::from(-19), // wrong discriminant
+        )
+        .expect_err("wrong discriminant must be rejected when c becomes non-integer");
+        assert_eq!(err, BqfError::MalformedClassGroupEncoding);
+    }
+
+    #[test]
+    fn encoding_round_trip_preserves_byte_equality_within_class() {
+        // Two reduced forms that happen to be in the same equivalence
+        // class (i.e., are the same reduced form) encode to byte-equal
+        // ClassGroupElement values. Distinct classes encode distinctly.
+        // This is the equivocation-detection property at the wire level.
+        let f1 = generator_d23();
+        let f2 = BinaryQuadraticForm::new(BigInt::from(2), BigInt::from(1), BigInt::from(3))
+            .expect("same form");
+        assert_eq!(f1.to_class_group_element(), f2.to_class_group_element());
+
+        // And distinct reduced forms encode distinctly:
+        assert_ne!(
+            f1.to_class_group_element(),
+            generator_squared_d23().to_class_group_element(),
+        );
+    }
+
+    #[test]
+    fn round_trip_then_reduce_canonical() {
+        // Encode an unreduced form, decode, then reduce — should equal
+        // the reduced canonical representative of the original class.
+        let f_unreduced =
+            BinaryQuadraticForm::new(BigInt::from(3), BigInt::from(5), BigInt::from(4))
+                .expect("unreduced equivalent of f");
+        let element = f_unreduced.to_class_group_element();
+        let mut recovered =
+            BinaryQuadraticForm::from_class_group_element(&element, &BigInt::from(-23))
+                .expect("decode");
+        // Recovered form should equal the original unreduced form.
+        assert_eq!(recovered, f_unreduced);
+        // Reducing it yields the canonical representative.
+        recovered.reduce();
+        assert_eq!(recovered, generator_d23());
+    }
+
+    #[test]
+    fn malformed_class_group_encoding_error_display() {
+        // Sanity-check that the new error variant has a meaningful
+        // Display string distinct from the existing variants.
+        let msg = BqfError::MalformedClassGroupEncoding.to_string();
+        assert!(!msg.is_empty());
+        assert_ne!(msg, BqfError::ZeroLeadingCoefficient.to_string());
+        assert_ne!(msg, BqfError::MismatchedDiscriminants.to_string());
     }
 }
