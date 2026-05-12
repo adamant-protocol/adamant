@@ -414,7 +414,8 @@ Workspace tests: 2,388 passing, 0 failed, 1 ignored. Clippy `-D warnings`: clean
 | **7.7b** | §8.3.3, §8.6 | commit-wave logic (anchor election + direct commit + total ordering) | **CLOSED** |
 | **7.7c** | §8.3.3, §8.7 | indirect commit + halt detection + §8.7 invariants | **CLOSED** |
 | **7.7d** | §3.6, §3.8, §8.4 | mempool decryption (threshold/time-lock flows) | **CLOSED** |
-| 7.7e | §8.3, §8.7 | end-to-end integration tests | pending |
+| **7.7e** | §8.3, §8.7 | end-to-end integration tests | **CLOSED** |
+| **7.7** | §8.3, §8.7 | **DAG-BFT consensus core — feature-complete end-to-end** | **CLOSED** |
 | 7.8 | §9 | networking + transaction propagation | pending |
 | 7.9 | §8.1.7, 8.9 | light client + tier signal | pending |
 | 7.10 | §8.1.5, §10 | slashing wiring + economics | pending |
@@ -858,7 +859,40 @@ Phase 7.7d surface (new `adamant-consensus::mempool_decryption` module):
 
 Phase 7.7d metrics: `cargo test -p adamant-consensus --lib` reports 284 passing (265 Phase 7.7c close + 19 Phase 7.7d). adamant-consensus LOC 4,919 → 5,702 (+783 — mempool_decryption module + tests). adamant-consensus pub items 216 → 233 (+17: `MempoolDecryptionError` + 10 variants, `DecryptedTransaction` + 3 fields, `ValidatorDecryptionShare` + 3 fields + 3 methods, `extract_envelopes`, `decrypt_time_lock`, `ThresholdShareAccumulator` + 7 methods). Workspace lib tests 2,757 → 2,776 (+19). Workspace clippy + fmt + strict audit + both resistant-proof guards all pass; doc coverage stays at 100.0% across 9 Adamant-authored crates. No spec amendment; no new domain tags; no new production-binary workspace dependencies.
 
-**Next sub-arc — Phase 7.7e**: end-to-end integration tests exercising the full consensus pipeline (DagState insertion → elect_anchor → record_decision → indirect commit resolution → extract_envelopes → time-lock verification / threshold share accumulation → DecryptedTransaction sequence) against multi-validator fixture scenarios. Closes the Phase 7.7 DAG-BFT consensus core sub-arc end-to-end.
+**Phase 7.7e closure (commit `866d8ae`)** — end-to-end integration tests for the DAG-BFT consensus core pipeline. Phase 7.7e closes the Phase 7.7 DAG-BFT consensus core sub-arc end-to-end. New `crates/adamant-consensus/tests/dag_bft_pipeline.rs` integration-test file exercises the full pipeline (DagState insertion → elect_anchor → direct_commit_decision → CommitSequencer indirect-commit resolution → extract_envelopes → time-lock decryption verification / threshold share accumulation → DecryptedTransaction sequence) against multi-validator fixture scenarios.
+
+6 integration tests:
+
+- **`threshold_pipeline_end_to_end`** — n=15 threshold regime, full pipeline. Real BLS shares from `TrustedDealerShares` (t=11); plaintext encrypted via §3.6 `encapsulate` → AEAD wrap, decrypted via accumulator collecting 11 shares + combine + decapsulate + AEAD decrypt. Asserts plaintext round-trips through DagState → CommitSequencer → extract_envelopes → ThresholdShareAccumulator.
+- **`time_lock_pipeline_end_to_end`** — n=7 time-lock regime, full pipeline. Real Wesolowski VDF at 2048-bit discriminant (§3.8.2 minimum), T=10 for test speed. Anchor decrypts via `envelope::decrypt`; observer verifies via `decrypt_time_lock`.
+- **`indirect_commit_pipeline_pulls_forward_earlier_wave`** — wave 0 Pending, wave 1 Committed but does NOT reach wave 0 → wave 0 indirect-Skipped per the §8.7 Mysticeti rule. Only wave 1's payload appears in the `DecryptedTransaction` sequence; wave 0's anchor is in `committed_set` absence. Verifies the indirect-commit rule end-to-end through the full decryption pipeline.
+- **`halt_detection_signals_chain_paused_below_floor`** — §8.7.1 halt-on-disagreement signal. N=6 returns `is_chain_dormant` true; N=7 and N=30 false.
+- **`pipeline_is_deterministic_across_independent_runs`** — §8.7 safety convergence property. Two parallel pipeline runs on identical inputs produce byte-identical `DecryptedTransaction` sequences.
+- **`pipeline_produces_disjoint_per_wave_ordered_sequences`** — §8.7 safety no-double-commit invariant across 3 committed waves. Per-wave `ordered` lists partition the `committed_set` (no vertex appears in two waves' ordered sequences).
+
+Phase 7.7e metrics: `cargo test -p adamant-consensus --test dag_bft_pipeline` reports 6/6 passing in ~12.5 seconds (VDF round-trips dominate). Workspace lib tests unchanged at 2,776 (Phase 7.7e ships integration tests, not lib code; the audit's LOC counter only walks `src/`, so adamant-consensus stays at 5,702 LOC + 233 pub items + 100% doc coverage). Workspace clippy + fmt + strict audit + both resistant-proof guards all pass. No new lib types; no new spec amendment; no new production-binary dependencies.
+
+**Phase 7.7 cumulative closure** — all 5 sub-arcs closed (7.7a + 7.7b + 7.7c + 7.7d + 7.7e). **THE DAG-BFT CONSENSUS CORE IS FEATURE-COMPLETE END-TO-END.** Cumulative metrics across Phase 7.7:
+
+| Sub-arc | Surface | LOC delta | Pub-item delta |
+|---|---|---|---|
+| 7.7a | DAG storage + insertion validation | +~190 | +26 |
+| 7.7b | Direct commit-wave logic | +432 | +5 |
+| 7.7c | Indirect commit + halt detection | +701 | +16 |
+| 7.7d | Mempool decryption | +783 | +17 |
+| 7.7e | End-to-end integration tests | +684 (tests/) | 0 (no lib code) |
+| **Total** | **DAG-BFT consensus core** | **+~2,100 src + ~684 tests** | **+64 pub items** |
+
+Pipeline shape at Phase 7.7 closure: vertices flow into `DagState`; the §8.6 BLS-aggregate VRF (Phase 7.4) drives anchor election; the Mysticeti direct + indirect commit rules produce totally-ordered, deterministic, §8.7-safe wave outcomes; threshold-encrypted (§3.6 + §8.4.3) and time-lock-encrypted (§3.8 + §8.4.4) envelopes decrypt through the regime-appropriate path to produce the `DecryptedTransaction` sequence the §6 execution layer consumes.
+
+**Phase 7 progression**: **7.0 + 7.1 + 7.2 + 7.3 + 7.4 + 7.5 (all sub-arcs) + 7.6 + 7.7 (all sub-arcs) closed.** Sub-arcs remaining:
+
+- **7.8** — networking + transaction propagation per §9 (libp2p integration; gossipsub-based vertex + share propagation; mempool gossiping).
+- **7.9** — light client + tier signal per §8.1.7 + §8.9 (recursive-proof verification interface; SecurityTier disclosure observability).
+- **7.10** — slashing wiring + economics per §8.1.5 + §10 (equivocation evidence extraction from `DagError::EquivocationDetected`; slashing transactions; §10 tokenomics flow into the validator-stake state machine).
+- **7.11** — end-to-end integration (all Phase 7 sub-systems wired together; multi-validator regression suite).
+
+**Next sub-arc — Phase 7.8**: networking + transaction propagation per §9. **Posture decision pending** (CLAUDE.md §14.4 Decision pending for Phase 7 networking plan-gate): `libp2p` (bounded-ecosystem-equivalent for networking infrastructure) vs Adamant-native protocol stack. Will surface for spec-author deliberation at Phase 7.8 start.
 
 **Phase 6 hygiene follow-up (commit `0cc2848`)** — `adamant-halo2` ECC chip tests gated behind `expensive-tests` feature. Four forked-upstream tests (`ecc::chip::constants::tests::lagrange_coeffs`, `zs_and_us`, `ecc::chip::mul_fixed::short::tests::invalid_magnitude_sign`, `ecc::tests::ecc_chip`) reconstruct full fixed-base Lagrange-coefficient tables and run MockProver at k=13 across the ECC chip surface; debug-mode runtime exceeds 60s each and was blocking workspace test runs at 20+ minutes after Phase 6.8b.3 vendored them in byte-faithfully. New `expensive-tests = []` feature on `adamant-halo2` (mirrors the `adamant-privacy` posture introduced at Phase 6.8b.5); each test carries `#[cfg_attr(not(feature = "expensive-tests"), ignore = "...")]`. Empirical result: `cargo test -p adamant-halo2 --lib` reports 58 passed + 4 ignored in 3.6s (down from 20+ min hang); full workspace `cargo test` completes cleanly. Tests still compile so the upstream byte-faithful posture and refactor-checking are preserved — only the runtime ignore flag flips. Test-time only; no production-binary impact. Resistant-proof guards continue to pass; workspace audit strict mode passes; doc coverage remains 100% across 9 Adamant-authored crates.
 
