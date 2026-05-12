@@ -105,6 +105,7 @@ name = "adamant-network"
 version = "0.0.1"
 dependencies = [
  "adamant-consensus",
+ "adamant-crypto",
  "bcs",
  "futures",
  "libp2p",

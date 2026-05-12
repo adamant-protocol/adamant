@@ -89,8 +89,13 @@ use serde::{Deserialize, Serialize};
 
 use adamant_consensus::{RoundNumber, Vertex};
 
+pub mod anti_dos;
 pub mod node;
 
+pub use anti_dos::{
+    compute_submission_proof, duration_to_micros, validate_submission, AntiDosError, FeeFloor,
+    RateLimitConfig, RateLimitDecision, RateLimiter, MAX_DIFFICULTY_BITS,
+};
 pub use node::{AdamantBehaviour, NetworkConfig, NetworkError, NetworkEvent, NetworkNode};
 
 /// Adamant network protocol version. Distinct from a
@@ -132,48 +137,54 @@ pub enum EncryptionMode {
 
 /// Anti-DoS submission proof per whitepaper §9.5.1.
 ///
-/// The full structural pinning lands at Phase 7.8.2 alongside
-/// the §9.5 anti-DoS + fee-floor + per-peer rate-limiting
-/// surface. Phase 7.8.0 carries the wire-stable wrapper as
-/// opaque bytes so the [`NetworkTransaction`] shape is
-/// stable through subsequent sub-arcs.
+/// Hashcash-style proof-of-work: the submitter grinds nonces
+/// until the SHA3-256 tagged hash of
+/// `BCS(tx with submission_proof=None) || nonce_le_bytes`
+/// (tagged under [`adamant_crypto::domain::SUBMISSION_PROOF`])
+/// has at least `difficulty_bits` leading zero bits.
 ///
-/// Production submission-proof shape (anticipated, pending
-/// Phase 7.8.2 finalisation): a small client-side
-/// proof-of-work or stake-bound attestation that costs the
-/// submitter a calibrated unit of work — sufficient to
-/// disincentivise mempool flooding without blocking
-/// honest-user submissions. Per §9.5.1 the exact construction
-/// is calibrated pre-mainnet alongside the §9.5.2 fee-floor.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+/// Per §9.5.1 the target difficulty is calibrated to a 50-
+/// 100ms grind on consumer hardware — barely noticeable for
+/// honest users, materially expensive for spam-flooders.
+/// Difficulty is per-node dynamic; heavily-loaded receivers
+/// raise their minimum-accepted threshold without protocol-
+/// level coordination.
+///
+/// See [`crate::anti_dos::SubmissionProofExt`] for the
+/// verify + compute API.
+///
+/// # Wire layout
+///
+/// BCS-canonical: `nonce: u64` (8 bytes LE) + `difficulty_bits:
+/// u8` (1 byte) = 9 bytes flat. Field order is consensus-
+/// binding; reordering is a hard-fork-aware deliberate change.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SubmissionProof {
-    /// Opaque bytes; Phase 7.8.2 pins the inner shape.
-    pub bytes: Vec<u8>,
+    /// Nonce the submitter found via grinding. Combined with
+    /// the transaction body (minus this proof field) via
+    /// [`adamant_crypto::domain::SUBMISSION_PROOF`] and
+    /// SHA3-256-tagged into the `PoW` hash.
+    pub nonce: u64,
+
+    /// Target difficulty (leading-zero-bit count of the hash)
+    /// the submitter claims to have met. Receivers verify the
+    /// hash actually meets this difficulty AND accept the
+    /// proof only if `difficulty_bits >= receiver's minimum
+    /// threshold`.
+    pub difficulty_bits: u8,
 }
 
 impl SubmissionProof {
-    /// Wrap raw bytes as a [`SubmissionProof`].
+    /// Construct a submission proof from raw nonce + difficulty
+    /// fields. The receiver must call
+    /// [`crate::anti_dos::verify_submission_proof`] to confirm
+    /// the proof actually meets its claimed difficulty.
     #[must_use]
-    pub const fn new(bytes: Vec<u8>) -> Self {
-        Self { bytes }
-    }
-
-    /// Borrow the raw bytes.
-    #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-
-    /// Length in bytes.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.bytes.len()
-    }
-
-    /// Whether the wrapper holds zero bytes.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
+    pub const fn new(nonce: u64, difficulty_bits: u8) -> Self {
+        Self {
+            nonce,
+            difficulty_bits,
+        }
     }
 }
 
@@ -408,22 +419,34 @@ mod tests {
     // ---- SubmissionProof ----
 
     #[test]
-    fn submission_proof_new_and_accessors() {
-        let p = SubmissionProof::new(vec![1, 2, 3, 4]);
-        assert_eq!(p.as_bytes(), &[1, 2, 3, 4]);
-        assert_eq!(p.len(), 4);
-        assert!(!p.is_empty());
-        let empty = SubmissionProof::new(Vec::new());
-        assert!(empty.is_empty());
-        assert_eq!(empty.len(), 0);
+    fn submission_proof_new_sets_fields() {
+        let p = SubmissionProof::new(0xDEAD_BEEFu64, 16);
+        assert_eq!(p.nonce, 0xDEAD_BEEFu64);
+        assert_eq!(p.difficulty_bits, 16);
     }
 
     #[test]
     fn submission_proof_bcs_round_trip() {
-        let p = SubmissionProof::new(vec![0x42u8; 7]);
+        let p = SubmissionProof::new(0x1234_5678_9ABC_DEF0, 20);
         let bytes = bcs::to_bytes(&p).expect("encode");
         let decoded: SubmissionProof = bcs::from_bytes(&bytes).expect("decode");
         assert_eq!(p, decoded);
+    }
+
+    #[test]
+    fn submission_proof_bcs_layout_pin() {
+        // BCS encoding: nonce (u64 LE, 8 bytes) +
+        // difficulty_bits (u8, 1 byte) = 9 bytes flat.
+        // Consensus-binding; field order changes are hard
+        // forks.
+        let p = SubmissionProof::new(1u64, 0x10);
+        let bytes = bcs::to_bytes(&p).expect("encode");
+        assert_eq!(bytes.len(), 9);
+        assert_eq!(bytes[0], 1); // nonce LSB
+        for b in &bytes[1..8] {
+            assert_eq!(*b, 0); // remainder of nonce LE
+        }
+        assert_eq!(bytes[8], 0x10); // difficulty_bits
     }
 
     // ---- NetworkTransaction ----
@@ -453,9 +476,9 @@ mod tests {
 
     #[test]
     fn network_transaction_with_submission_proof() {
-        let proof = SubmissionProof::new(vec![0xFFu8; 32]);
+        let proof = SubmissionProof::new(42, 16);
         let tx = NetworkTransaction::transparent(1, vec![1, 2], 0, RoundNumber::new(10))
-            .with_submission_proof(proof.clone());
+            .with_submission_proof(proof);
         assert_eq!(tx.submission_proof, Some(proof));
     }
 
@@ -463,7 +486,7 @@ mod tests {
     fn network_transaction_bcs_round_trip() {
         let tx =
             NetworkTransaction::transparent(1, vec![0x01, 0x02, 0x03], 999, RoundNumber::new(1234))
-                .with_submission_proof(SubmissionProof::new(vec![0xAA; 8]));
+                .with_submission_proof(SubmissionProof::new(0xAA_AA_AA_AAu64, 12));
         let bytes = bcs::to_bytes(&tx).expect("encode");
         let decoded: NetworkTransaction = bcs::from_bytes(&bytes).expect("decode");
         assert_eq!(tx, decoded);

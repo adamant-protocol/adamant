@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 adamant-consensus = { path = "../adamant-consensus" }
+adamant-crypto = { path = "../adamant-crypto" }
 serde = { workspace = true }
 bcs = { workspace = true }
 # libp2p + tokio admitted at Phase 7.8.1 per CLAUDE.md §14.4

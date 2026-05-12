@@ -649,6 +649,35 @@ pub static CLASS_GROUP_DISCRIMINANT: DomainTag =
 pub static CLASS_GROUP_ELEMENT_SEED: DomainTag =
     DomainTag::new(b"ADAMANT-v1-class-group-element-seed");
 
+/// Domain tag for the §9.5.1 anti-DoS submission-proof
+/// computation.
+///
+/// Composition: a submission proof for a [`NetworkTransaction`]
+/// is a `(nonce, difficulty_bits)` pair such that
+///
+/// ```text
+/// h = sha3_256_tagged(SUBMISSION_PROOF, body_bytes || nonce_le_bytes)
+/// leading_zero_bits(h) >= difficulty_bits
+/// ```
+///
+/// where `body_bytes` is the BCS encoding of the transaction
+/// with its `submission_proof` field zeroed (`Option::None`) to
+/// avoid circular reference. The hash construction is
+/// consensus-stable across nodes; the `difficulty_bits` target
+/// is per-node dynamic per §9.5.1.
+///
+/// Distinct from every consensus-binding domain tag so a
+/// submission-proof hash for any input cannot collide with a
+/// VRF input/output, vertex id, validator id, KDF derivation,
+/// or class-group seed. Per §3.3.1, adding/renaming domain
+/// tags is a hard fork.
+///
+/// Registered at Phase 7.8.2 as part of the §9.5.1 anti-DoS
+/// foundation.
+///
+/// [`NetworkTransaction`]: crate
+pub static SUBMISSION_PROOF: DomainTag = DomainTag::new(b"ADAMANT-v1-submission-proof");
+
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and
 /// test-vector regressions.
