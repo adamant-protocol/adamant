@@ -401,6 +401,68 @@ The procedure terminates in `O(1)` expected iterations of the outer loop: each c
 
 **Determinism + consensus binding.** The procedure is fully deterministic given `(s, D, m)`: the same triple always yields the same reduced class-group element. This is required because: (a) the time-lock envelope's `puzzle = g` is verifier-reconstructable from the envelope's byte seed, and (b) the genesis class-group generator (the protocol's canonical `g₀`) is itself a hash-to-element output that every node re-derives at startup and compares against a chain-fixed value.
 
+### 3.8.7 Wesolowski evaluate, prove, and verify
+
+Subsection 3.8.1 gives the Wesolowski construction at the description level: evaluate computes `h = g^(2^T)`; prove produces a single class-group element `π`; verify checks the proof against `(g, h, T)` in constant time. This subsection pins the byte-level algorithms for `evaluate`, `prove`, and `verify`, plus the Fiat-Shamir derivation of the prime challenge `ℓ` that ties them together.
+
+**Evaluate.** Given the chain-fixed class group of discriminant `D` and a class-group element `g`, the evaluation `h = g^(2^T)` is computed by `T` sequential class-group squarings:
+
+```
+evaluate(g, T):
+  h ← g
+  for i in 1..=T:
+    h ← square(h)         # in the class group of discriminant D
+  return h
+```
+
+Each `square` is the class-group operation specified in `adamant-crypto::vdf::bqf::BinaryQuadraticForm::square` (the in-implementation realisation of Cohen 5.4.8). The chain of squarings is by construction sequential: no parallel speedup is known for class-group squaring at this size.
+
+**Fiat-Shamir prime challenge `ℓ`.** Given `(g, h, T)`, the verifier-binding prime challenge is derived as:
+
+```
+hash_to_prime(g, h, T):
+  for counter = 0, 1, 2, ...:
+    raw ← tagged_shake_256(
+            WESOLOWSKI_CHALLENGE,
+            BCS((g_encoded, h_encoded, T, counter)),
+            CHALLENGE_BITS/8 bytes)
+    cand ← uint(raw) | (1 << (CHALLENGE_BITS − 1)) | 1   # force high bit + odd
+    if is_probable_prime(cand, mr_witnesses): return cand
+    # otherwise continue with the next counter
+```
+
+`g_encoded` and `h_encoded` are the canonical `(a, b)` byte encodings of the class-group elements per §3.8.1d (the Adamant `ClassGroupElement` wire format). `T` is encoded as a little-endian `u64`. Miller-Rabin witnesses `mr_witnesses` are derived independently per candidate via the same `WESOLOWSKI_CHALLENGE` tag with an additional witness-index field, so the test is reproducible bit-for-bit across implementations.
+
+`CHALLENGE_BITS` is genesis-fixed at **128 bits** — sufficient soundness margin against the protocol's 128-bit classical security target (Wesolowski's soundness reduction: a cheating prover succeeds with probability `~1/ℓ`, so `ℓ ≥ 2^128` gives `2^-128` soundness error).
+
+**Prove.** Given `g`, `T`, and the evaluation `h = g^(2^T)`, the proof is:
+
+```
+prove(g, T):
+  h ← evaluate(g, T)
+  ℓ ← hash_to_prime(g, h, T)
+  q ← floor(2^T / ℓ)                      # integer division
+  π ← g^q                                  # class-group exponentiation
+  return (h, π)
+```
+
+The exponentiation `g^q` is computed via standard left-to-right square-and-multiply on the binary representation of `q`. The exponent `q` has approximately `T − log₂(ℓ) ≈ T` bits, so prove costs approximately `T` additional class-group operations on top of the `T` for evaluate — total `~2T` operations. Optimisations (Pietrzak's halving, Wesolowski's streaming witness tracking) reduce this but are not required for protocol conformance; the simple `evaluate + g^q` form is canonical.
+
+**Verify.** Given `(g, h, T, π)`:
+
+```
+verify(g, h, T, π):
+  ℓ ← hash_to_prime(g, h, T)
+  r ← 2^T mod ℓ                            # small: r < 2^128
+  check  π^ℓ · g^r  ==  h                  # class-group equality
+```
+
+Computing `r = 2^T mod ℓ` costs `O(log T · log ℓ)` operations on `O(log ℓ)`-bit numbers — under a millisecond at any practical T. The verification step is two short exponentiations (`π^ℓ` and `g^r`) plus one class-group multiplication and one equality check; total cost is `O(log ℓ) = O(128)` class-group operations regardless of `T`. This is what makes the Wesolowski proof "publicly verifiable in constant time" per §3.8.3.
+
+**Soundness.** Wesolowski 2019 §4 proves: under the adaptive-root assumption in the class group of unknown order, a cheating prover (one who outputs `π` such that verify accepts but `h ≠ g^(2^T)`) succeeds with probability at most `1/ℓ`. For `ℓ ≥ 2^128`, the cheating probability is `≤ 2^-128`. The adaptive-root assumption is plausibly post-quantum (§3.8.4); it does not reduce to factoring or discrete log.
+
+**Domain separation.** The `WESOLOWSKI_CHALLENGE` tag is distinct from `CLASS_GROUP_DISCRIMINANT` (§3.8.6) and `CLASS_GROUP_ELEMENT_SEED` (§3.8.6) so prime challenges cannot collide with discriminants or class-group generators under any related seed material. Per §3.3.1, all three tags are consensus-binding; changing any one is a hard fork.
+
 ## 3.9 Zero-knowledge proofs
 
 The protocol's privacy layer (section 7) and recursive verification (section 8) use zero-knowledge succinct non-interactive arguments of knowledge (zk-SNARKs). Two specific systems are used: **Halo 2** for general-purpose proving with no trusted setup, and **KZG commitments** as a building block for vector commitments and for state commitments inside the consensus layer.

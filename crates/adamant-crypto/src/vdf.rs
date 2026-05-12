@@ -148,6 +148,7 @@
 pub mod bqf;
 pub mod modular;
 pub mod setup;
+pub mod wesolowski;
 
 use core::fmt;
 
