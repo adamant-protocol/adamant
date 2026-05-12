@@ -909,7 +909,7 @@ Phase 7.8 sub-arc roadmap (registered in `adamant-network::lib.rs` module docs):
 |---|---|---|---|
 | **7.8.0** | §9.3.1 | wire-format types | **CLOSED** |
 | **7.8.1** | §9.2, §9.3 | libp2p integration + gossipsub propagation | **CLOSED** |
-| 7.8.2 | §9.5 | anti-DoS + submission proofs + fee floors | pending |
+| **7.8.2** | §9.5 | anti-DoS + submission proofs + fee floors | **CLOSED** |
 | 7.8.3 | §9.6 | discovery + bootstrap nodes | pending |
 | 7.8.4 | §9.7 | mempool design + synchronisation | pending |
 
@@ -956,7 +956,34 @@ Deferred to follow-on sub-arcs (registered in `node.rs` module docs):
 
 Phase 7.8.1 metrics: `cargo test -p adamant-network --lib` reports 29/29 passing (19 from 7.8.0 + 10 new). Crate metrics: 717 LOC (was 301), 28 pub items (was 15), 100% doc coverage, `#![forbid(unsafe_code)]`. Workspace lib tests 2,795 → 2,805 (+10). All 10 Adamant-authored crates at 100% doc coverage. Workspace clippy + fmt + strict audit + both resistant-proof guards all pass. No spec amendment; no new domain tags.
 
-**Next sub-arc — Phase 7.8.2**: anti-DoS + submission proofs + fee floors per §9.5. Pins the `SubmissionProof` inner structure (currently opaque bytes); wires the per-peer rate limiter + the §9.5.2 fee-floor + the §9.5.4 cryptographic verification before propagation. May overlap with §10 fee economics integration; surface for spec-author input if the §9.5.1 submission-proof construction shape (proof-of-work vs stake-bound attestation) needs ratification.
+**Phase 7.8.2 closure (commit `116e274`)** — anti-DoS primitives per whitepaper §9.5. Wires the four §9.5 anti-DoS layers onto the Phase 7.8.0 wire-format types. The §9.5.1 open question from the prior closure note resolved trivially against the spec text: **§9.5.1 pins "50-100ms PoW puzzle" — Hashcash, not stake-bound**. No spec-author ratification needed; the spec settled it.
+
+Phase 7.8.2 surface:
+
+**Wire-type change**: `adamant-network::SubmissionProof` migrates from opaque `Vec<u8>` to typed `{ nonce: u64, difficulty_bits: u8 }` per the Phase 7.8.0 "inner shape pins at Phase 7.8.2" forward-declaration. BCS layout: 9 bytes flat (nonce LE + difficulty_bits). Consensus-binding; reordering is a hard-fork-aware change.
+
+**New domain tag** added to `adamant-crypto::domain::SUBMISSION_PROOF = b"ADAMANT-v1-submission-proof"` — the consensus-stable namespace anchor for the Hashcash hash construction. Per §3.3.1 adding the tag at Phase 7.8.2 is a hard-fork-aware deliberate change, consistent with prior phases' tag additions (VRF_INPUT/OUTPUT at 7.4, VERTEX_ID at 7.3, TIME_LOCK_* at 7.5, CLASS_GROUP_* at 7.5.2).
+
+**New `adamant-network::anti_dos` module** (~900 LOC + 27 tests):
+
+- **`MAX_DIFFICULTY_BITS = 64`** — operational cap (64-bit grind is astronomically beyond the §9.5.1 50-100ms target).
+- **`verify_submission_proof(tx, proof, min_difficulty) -> bool`** — two-stage check: (1) proof's claimed difficulty ≥ receiver's threshold (fast pre-filter); (2) `leading_zero_bits(sha3_256_tagged(SUBMISSION_PROOF, BCS(tx with submission_proof=None) || nonce_le_bytes)) ≥ proof.difficulty_bits` (substantive PoW check).
+- **`compute_submission_proof(tx, target, max_iter) -> Option<SubmissionProof>`** — grinds nonces; returns `Some(proof)` when target met within budget.
+- **`FeeFloor { micro_adm_per_byte }`** — §9.5.2 per-byte fee floor. `minimum_for(tx) = bcs_size(tx) * per_byte`; `check(tx) = tx.fee_tip ≥ minimum_for(tx)`.
+- **`RateLimiter`** — §9.5.3 per-peer token-bucket. `check(peer, now_micros)` refills + charges + returns Allow/Throttle/Reject. Caller supplies monotonic time (deterministic; testable without system clock). `forget(peer)` drops state.
+- **`RateLimitConfig { capacity, refill_per_second, reject_below_negative }`** + `launch_default` (20 / 5 / 20).
+- **`RateLimitDecision`** closed enum: Allow / Throttle / Reject.
+- **`AntiDosError`** closed enum: MissingSubmissionProof / InvalidSubmissionProof / BelowFeeFloor. Display + `std::error::Error` with pairwise-distinct messages.
+- **`validate_submission(tx, fee_floor, min_difficulty)`** — orchestrator combining §9.5.1 + §9.5.2 checks. §9.5.3 rate limiting is intentionally separate (caller decides whether to short-circuit known-abusive peers before cryptographic verification).
+- **`duration_to_micros`** helper for `Instant::elapsed()` bridging.
+
+§9.5.4 (cryptographic verification of the underlying AVM transaction body) crosses into the §6 execution layer and lands at Phase 7.8.4 + 7.11 integration; Phase 7.8.2 ships the §9.5.1/2/3 primitives only.
+
+28 new unit tests across the anti_dos module + 1 in lib.rs (`submission_proof_bcs_layout_pin`). Coverage: `MAX_DIFFICULTY_BITS` pin; `leading_zero_bits` 10 boundary cases; `compute_submission_proof` Some-at-low-difficulty + None-above-cap; `verify_submission_proof` rejects-below-min-difficulty / forged-proofs / above-cap-claims; **proof-tx-binding** (proof for tx_a doesn't verify for tx_b); `FeeFloor` new + check + zero-floor-accepts-all + BCS round-trip; `RateLimiter` 8 scenarios (first-allows / capacity-exhausts / throttle-to-reject / refill-over-time / refill-capped / per-peer-isolation / forget); `validate_submission` happy-path + 3 rejection paths; `AntiDosError` Display + `std::error::Error`; `duration_to_micros`.
+
+Phase 7.8.2 metrics: `cargo test -p adamant-network --lib` reports 57 passing (29 from prior + 28 new). adamant-network LOC 717 → 1,203 (+486); pub items 28 → 45 (+17). adamant-crypto LOC 6,252 → 6,253 (+1; domain tag); pub items 221 → 222 (+1). Workspace lib tests 2,805 → 2,833 (+28). All 10 Adamant-authored crates at 100% doc coverage. All gates green.
+
+**Next sub-arc — Phase 7.8.3**: Kademlia DHT discovery + bootstrap nodes per §9.6. Adds `libp2p::kad` to the `AdamantBehaviour` (feature already enabled), wires DHT lookups against caller-supplied bootstrap nodes, populates the peer table. Per §9.6.1 "bootstrap nodes are not 'trusted' for any consensus-critical purpose" — they're convenience infrastructure. Surface for spec-author input only if specific bootstrap-node-listing or DHT-tuning details need pinning.
 
 **Phase 6 hygiene follow-up (commit `0cc2848`)** — `adamant-halo2` ECC chip tests gated behind `expensive-tests` feature. Four forked-upstream tests (`ecc::chip::constants::tests::lagrange_coeffs`, `zs_and_us`, `ecc::chip::mul_fixed::short::tests::invalid_magnitude_sign`, `ecc::tests::ecc_chip`) reconstruct full fixed-base Lagrange-coefficient tables and run MockProver at k=13 across the ECC chip surface; debug-mode runtime exceeds 60s each and was blocking workspace test runs at 20+ minutes after Phase 6.8b.3 vendored them in byte-faithfully. New `expensive-tests = []` feature on `adamant-halo2` (mirrors the `adamant-privacy` posture introduced at Phase 6.8b.5); each test carries `#[cfg_attr(not(feature = "expensive-tests"), ignore = "...")]`. Empirical result: `cargo test -p adamant-halo2 --lib` reports 58 passed + 4 ignored in 3.6s (down from 20+ min hang); full workspace `cargo test` completes cleanly. Tests still compile so the upstream byte-faithful posture and refactor-checking are preserved — only the runtime ignore flag flips. Test-time only; no production-binary impact. Resistant-proof guards continue to pass; workspace audit strict mode passes; doc coverage remains 100% across 9 Adamant-authored crates.
 
