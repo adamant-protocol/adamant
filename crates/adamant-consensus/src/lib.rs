@@ -75,6 +75,7 @@ pub mod epoch;
 pub mod genesis;
 pub mod identity;
 pub mod mempool;
+pub mod mempool_decryption;
 pub mod schedule;
 pub mod slashing;
 pub mod slot;
@@ -101,6 +102,10 @@ pub use identity::{
 pub use mempool::{
     MempoolEnvelope, Regime, RegimeState, ThresholdMempoolEnvelope, THRESHOLD_ACTIVATION_FLOOR,
     THRESHOLD_CIPHERTEXT_HEADER_BYTES, THRESHOLD_DEACTIVATION_FLOOR,
+};
+pub use mempool_decryption::{
+    decrypt_time_lock, extract_envelopes, DecryptedTransaction, MempoolDecryptionError,
+    ThresholdShareAccumulator, ValidatorDecryptionShare,
 };
 pub use schedule::{
     quorum_threshold, CommitWaveSchedule, EpochSchedule, WaveIndex, COMMIT_WAVE_PERIOD_ROUNDS,

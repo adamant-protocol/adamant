@@ -18,6 +18,12 @@ bcs = { workspace = true }
 [dev-dependencies]
 hex = { workspace = true }
 hex-literal = { workspace = true }
+num-bigint = { workspace = true }
+# `getrandom` enables `rand_core::OsRng` for the Phase 7.7d
+# mempool-decryption test fixtures (TrustedDealerShares generation
+# + envelope encapsulation). Test-only; production code passes its
+# own CSPRNG.
+rand_core = { workspace = true, features = ["getrandom"] }
 
 [lints]
 workspace = true
