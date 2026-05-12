@@ -40,6 +40,7 @@ ADAMANT_CRATES = [
     "adamant-consensus",
     "adamant-crypto",
     "adamant-crypto-blst-extra",
+    "adamant-network",
     "adamant-privacy",
     "adamant-state",
     "adamant-types",

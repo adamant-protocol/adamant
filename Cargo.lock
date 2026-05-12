@@ -101,6 +101,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "adamant-network"
+version = "0.0.1"
+dependencies = [
+ "adamant-consensus",
+ "bcs",
+ "serde",
+]
+
+[[package]]
 name = "adamant-privacy"
 version = "0.0.1"
 dependencies = [
