@@ -68,6 +68,7 @@
 )]
 
 pub mod active_set;
+pub mod commit_sequencer;
 pub mod commit_wave;
 pub mod dag;
 pub mod epoch;
@@ -83,6 +84,9 @@ pub mod vertex;
 pub mod vrf;
 
 pub use active_set::{ActiveSet, ActiveSetError, ACTIVE_SET_FLOOR, ACTIVE_SET_LAUNCH_CEILING};
+pub use commit_sequencer::{
+    is_chain_at_floor, is_chain_dormant, CommitSequencer, SequencerError, WaveOutcome,
+};
 pub use commit_wave::{
     commit_order, direct_commit_decision, elect_anchor, CommitDecision,
     DIRECT_COMMIT_DECISION_OFFSET,
