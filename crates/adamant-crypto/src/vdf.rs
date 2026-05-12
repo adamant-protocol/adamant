@@ -146,6 +146,7 @@
 //! [`TIME_LOCK_SYMMETRIC_KEY`]: crate::domain::TIME_LOCK_SYMMETRIC_KEY
 
 pub mod bqf;
+pub mod modular;
 pub mod setup;
 
 use core::fmt;

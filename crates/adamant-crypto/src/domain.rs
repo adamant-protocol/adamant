@@ -622,6 +622,33 @@ pub static TIME_LOCK_SYMMETRIC_KEY: DomainTag =
 pub static CLASS_GROUP_DISCRIMINANT: DomainTag =
     DomainTag::new(b"ADAMANT-v1-class-group-discriminant");
 
+/// Domain tag for the deterministic hash-to-class-group-element
+/// derivation per whitepaper §3.8.6 (hash-to-element procedure).
+///
+/// Composition (per §3.8.6 hash-to-element procedure):
+///
+/// ```text
+/// raw = tagged_shake_256(
+///     CLASS_GROUP_ELEMENT_SEED,
+///     BCS((seed, D_bytes, m, counter)),
+///     m/8 bytes
+/// )
+/// ```
+///
+/// where the resulting bytes seed the candidate leading
+/// coefficient `a` for the binary quadratic form via the
+/// Miller-Rabin + Jacobi + Tonelli-Shanks pipeline.
+///
+/// Distinct from [`CLASS_GROUP_DISCRIMINANT`] so the hash-to-
+/// element output for any seed cannot collide with the
+/// discriminant derivation under any related seed material.
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+///
+/// Registered at Phase 7.5.2b as part of the §3.8.6 hash-to-
+/// element amendment.
+pub static CLASS_GROUP_ELEMENT_SEED: DomainTag =
+    DomainTag::new(b"ADAMANT-v1-class-group-element-seed");
+
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and
 /// test-vector regressions.

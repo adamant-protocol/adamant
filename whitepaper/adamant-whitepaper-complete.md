@@ -743,7 +743,35 @@ Step 3 fixes the bit-width: the resulting `|D|` always has exactly `k` bits. Ste
 
 **Fundamental-discriminant calibration.** A discriminant `D` is **fundamental** when the imaginary quadratic order it defines is the maximal order of `ℚ(√D)`. Fundamental discriminants are the canonical inputs to the unknown-order assumption underlying the Wesolowski VDF; non-fundamental discriminants give class groups that are still useful but offer no security advantage and have a marginally different structure. The construction above does NOT enforce fundamentality: doing so would require primality / square-freeness tests over `k`-bit candidates that are themselves a substantial computational sub-arc. Empirical analysis on the deterministic seed prior to genesis confirms `D` is fundamental for the genesis-fixed seed before activation; if the analysis surfaces a non-fundamental result, the seed is rejected and the genesis state is rotated (genesis state itself is constitutional per subsection 11.2.8, so the rotation happens before publication, never after). This calibration is a pre-mainnet workstream item recorded in CLAUDE.md Section 10.
 
-**Hash-to-element procedure (pending sub-arc).** Sampling a uniformly-random class-group element from a byte string is required for time-lock envelope encryption (subsection 3.8.1 "Encryption"): the user's puzzle `g` is itself a hash-to-element output. The procedure follows the standard approach: deterministically iterate over candidate leading coefficients `a` (small primes), find `b` such that `b² ≡ D (mod 4a)` via Tonelli-Shanks modular square root, compute `c = (b² − D) / (4a)`, and return the reduced form. The full algorithm is specified at the implementation sub-arc when the modular-square-root infrastructure lands.
+**Hash-to-element procedure.** Sampling a uniformly-random class-group element from a byte string is required for time-lock envelope encryption (subsection 3.8.1 "Encryption"): the user's puzzle `g` is itself a hash-to-element output. Given a byte-string seed `s`, the chain-fixed discriminant `D`, and a target bit-length `m` for the leading coefficient `a` (the canonical choice is `m = |D|/2`, giving a balanced form), the procedure is:
+
+```
+1.  For counter = 0, 1, 2, ...:
+2.    raw ← tagged_shake_256(
+              CLASS_GROUP_ELEMENT_SEED,
+              BCS(s, D_bytes, m, counter),
+              m/8 bytes)
+3.    cand ← the non-negative integer represented by `raw` in big-endian
+4.    cand ← cand | (1 << (m − 1))            # force m-bit width
+5.    cand ← cand | 1                          # force odd
+6.    a ← next_prime(cand)                     # smallest prime ≥ cand
+7.    If jacobi(D mod a, a) ≠ 1: continue      # D is not a QR mod a
+8.    b₀ ← tonelli_shanks(D mod a, a)          # b₀² ≡ D (mod a), b₀ ∈ [0, a)
+9.    If b₀ is even: b ← a − b₀                # exactly one of {b₀, a−b₀} is odd
+        else        : b ← b₀                   # b is now odd
+10.   # b is odd, so b² ≡ 1 (mod 4) = D (mod 4) since D ≡ 1 (mod 4) per 3.8.6 step 5.
+11.   # Therefore b² ≡ D (mod 4a) by CRT (since gcd(4, a) = 1 for odd a).
+12.   c ← (b² − D) / (4a)                      # exact division
+13.   return reduce((a, b, c))
+```
+
+Steps 4 and 5 fix `cand`'s bit-width and parity so step 6's prime search terminates predictably. Step 6 uses **Miller-Rabin primality testing** with witnesses derived deterministically from `(s, D, m, counter, cand)` via tagged-SHAKE-256; 40 rounds suffice for cryptographic confidence at any bit-length up to 2048. Step 7's **Jacobi symbol** test rejects ~half of candidate primes (those for which `D` is not a quadratic residue); step 8's **Tonelli-Shanks** algorithm computes the square root in `O(log² a)` field operations.
+
+The procedure terminates in `O(1)` expected iterations of the outer loop: each candidate prime `a` passes the Jacobi check with probability ~½ (since `D`'s Legendre symbol mod random primes is uniform on `{−1, +1}`), and the per-candidate work is dominated by the prime-search step.
+
+**Domain tag.** The construction uses a new BIP-340 tagged-hash domain tag `CLASS_GROUP_ELEMENT_SEED = b"ADAMANT-v1-class-group-element-seed"` distinct from `CLASS_GROUP_DISCRIMINANT`. Distinct tags prevent the hash-to-element output for seed `s` from accidentally colliding with a discriminant derivation under any related seed material. Per subsection 3.3.1, adding domain tags is a hard fork.
+
+**Determinism + consensus binding.** The procedure is fully deterministic given `(s, D, m)`: the same triple always yields the same reduced class-group element. This is required because: (a) the time-lock envelope's `puzzle = g` is verifier-reconstructable from the envelope's byte seed, and (b) the genesis class-group generator (the protocol's canonical `g₀`) is itself a hash-to-element output that every node re-derives at startup and compares against a chain-fixed value.
 
 ## 3.9 Zero-knowledge proofs
 
