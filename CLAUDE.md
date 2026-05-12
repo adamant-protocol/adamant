@@ -404,7 +404,9 @@ Workspace tests: 2,388 passing, 0 failed, 1 ignored. Clippy `-D warnings`: clean
 | **7.5.1b** | §3.8.1 | class-group composition (Gauss / Cohen 5.4.7) | **CLOSED** |
 | **7.5.1c** | §3.8.1 | fast squaring (Cohen 5.4.8) | **CLOSED** |
 | **7.5.1d** | §3.8.1 | `ClassGroupElement ↔ BinaryQuadraticForm` byte-encoding wiring | **CLOSED** |
-| 7.5.2+ | §3.8.1, 8.4.4, 11.2.8 | hash-to-class-group + envelope encryption wiring + evaluate/prove/verify | pending (multi-session) |
+| **7.5.2a** | §3.8.6 (new) | deterministic class-group discriminant derivation + spec amendment | **CLOSED** |
+| 7.5.2b | §3.8.6 | hash-to-element (Tonelli-Shanks modular square root) | pending |
+| 7.5.3+ | §3.8.1, 8.4.4 | evaluate / Wesolowski prove + verify / envelope encryption wiring | pending (multi-session) |
 | 7.6 | §3.6, 8.4 | threshold mempool + two-regime hysteresis | pending |
 | 7.7 | §8.3, 8.7 | DAG-BFT consensus core | pending (large) |
 | 7.8 | §9 | networking + transaction propagation | pending |
@@ -625,6 +627,36 @@ Phase 7.5.1d metrics: `cargo test -p adamant-crypto vdf` reports 94 passing (17 
 **Phase 7.5.1 cumulative closure**: 4 sub-sub-arcs (7.5.1a/b/c/d) landed across 4 commits (`49d523e` → `efff888` → `0f2575c` → `51946d5`); class-group arithmetic foundation complete. BqfError grew from 0 → 5 typed variants (`ZeroLeadingCoefficient`, `NonNegativeDiscriminant`, `InvalidDiscriminantResidue`, `MismatchedDiscriminants`, `MalformedClassGroupEncoding`). vdf module test count 17 (Phase 7.5.0 close) → 94 (Phase 7.5.1 close; +77 across the 4 sub-sub-arcs). adamant-crypto LOC ~3,463 → ~5,400 (+~1,940 across Phase 7.5.1).
 
 Next sub-arc — **Phase 7.5.2** (hash-to-class-group construction per §11.2.8): deterministic derivation of the class-group discriminant from genesis state, plus the hash-to-element procedure that produces a random class-group element from a byte string for the §11.2.8 + §3.8.1 setup. Has a spec-author plan-gate open: §11.2.8 doesn't enumerate the exact hash-to-class-group algorithm, so this sub-arc may require a §11.2.8 amendment proposal parallel to the §6.2.1.7 structural-limits pattern. Surface for plan-gate at sub-arc 7.5.2 start.
+
+**Phase 7.5.2a closure (commit `8f1a625`)** — deterministic class-group discriminant derivation per a new §3.8.6 whitepaper subsection. The spec amendment lands in this commit as a new §3.8.6 subsection of §3.8 (cryptographic foundation), specifying the byte-level algorithm. §11 (genesis-constitution) is untouched per the CLAUDE.md hard "never modify" rule — the algorithm itself lives in §3.8 where the VDF math is specified, and §11.2.8 already refers to "deterministic derivation from genesis state" without enumerating the algorithm.
+
+Whitepaper amendment shipped in lockstep with the implementation per the spec-first ratification pattern (twenty-second spec-first verification instance shape, though not formally numbered in CONTRIBUTING.md). The §3.8.6 subsection specifies:
+
+1. `raw ← tagged_shake_256(CLASS_GROUP_DISCRIMINANT, BCS(s, k), k/8 bytes)`
+2. `d ← big-endian integer of raw`
+3. `d |= 1 << (k − 1)` — fix the high bit for exact width
+4. `d = (d & ¬3) | 3` — ensure `d ≡ 3 (mod 4)`, so `D = −d ≡ 1 (mod 4)`
+5. `D = −d`
+
+Plus: pre-mainnet fundamental-discriminant calibration item registered (genesis seed empirically verified pre-publication; if non-fundamental, the seed is rotated). Plus: forward-declaration of the §3.8.6 hash-to-element procedure landing at Phase 7.5.2b alongside Tonelli-Shanks modular square root infrastructure.
+
+Phase 7.5.2a surface:
+
+- `CLASS_GROUP_DISCRIMINANT = b"ADAMANT-v1-class-group-discriminant"` — new BIP-340 tagged-hash domain tag. Per §3.3.1, adding domain tags is a hard fork; this tag pins at Phase 7.5.2a.
+- `adamant-crypto::vdf::setup` — new module hosting the deterministic-setup primitives.
+- `vdf::setup::derive_discriminant(seed: &[u8; 32], bit_len: u32) -> Result<BigInt, SetupError>` — deterministic transcription of the §3.8.6 algorithm. Returns the negative-`bit_len`-bit discriminant with `D ≡ 1 (mod 4)`.
+- `vdf::setup::MIN_DISCRIMINANT_BITS = 2048` — pinned to the §3.8.2 minimum.
+- `vdf::setup::SetupError { BitLengthBelowMinimum, BitLengthNotByteAligned }` — typed caller-side errors.
+
+**Spec-first verification: math bug caught and fixed during implementation**. The §3.8.6 algorithm as I first wrote it specified `d ≡ 1 (mod 4)` in step 5, which gives `D = −d ≡ 3 (mod 4)` — invalid for integral binary quadratic forms (which require `D ≡ 0 or 1 (mod 4)`). The integration test `derived_discriminant_admits_identity_form` (wiring Phase 7.5.2a's `derive_discriminant` to Phase 7.5.1a's `BinaryQuadraticForm::identity`) failed, surfacing the bug. Corrected to `d ≡ 3 (mod 4)` so `D ≡ 1 (mod 4)` in lockstep across the spec text and the implementation. The discipline functioned exactly as intended — the spec is canonical, but implementation forces the math to be empirically correct.
+
+19 unit tests covering: bit-length rejection paths (< 2048, not multiple of 8); determinism; SHAKE-256 avalanche under seed perturbation; bit-width exactness (high bit forced, magnitude exactly `bit_len` bits); residue `D ≡ 1 (mod 4)`; negative sign; algorithm byte-recipe pinning via re-derivation; domain-separation from plain SHAKE-256 (§3.3.1 property); known-answer regression vector for all-zeros seed at 2048 bits; scales to 3072 bits; error-variant Display + std::error::Error; algorithmic-cost guard (catches accidental primality-test inflation); `MIN_DISCRIMINANT_BITS` pin; and two **headline integration tests** wiring Phase 7.5.2a to Phase 7.5.1 — `derived_discriminant_admits_identity_form` (the §3.8.6 output is a valid `BinaryQuadraticForm::identity` input) and `derived_discriminant_supports_compose_and_square` (`e ∘ e = e` and `e² = e` on the derived class group's identity).
+
+Phase 7.5.2a metrics: `cargo test -p adamant-crypto vdf` reports 113 passing (94 Phase 7.5.1 close + 19 Phase 7.5.2a). adamant-crypto LOC ~5,400 → ~5,900 (+~500). Workspace clippy + fmt + strict audit + both resistant-proof guards all pass; doc coverage stays at 100% across 9 Adamant-authored crates.
+
+**Pre-mainnet workstream items still registered for Phase 7.5**: (a) §3.8.2 `T`-parameter calibration (unchanged); (b) §3.8.6 fundamental-discriminant calibration on the genesis seed (registered at Phase 7.5.2a — empirical check before publication; rotate seed if non-fundamental). (c) BigInt-layer choice has been resolved as `num-bigint` per Phase 7.5.1 closure.
+
+Next sub-arc — **Phase 7.5.2b** (hash-to-element): deterministic mapping from a byte string to a class-group element. Algorithm: iterate candidate leading coefficients `a` (small primes), solve `b² ≡ D (mod 4a)` via Tonelli-Shanks modular square root, compute `c = (b² − D) / (4a)`, return the reduced form. Requires implementing Tonelli-Shanks (square root in `ℤ/p`) as a building block — a well-known classical algorithm but ~150 LOC of careful modular arithmetic. Estimated scope: ~400 LOC + ~15 tests including known-answer vectors.
 
 **Phase 6 hygiene follow-up (commit `0cc2848`)** — `adamant-halo2` ECC chip tests gated behind `expensive-tests` feature. Four forked-upstream tests (`ecc::chip::constants::tests::lagrange_coeffs`, `zs_and_us`, `ecc::chip::mul_fixed::short::tests::invalid_magnitude_sign`, `ecc::tests::ecc_chip`) reconstruct full fixed-base Lagrange-coefficient tables and run MockProver at k=13 across the ECC chip surface; debug-mode runtime exceeds 60s each and was blocking workspace test runs at 20+ minutes after Phase 6.8b.3 vendored them in byte-faithfully. New `expensive-tests = []` feature on `adamant-halo2` (mirrors the `adamant-privacy` posture introduced at Phase 6.8b.5); each test carries `#[cfg_attr(not(feature = "expensive-tests"), ignore = "...")]`. Empirical result: `cargo test -p adamant-halo2 --lib` reports 58 passed + 4 ignored in 3.6s (down from 20+ min hang); full workspace `cargo test` completes cleanly. Tests still compile so the upstream byte-faithful posture and refactor-checking are preserved — only the runtime ignore flag flips. Test-time only; no production-binary impact. Resistant-proof guards continue to pass; workspace audit strict mode passes; doc coverage remains 100% across 9 Adamant-authored crates.
 
