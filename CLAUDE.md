@@ -892,7 +892,36 @@ Pipeline shape at Phase 7.7 closure: vertices flow into `DagState`; the §8.6 BL
 - **7.10** — slashing wiring + economics per §8.1.5 + §10 (equivocation evidence extraction from `DagError::EquivocationDetected`; slashing transactions; §10 tokenomics flow into the validator-stake state machine).
 - **7.11** — end-to-end integration (all Phase 7 sub-systems wired together; multi-validator regression suite).
 
-**Next sub-arc — Phase 7.8**: networking + transaction propagation per §9. **§14.4 Decision 4 resolved as Option A** (admit `libp2p` to Category E networking-infrastructure tier); see §14.1 + §14.4 Decision 4. Phase 7.8 splits into sub-arcs: **7.8.0** networking-substrate-agnostic wire-format types (this sub-arc); **7.8.1** libp2p integration + gossipsub topics + propagation; **7.8.2** anti-DoS + fee-floor + submission-proof per §9.5; **7.8.3** discovery + bootstrap per §9.6; **7.8.4** mempool design per §9.7.
+**Phase 7.8.0 closure (commit `d256b81`)** — networking wire-format foundation per whitepaper §9.3.1. Phase 7.8 begins; ships the networking-substrate-agnostic wire-format foundation in a new `adamant-network` crate (Adamant-authored crate #10). Mirrors the wire-foundation pattern at Phase 7.5.0 / 7.3 / 7.6: pin the consensus-binding wire shapes first; layer the libp2p transport on top at Phase 7.8.1. **Per §14.4 Decision 4 (RESOLVED at previous commit)**, libp2p is admitted to Category E networking-infrastructure tier; the `adamant-network` crate is the production-side wrapper around libp2p's API (libp2p NOT forked). Phase 7.8.0 does not yet pull in libp2p as a runtime dep — wire types are pure-Rust serde structures consumable by any transport.
+
+Phase 7.8.0 surface (new `adamant-network` crate):
+
+- **`NETWORK_PROTOCOL_VERSION = 1`** — wire-envelope version. Distinct from the per-transaction version field; consensus-binding (changing it is a hard fork).
+- **`EncryptionMode`** closed enum (`Transparent = 0x00`, `Encrypted = 0x01`) per §9.3.1. Pinned BCS variant tags.
+- **`SubmissionProof`** — opaque-bytes wrapper for the §9.5.1 anti-DoS payload. Inner structure pins at Phase 7.8.2. `new` / `as_bytes` / `len` / `is_empty` accessors.
+- **`NetworkTransaction { version, encryption_mode, payload, fee_tip, expiration_round, submission_proof }`** — §9.3.1 wire shape verbatim. `transparent` / `encrypted` constructors + `with_submission_proof` builder. Field order is consensus-binding (pinned in test).
+- **`GossipsubTopic`** closed enum (`Vertices = 0x00`, `Mempool = 0x01`) with canonical libp2p topic strings: `"ADAMANT/v1/vertices"` / `"ADAMANT/v1/mempool"`. The `ADAMANT/v1/` prefix matches `NETWORK_PROTOCOL_VERSION`.
+- **`NetworkMessage`** enum (`Vertex(Vertex)` | `Transaction(NetworkTransaction)`) — wire envelope dispatching between the two §9.2.2 gossipsub topics. `topic()` helper for routing.
+
+Phase 7.8 sub-arc roadmap (registered in `adamant-network::lib.rs` module docs):
+
+| Sub-arc | Whitepaper | Surface | Status |
+|---|---|---|---|
+| **7.8.0** | §9.3.1 | wire-format types | **CLOSED** |
+| 7.8.1 | §9.2, §9.3 | libp2p integration + gossipsub propagation | pending |
+| 7.8.2 | §9.5 | anti-DoS + submission proofs + fee floors | pending |
+| 7.8.3 | §9.6 | discovery + bootstrap nodes | pending |
+| 7.8.4 | §9.7 | mempool design + synchronisation | pending |
+
+Workspace changes:
+- `Cargo.toml`: add `crates/adamant-network` to workspace members.
+- `tools/workspace-audit/audit.py`: add `adamant-network` to the `ADAMANT_CRATES` roster (audit now covers 10 Adamant-authored crates).
+
+19 new unit tests covering: `NETWORK_PROTOCOL_VERSION` pin; `EncryptionMode` variant tags + BCS round-trip; `SubmissionProof` new + accessors + round-trip; `NetworkTransaction` transparent + encrypted constructors + `with_submission_proof` + BCS round-trip + **field-order pin** (asserts 21-byte canonical encoding for a specific fixture, byte-by-byte); `GossipsubTopic` variant tags + canonical topic-name strings + distinctness + BCS round-trip; `NetworkMessage` topic dispatch + BCS round-trips for both variants + variant tag pin + distinct-payloads produce distinct encodings.
+
+Phase 7.8.0 metrics: `cargo test -p adamant-network --lib` reports 19/19 passing. New crate metrics: 301 LOC, 15 pub items, 100% doc coverage, `#![forbid(unsafe_code)]`. Workspace lib tests 2,776 → 2,795 (+19). All 10 Adamant-authored crates at 100% doc coverage. Workspace clippy + fmt + strict audit + both resistant-proof guards all pass. No spec amendment; no new domain tags; no new production-binary workspace dependencies (libp2p lands at Phase 7.8.1).
+
+**Next sub-arc — Phase 7.8.1**: libp2p integration. Pins the exact `libp2p` version + the §9.2.2 feature gates (`quic`, `tcp`, `noise`, `yamux`, `kad`, `gossipsub`, `identify`, `dns`, `macros`). Wires the Phase 7.8.0 `NetworkMessage` types onto the libp2p gossipsub behaviour. Substantial sub-arc; may surface for spec-author plan-gate input at start if the libp2p version-pin or feature-subset selection raises constitutional-impact questions.
 
 **Phase 6 hygiene follow-up (commit `0cc2848`)** — `adamant-halo2` ECC chip tests gated behind `expensive-tests` feature. Four forked-upstream tests (`ecc::chip::constants::tests::lagrange_coeffs`, `zs_and_us`, `ecc::chip::mul_fixed::short::tests::invalid_magnitude_sign`, `ecc::tests::ecc_chip`) reconstruct full fixed-base Lagrange-coefficient tables and run MockProver at k=13 across the ECC chip surface; debug-mode runtime exceeds 60s each and was blocking workspace test runs at 20+ minutes after Phase 6.8b.3 vendored them in byte-faithfully. New `expensive-tests = []` feature on `adamant-halo2` (mirrors the `adamant-privacy` posture introduced at Phase 6.8b.5); each test carries `#[cfg_attr(not(feature = "expensive-tests"), ignore = "...")]`. Empirical result: `cargo test -p adamant-halo2 --lib` reports 58 passed + 4 ignored in 3.6s (down from 20+ min hang); full workspace `cargo test` completes cleanly. Tests still compile so the upstream byte-faithful posture and refactor-checking are preserved — only the runtime ignore flag flips. Test-time only; no production-binary impact. Resistant-proof guards continue to pass; workspace audit strict mode passes; doc coverage remains 100% across 9 Adamant-authored crates.
 
