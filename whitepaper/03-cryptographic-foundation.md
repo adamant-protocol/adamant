@@ -138,15 +138,20 @@ ML-DSA (Module-Lattice-Based Digital Signature Algorithm) is the protocol's post
 
 **Rationale.** ML-DSA is one of three post-quantum signature schemes selected by NIST through a multi-year open competition (2017–2022). It provides security under standard lattice problem assumptions (Module Learning With Errors, Module Short Integer Solution) and has been the subject of extensive cryptanalysis without significant security degradation. Recent benchmarks (October 2025, arXiv 2510.09271) demonstrate that ML-DSA verification at security level 5 is approximately 0.14 milliseconds on ARM-based laptops — faster than ECDSA at 0.88 milliseconds. ML-DSA is therefore not a performance compromise; at the security levels relevant to long-term consensus, it is a performance improvement.
 
-**Parameters.** The protocol uses **ML-DSA-65** (security level 3, equivalent to AES-192 or SHA-384 collision resistance), providing 192-bit classical security and approximately 128-bit security against quantum attack. Public keys are 1952 bytes; signatures are 3309 bytes. This is significantly larger than Ed25519 but acceptable for the protocol's per-transaction and per-vote cost budget.
+**Parameters.** The protocol supports two ML-DSA parameter sets:
 
-The signature size reflects FIPS 204 (final, August 2024). The CRYSTALS-Dilithium round 3 NIST PQC submission specified 3293-byte signatures for the equivalent parameter set; the standardisation process expanded the encoding by 16 bytes for the final standard. References to the round-3 size (3293 bytes) in pre-2024 literature are obsolete; the protocol uses the FIPS 204 final size throughout.
+- **ML-DSA-65** (security level 3, equivalent to AES-192 or SHA-384 collision resistance) — the **default**. Provides 192-bit classical security and approximately 128-bit security against quantum attack. Public keys are 1952 bytes; signatures are 3309 bytes.
+- **ML-DSA-87** (security level 5, equivalent to AES-256 collision resistance) — opt-in for accounts prioritising the highest standardised post-quantum security level. Provides 256-bit classical security. Public keys are 2592 bytes; signatures are 4627 bytes per FIPS 204 final.
 
-**Why level 3 and not level 2 or level 5.** Level 2 (ML-DSA-44) provides 128-bit classical security, marginal in long-lived systems. Level 5 (ML-DSA-87) provides 256-bit classical security at significantly higher signature size (4627 bytes per FIPS 204 final) and computational cost. Level 3 is the appropriate balance for a chain whose lifetime is intended to be measured in decades.
+Both variants are first-class at the protocol level: §6's `Signature` enum carries explicit variant tags for each (`MlDsa65 = 0x01`, `MlDsa87 = 0x02`), and the AVM ships verification instructions for both (`MlDsaVerify65`, `MlDsaVerify87`). Both signature widths are significantly larger than Ed25519 but acceptable for the protocol's per-transaction and per-vote cost budget.
 
-**Account flexibility.** Section 4 specifies an account model in which an individual account may declare itself to use Ed25519 only, ML-DSA only, or both (with both required for transactions, providing belt-and-braces security). Validators `MUST` support all three account types from genesis.
+The signature sizes reflect FIPS 204 (final, August 2024). The CRYSTALS-Dilithium round 3 NIST PQC submission specified different sizes for the equivalent parameter sets; the standardisation process adjusted the encoding for the final standard. References to round-3 sizes in pre-2024 literature are obsolete; the protocol uses FIPS 204 final sizes throughout.
 
-**Library.** The reference implementation uses the `ml_dsa` crate from the RustCrypto project, which is the FIPS-204-compliant ML-DSA implementation. As ML-DSA implementations mature, the protocol may revise its choice of library; the algorithm choice (ML-DSA-65) is fixed.
+**Default selection rationale.** Level 2 (ML-DSA-44) is excluded — 128-bit classical security is marginal in long-lived systems. Level 3 (ML-DSA-65) is the default because it offers a security/cost balance appropriate to a chain whose lifetime is intended to be measured in decades. Level 5 (ML-DSA-87) is opt-in: an account that prioritises 256-bit classical security at the cost of larger signatures (~40 % overhead) and modestly higher verification cost may declare itself to use ML-DSA-87 instead.
+
+**Account flexibility.** Section 4 specifies an account model in which an individual account may declare itself to use Ed25519 only, ML-DSA only (with the variant — `MlDsa65` or `MlDsa87` — selected at account creation), or both (with both required for transactions, providing belt-and-braces security). Validators `MUST` support all account variants from genesis.
+
+**Library.** The reference implementation uses the `ml_dsa` crate from the RustCrypto project, which is the FIPS-204-compliant ML-DSA implementation supporting both parameter sets. As ML-DSA implementations mature, the protocol may revise its choice of library; the algorithm choice (ML-DSA at security levels 3 and 5) is fixed.
 
 ### 3.4.3 Aggregate signatures: BLS on BLS12-381
 
