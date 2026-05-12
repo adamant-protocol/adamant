@@ -68,6 +68,7 @@
 )]
 
 pub mod active_set;
+pub mod commit_wave;
 pub mod dag;
 pub mod epoch;
 pub mod genesis;
@@ -82,6 +83,10 @@ pub mod vertex;
 pub mod vrf;
 
 pub use active_set::{ActiveSet, ActiveSetError, ACTIVE_SET_FLOOR, ACTIVE_SET_LAUNCH_CEILING};
+pub use commit_wave::{
+    commit_order, direct_commit_decision, elect_anchor, CommitDecision,
+    DIRECT_COMMIT_DECISION_OFFSET,
+};
 pub use dag::{DagError, DagState};
 pub use epoch::{EpochNumber, RoundNumber};
 pub use genesis::{GenesisCohortMarker, GENESIS_COHORT_MARKER_BYTES, GENESIS_COHORT_SIZE};
