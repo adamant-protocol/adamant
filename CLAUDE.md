@@ -402,7 +402,9 @@ Workspace tests: 2,388 passing, 0 failed, 1 ignored. Clippy `-D warnings`: clean
 | **7.5.0** | §3.8, 8.4.4 | time-lock VDF foundation — wire types + domain tags (`adamant-crypto::vdf`) | **CLOSED** |
 | **7.5.1a** | §3.8.1 | binary quadratic form arithmetic (type, reduce, normalize, identity, inverse, predicates) | **CLOSED** |
 | **7.5.1b** | §3.8.1 | class-group composition (Gauss / Cohen 5.4.7) | **CLOSED** |
-| 7.5.1c+ | §3.8.1 | fast squaring (NUDPL specialisation) + hash-to-class-group + envelope wiring | pending (multi-session) |
+| **7.5.1c** | §3.8.1 | fast squaring (Cohen 5.4.8) | **CLOSED** |
+| 7.5.1d | §3.8.1 | `ClassGroupElement ↔ BinaryQuadraticForm` byte-encoding wiring | pending |
+| 7.5.2+ | §3.8.1, 8.4.4, 11.2.8 | hash-to-class-group + envelope encryption wiring + evaluate/prove/verify | pending (multi-session) |
 | 7.6 | §3.6, 8.4 | threshold mempool + two-regime hysteresis | pending |
 | 7.7 | §8.3, 8.7 | DAG-BFT consensus core | pending (large) |
 | 7.8 | §9 | networking + transaction propagation | pending |
@@ -595,6 +597,18 @@ Phase 7.5.1b surface:
 The 3×3 commutativity + 3×3×3 associativity matrices cover the full abelian-group axiom set on the D = −23 example. The published Cohen 5.4.7 variable names (`s, n, d, u, v, x, y, l`) are preserved in code with a documented `#[allow(clippy::many_single_char_names)]` so the comment-vs-code traceability holds during security review.
 
 Phase 7.5.1b metrics: `cargo test -p adamant-crypto vdf` reports 70 passing (17 Phase 7.5.0 + 37 Phase 7.5.1a + 16 Phase 7.5.1b). adamant-crypto LOC ~4,300 → ~4,700 (+~370 — compose method + tests). Workspace clippy + fmt + strict audit + both resistant-proof guards all pass; doc coverage stays at 100% across 9 Adamant-authored crates.
+
+**Phase 7.5.1c closure (commit `0f2575c`)** — fast squaring via Cohen Algorithm 5.4.8 (Squaring of Forms). The Wesolowski VDF evaluation per §3.8.2 performs `T ∈ [2_000_000, 7_500_000]` sequential squarings per envelope, so a specialised `square()` that halves the extended-GCD work vs general `compose(&self, &self)` is a constant-factor win that accumulates to material decryption-time savings for the round anchor.
+
+Phase 7.5.1c surface:
+
+- `BinaryQuadraticForm::square(&self) -> Self` — Cohen 5.4.8 specialisation. Single extended GCD on `(b, a)` (vs two extended GCDs in general composition); modular reduction `nu = (−μ·c) mod (a/d)` for the linkage; final form `(A_new, B_new, C_new)` with `A_new = (a/d)²`, `B_new = b + 2·(a/d)·nu`, `C_new = (B_new² − D) / (4·A_new)`. Reduces the result before returning. Positive-definite precondition; panics on indefinite inputs (same posture as `reduce` and `compose`).
+
+9 unit tests including the headline correctness identity `square(f) == compose(f, f)` pinned across both the D = −23 class group (3 classes), the D = −20 class group (2 classes), an unreduced representative, and two medium-coefficient fixtures; identity cases (`e² = e`, `f² = (2,−1,3)` for D = −23, `f⁴ = f` for class number 3, `g² = e` for D = −20 order 2); discriminant preservation; result-is-reduced; equivalence-class invariance; and the **repeated-squaring chain** test `(f.square()).square() == (f∘f) ∘ (f∘f) = f⁴` — the property the Wesolowski VDF evaluation relies on when computing `g^(2^T)` via the `T`-sequential-squarings chain.
+
+Phase 7.5.1c metrics: `cargo test -p adamant-crypto vdf` reports 79 passing (17 Phase 7.5.0 + 37 Phase 7.5.1a + 16 Phase 7.5.1b + 9 Phase 7.5.1c). adamant-crypto LOC ~4,700 → ~5,000 (+~260 — square method + tests). Workspace clippy + fmt + strict audit + both resistant-proof guards all pass; doc coverage stays at 100% across 9 Adamant-authored crates.
+
+The class-group arithmetic operations needed by the Wesolowski VDF evaluation are now complete: `square` (used `T` times per evaluation), `compose` (used by the Wesolowski proof construction at sub-arc 7.5.4 for the `π = g^q` exponentiation), `inverse` (used by the envelope-verification path), and the reduction / predicate / identity infrastructure. Only the encoding bridge between the type-system-level `BinaryQuadraticForm` and the consensus-stable `ClassGroupElement` wire type remains in sub-arc 7.5.1 (lands at 7.5.1d).
 
 **Phase 6 hygiene follow-up (commit `0cc2848`)** — `adamant-halo2` ECC chip tests gated behind `expensive-tests` feature. Four forked-upstream tests (`ecc::chip::constants::tests::lagrange_coeffs`, `zs_and_us`, `ecc::chip::mul_fixed::short::tests::invalid_magnitude_sign`, `ecc::tests::ecc_chip`) reconstruct full fixed-base Lagrange-coefficient tables and run MockProver at k=13 across the ECC chip surface; debug-mode runtime exceeds 60s each and was blocking workspace test runs at 20+ minutes after Phase 6.8b.3 vendored them in byte-faithfully. New `expensive-tests = []` feature on `adamant-halo2` (mirrors the `adamant-privacy` posture introduced at Phase 6.8b.5); each test carries `#[cfg_attr(not(feature = "expensive-tests"), ignore = "...")]`. Empirical result: `cargo test -p adamant-halo2 --lib` reports 58 passed + 4 ignored in 3.6s (down from 20+ min hang); full workspace `cargo test` completes cleanly. Tests still compile so the upstream byte-faithful posture and refactor-checking are preserved — only the runtime ignore flag flips. Test-time only; no production-binary impact. Resistant-proof guards continue to pass; workspace audit strict mode passes; doc coverage remains 100% across 9 Adamant-authored crates.
 
