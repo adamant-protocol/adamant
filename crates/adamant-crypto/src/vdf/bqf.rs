@@ -1,17 +1,18 @@
 //! Binary quadratic forms over imaginary quadratic order, per
 //! whitepaper §3.8.1.
 //!
-//! Phase 7.5.1a — the class-group arithmetic foundation. The
+//! Phase 7.5.1a/b — the class-group arithmetic foundation. The
 //! Wesolowski VDF over class groups of imaginary quadratic order
 //! per §3.8.1 represents group elements as **reduced positive
 //! definite binary quadratic forms** `f(x, y) = ax² + bxy + cy²`
 //! with negative discriminant `D = b² − 4ac < 0`. This module
-//! ships the form type, the reduction algorithm that brings any
-//! form to its canonical representative, and the form-level
-//! predicates the rest of the VDF layer relies on (identity,
-//! inverse, equality via canonical reduction).
+//! ships the form type (Phase 7.5.1a), the reduction algorithm
+//! that brings any form to its canonical representative
+//! (Phase 7.5.1a), the form-level predicates the rest of the VDF
+//! layer relies on (Phase 7.5.1a), and Gauss composition — the
+//! class-group multiplication operation (Phase 7.5.1b).
 //!
-//! Composition (NUDPL) lands at Phase 7.5.1b; squaring at 7.5.1c;
+//! Fast squaring (NUDPL specialisation) lands at Phase 7.5.1c;
 //! the `ClassGroupElement ↔ BinaryQuadraticForm` encoding bridge
 //! at 7.5.1d.
 //!
@@ -79,11 +80,23 @@
 //! - [`BinaryQuadraticForm::reduce`] — full Cohen 5.4.2 reduction.
 //! - [`BinaryQuadraticForm::inverse`] — `(a, b, c) ↦ (a, −b, c)`.
 //!
+//! # What this module adds at Phase 7.5.1b
+//!
+//! - [`BinaryQuadraticForm::compose`] — Gauss composition per
+//!   Cohen "A Course in Computational Algebraic Number Theory"
+//!   Algorithm 5.4.7. Returns the **reduced** product
+//!   `f₁ ∘ f₂` in the class group of their shared discriminant.
+//! - [`BqfError::MismatchedDiscriminants`] — error variant for
+//!   composition of forms living in different class groups.
+//!
 //! # What lands at later Phase 7.5.1 sub-sub-arcs
 //!
-//! - **7.5.1b** — composition (NUDPL). The class-group operation.
-//! - **7.5.1c** — squaring. Fast special case of composition for
-//!   the `T` sequential squarings the VDF evaluation performs.
+//! - **7.5.1c** — fast squaring (Shanks NUDPL specialisation).
+//!   The Wesolowski VDF performs `T` sequential squarings during
+//!   evaluation, and a specialised squaring saves one extended
+//!   GCD per iteration. General composition (this commit) covers
+//!   correctness; `square()` lands at 7.5.1c as a performance
+//!   optimisation.
 //! - **7.5.1d** — canonical byte encoding for [`crate::vdf::ClassGroupElement`].
 //!   The form is encoded as `(a, b)` only — `c` is recoverable
 //!   from `c = (b² − D) / (4a)` given the chain-fixed discriminant.
@@ -158,6 +171,13 @@ pub enum BqfError {
     /// `b² mod 4 ∈ {0, 1}`, so any integer ≡ 2 or 3 mod 4 cannot
     /// be the discriminant of an integral form.
     InvalidDiscriminantResidue,
+
+    /// Composition was attempted on two forms with different
+    /// discriminants. The class group is parameterised by its
+    /// discriminant; composition is only defined for forms living
+    /// in the same class group. Phase 7.5.1b's
+    /// [`BinaryQuadraticForm::compose`] is the production site.
+    MismatchedDiscriminants,
 }
 
 impl fmt::Display for BqfError {
@@ -172,6 +192,9 @@ impl fmt::Display for BqfError {
             Self::InvalidDiscriminantResidue => {
                 f.write_str("integral quadratic discriminant must satisfy D ≡ 0 or 1 (mod 4)")
             }
+            Self::MismatchedDiscriminants => f.write_str(
+                "binary quadratic form composition requires both operands to share a discriminant",
+            ),
         }
     }
 }
@@ -433,6 +456,136 @@ impl BinaryQuadraticForm {
         let mut clone = self.clone();
         clone.reduce();
         clone
+    }
+
+    /// Composes `self` with `other` in their shared class group,
+    /// returning the reduced product.
+    ///
+    /// Implements Cohen, "A Course in Computational Algebraic
+    /// Number Theory" Algorithm 5.4.7 (Composition of Forms).
+    /// Given `f₁ = (a₁, b₁, c₁)` and `f₂ = (a₂, b₂, c₂)` of the
+    /// same discriminant `D`, computes the product `f₁ ∘ f₂` in
+    /// the proper-equivalence class group of `D` and returns its
+    /// reduced canonical representative.
+    ///
+    /// # Algorithm sketch
+    ///
+    /// 1. If `a₁ < a₂`, swap. After swap, `a₁ ≥ a₂`.
+    /// 2. Set `s = (b₁ + b₂) / 2` and `n = b₂ − s = (b₂ − b₁) / 2`.
+    /// 3. Apply extended Euclid to `(a₂, a₁)`, obtaining
+    ///    `d₁ = gcd(a₂, a₁)` and `u, v` with `u·a₂ + v·a₁ = d₁`.
+    /// 4. If `d₁ ∣ s`, set `d := d₁` and `A := −u · n`.
+    ///    Otherwise apply extended Euclid to `(s, d₁)`, obtaining
+    ///    `d = gcd(s, d₁)` and `x, y` with `x·s + y·d₁ = d`. Set
+    ///    `A := −y · u · n − x · c₂`.
+    /// 5. Reduce `A` modulo `a₁/d` to canonical range `[0, a₁/d)`.
+    /// 6. Set
+    ///    - `A_new = (a₁ / d) · (a₂ / d) = (a₁ · a₂) / d²`
+    ///    - `B_new = b₂ + 2 · (a₂ / d) · A`
+    ///    - `C_new = (B_new² − D) / (4 · A_new)`
+    ///
+    ///    and reduce the resulting form to its canonical
+    ///    representative.
+    ///
+    /// # Correctness
+    ///
+    /// `b₁ ≡ b₂ (mod 2)` because both forms share the same
+    /// discriminant `D ≡ b² (mod 4)`, so `s = (b₁ + b₂)/2 ∈ ℤ`.
+    /// Each step preserves the discriminant `D`; step 6
+    /// computes `C_new` to make the discriminant of the result
+    /// match `D` exactly. Reduction at the end produces the
+    /// unique canonical representative of the resulting class.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BqfError::MismatchedDiscriminants`] if `self`
+    /// and `other` have different discriminants.
+    ///
+    /// # Panics
+    ///
+    /// Panics if either operand is not positive definite. The
+    /// composition algorithm here is specialised for the
+    /// imaginary quadratic class group; for the indefinite case
+    /// the reduction step at the end would diverge. Use
+    /// [`Self::is_positive_definite`] to validate inputs.
+    #[allow(
+        clippy::many_single_char_names,
+        reason = "Cohen Algorithm 5.4.7 uses single-letter variable names \
+                  (s, n, d, u, v, x, y, l) that match the published \
+                  algorithm; renaming would obscure the spec correspondence \
+                  and break the comment-vs-code traceability the security \
+                  review will rely on."
+    )]
+    pub fn compose(&self, other: &Self) -> Result<Self, BqfError> {
+        // Same-discriminant precondition: composition is only
+        // defined within a single class group.
+        let d_self = self.discriminant();
+        if d_self != other.discriminant() {
+            return Err(BqfError::MismatchedDiscriminants);
+        }
+
+        assert!(
+            self.is_positive_definite() && other.is_positive_definite(),
+            "BinaryQuadraticForm::compose requires both operands to be positive definite (a > 0, c > 0, D < 0)"
+        );
+
+        // Step 1: swap so a₁ ≥ a₂.
+        let (f1, f2) = if self.a < other.a {
+            (other, self)
+        } else {
+            (self, other)
+        };
+
+        // Step 2: s = (b₁ + b₂) / 2, n = b₂ − s.
+        let two = BigInt::from(2);
+        let s = (&f1.b + &f2.b).div_floor(&two);
+        let n = &f2.b - &s;
+
+        // Step 3: extended Euclid for (a₂, a₁).
+        // ExtendedGcd.x * a₂ + ExtendedGcd.y * a₁ = ExtendedGcd.gcd.
+        let eg1 = f2.a.extended_gcd(&f1.a);
+        let d1 = eg1.gcd;
+        let u = eg1.x;
+
+        // Step 4: branch on d₁ ∣ s.
+        let (d, a_pre) = if s.mod_floor(&d1).is_zero() {
+            // Simpler case: d := d₁, A := −u · n.
+            let a_pre = -&u * &n;
+            (d1.clone(), a_pre)
+        } else {
+            // General case: d := gcd(s, d₁); recompute A.
+            // x * s + y * d₁ = d
+            let eg2 = s.extended_gcd(&d1);
+            let d = eg2.gcd;
+            let x = eg2.x;
+            let y = eg2.y;
+            // A := −y · u · n − x · c₂
+            let a_pre = -&y * &u * &n - &x * &f2.c;
+            (d, a_pre)
+        };
+
+        // Step 5: reduce A mod (a₁ / d) to [0, a₁/d).
+        let a1_over_d = &f1.a / &d;
+        let l = a_pre.mod_floor(&a1_over_d);
+
+        // Step 6: build (A_new, B_new, C_new).
+        // A_new = (a₁ / d) · (a₂ / d) = a₁ · a₂ / d².
+        let a2_over_d = &f2.a / &d;
+        let a_new = &a1_over_d * &a2_over_d;
+        // B_new = b₂ + 2 · (a₂/d) · l.
+        let b_new = &f2.b + &two * &a2_over_d * &l;
+        // C_new = (B_new² − D) / (4 · A_new). Discriminant
+        // preservation guarantees exact divisibility.
+        let four_a_new = BigInt::from(4) * &a_new;
+        let c_new = (&b_new * &b_new - &d_self).div_floor(&four_a_new);
+
+        // Construct + reduce. The resulting form's discriminant
+        // equals `d_self` by construction; positive definiteness
+        // follows because A_new > 0 (product of two positive
+        // integers) and D < 0.
+        let mut result = Self::new(a_new, b_new, c_new)?;
+        result.reduce();
+        Ok(result)
     }
 }
 
@@ -819,5 +972,219 @@ mod tests {
             .expect("construct");
         assert_eq!(f1.discriminant(), f2.discriminant());
         assert_eq!(f1.reduced(), f2.reduced());
+    }
+
+    // ---- Phase 7.5.1b: composition tests ----
+    //
+    // Most tests below exercise the D = -23 class group. The
+    // class number is 3; the three reduced classes are represented
+    // by the principal form `e = (1, 1, 6)`, `f = (2, 1, 3)`, and
+    // `f² = (2, -1, 3)`. Composition follows the relations of the
+    // cyclic group of order 3: f ∘ f = f², f ∘ f² = e, f² ∘ f² = f.
+
+    /// The principal form for D = -23.
+    fn principal_d23() -> BinaryQuadraticForm {
+        BinaryQuadraticForm::new(BigInt::from(1), BigInt::from(1), BigInt::from(6))
+            .expect("identity D=-23")
+    }
+
+    /// The generator form `f = (2, 1, 3)` for D = -23.
+    fn generator_d23() -> BinaryQuadraticForm {
+        BinaryQuadraticForm::new(BigInt::from(2), BigInt::from(1), BigInt::from(3))
+            .expect("generator D=-23")
+    }
+
+    /// `f² = f⁻¹ = (2, -1, 3)` for D = -23 (class number 3).
+    fn generator_squared_d23() -> BinaryQuadraticForm {
+        BinaryQuadraticForm::new(BigInt::from(2), BigInt::from(-1), BigInt::from(3))
+            .expect("generator squared D=-23")
+    }
+
+    #[test]
+    fn compose_rejects_mismatched_discriminants() {
+        // f₁ has D = -23, f₂ has D = -20.
+        let f1 = generator_d23();
+        let f2 = BinaryQuadraticForm::new(BigInt::from(1), BigInt::from(0), BigInt::from(5))
+            .expect("construct"); // D = -20
+        let err = f1
+            .compose(&f2)
+            .expect_err("composition across discriminants must fail");
+        assert_eq!(err, BqfError::MismatchedDiscriminants);
+    }
+
+    #[test]
+    fn compose_left_identity_is_identity() {
+        // e ∘ f = f
+        let e = principal_d23();
+        let f = generator_d23();
+        let result = e.compose(&f).expect("compose");
+        assert_eq!(result, f);
+    }
+
+    #[test]
+    fn compose_right_identity_is_identity() {
+        // f ∘ e = f
+        let f = generator_d23();
+        let e = principal_d23();
+        let result = f.compose(&e).expect("compose");
+        assert_eq!(result, f);
+    }
+
+    #[test]
+    fn compose_identity_with_itself_is_identity() {
+        // e ∘ e = e
+        let e = principal_d23();
+        let result = e.compose(&e).expect("compose");
+        assert_eq!(result, e);
+    }
+
+    #[test]
+    fn compose_generator_with_itself_is_generator_squared() {
+        // f ∘ f = f²
+        let f = generator_d23();
+        let result = f.compose(&f).expect("compose");
+        assert_eq!(result, generator_squared_d23());
+    }
+
+    #[test]
+    fn compose_generator_with_inverse_is_identity() {
+        // f ∘ f⁻¹ = e (since f² = f⁻¹ in a group of order 3)
+        let f = generator_d23();
+        let f_inv = generator_squared_d23();
+        let result = f.compose(&f_inv).expect("compose");
+        assert_eq!(result, principal_d23());
+    }
+
+    #[test]
+    fn compose_inverse_then_generator_is_identity() {
+        // f⁻¹ ∘ f = e
+        let f_inv = generator_squared_d23();
+        let f = generator_d23();
+        let result = f_inv.compose(&f).expect("compose");
+        assert_eq!(result, principal_d23());
+    }
+
+    #[test]
+    fn compose_generator_squared_with_itself_is_generator() {
+        // f² ∘ f² = f⁴ = f (class number 3, so f³ = e ⇒ f⁴ = f)
+        let f_sq = generator_squared_d23();
+        let result = f_sq.compose(&f_sq).expect("compose");
+        assert_eq!(result, generator_d23());
+    }
+
+    #[test]
+    fn compose_generator_cubed_is_identity() {
+        // f ∘ f ∘ f = e (class number = 3)
+        let f = generator_d23();
+        let f_sq = f.compose(&f).expect("compose");
+        let f_cu = f_sq.compose(&f).expect("compose");
+        assert_eq!(f_cu, principal_d23());
+    }
+
+    #[test]
+    fn compose_preserves_discriminant() {
+        let f = generator_d23();
+        let result = f.compose(&f).expect("compose");
+        assert_eq!(result.discriminant(), BigInt::from(-23));
+    }
+
+    #[test]
+    fn compose_result_is_reduced() {
+        let f = generator_d23();
+        let result = f.compose(&f).expect("compose");
+        assert!(result.is_reduced());
+    }
+
+    #[test]
+    fn compose_is_commutative_on_d23() {
+        // f₁ ∘ f₂ = f₂ ∘ f₁ for every pair in the class group.
+        let classes = [principal_d23(), generator_d23(), generator_squared_d23()];
+        for (i, f1) in classes.iter().enumerate() {
+            for (j, f2) in classes.iter().enumerate() {
+                let ab = f1.compose(f2).expect("compose");
+                let ba = f2.compose(f1).expect("compose");
+                assert_eq!(
+                    ab, ba,
+                    "composition not commutative for class {i} ∘ class {j}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compose_is_associative_on_d23() {
+        // (f₁ ∘ f₂) ∘ f₃ = f₁ ∘ (f₂ ∘ f₃) for every triple.
+        let classes = [principal_d23(), generator_d23(), generator_squared_d23()];
+        for f1 in &classes {
+            for f2 in &classes {
+                for f3 in &classes {
+                    let left = f1
+                        .compose(f2)
+                        .expect("compose")
+                        .compose(f3)
+                        .expect("compose");
+                    let right = f1
+                        .compose(&f2.compose(f3).expect("compose"))
+                        .expect("compose");
+                    assert_eq!(
+                        left, right,
+                        "composition not associative: ({f1:?} ∘ {f2:?}) ∘ {f3:?} ≠ {f1:?} ∘ ({f2:?} ∘ {f3:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compose_handles_a1_less_than_a2_swap() {
+        // f₁ = principal (a = 1), f₂ = generator (a = 2). a₁ < a₂.
+        // The algorithm must swap internally and still produce the
+        // correct result f₁ ∘ f₂ = f₂.
+        let f1 = principal_d23();
+        let f2 = generator_d23();
+        assert!(f1.a < f2.a);
+        let result = f1.compose(&f2).expect("compose");
+        assert_eq!(result, f2);
+    }
+
+    #[test]
+    fn compose_d_minus_20_class_group() {
+        // For D = -20, the class group has order 2. Reduced classes:
+        //   e = (1, 0, 5)   (principal)
+        //   g = (2, 2, 3)
+        // Group relations: g ∘ g = e.
+        let e = BinaryQuadraticForm::new(BigInt::from(1), BigInt::from(0), BigInt::from(5))
+            .expect("identity D=-20");
+        let g = BinaryQuadraticForm::new(BigInt::from(2), BigInt::from(2), BigInt::from(3))
+            .expect("g D=-20");
+        assert_eq!(e.discriminant(), BigInt::from(-20));
+        assert_eq!(g.discriminant(), BigInt::from(-20));
+        assert!(e.is_reduced());
+        assert!(g.is_reduced());
+
+        // g ∘ g = e
+        let g_sq = g.compose(&g).expect("compose");
+        assert_eq!(g_sq, e);
+
+        // e ∘ g = g and g ∘ e = g
+        assert_eq!(e.compose(&g).expect("compose"), g);
+        assert_eq!(g.compose(&e).expect("compose"), g);
+    }
+
+    #[test]
+    fn compose_with_unreduced_inputs_still_correct() {
+        // Composition should be well-defined modulo proper equivalence,
+        // so feeding unreduced (but equivalent) inputs should produce
+        // the same reduced output as feeding reduced inputs.
+        let f_reduced = generator_d23();
+        let f_unreduced =
+            BinaryQuadraticForm::new(BigInt::from(3), BigInt::from(5), BigInt::from(4))
+                .expect("unreduced equivalent of f");
+        // Confirm equivalence
+        assert_eq!(f_unreduced.reduced(), f_reduced);
+
+        let reduced_result = f_reduced.compose(&f_reduced).expect("compose");
+        let unreduced_result = f_unreduced.compose(&f_unreduced).expect("compose");
+        assert_eq!(reduced_result, unreduced_result);
     }
 }
