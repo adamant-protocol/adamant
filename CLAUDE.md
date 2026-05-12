@@ -406,7 +406,8 @@ Workspace tests: 2,388 passing, 0 failed, 1 ignored. Clippy `-D warnings`: clean
 | **7.5.1d** | §3.8.1 | `ClassGroupElement ↔ BinaryQuadraticForm` byte-encoding wiring | **CLOSED** |
 | **7.5.2a** | §3.8.6 (new) | deterministic class-group discriminant derivation + spec amendment | **CLOSED** |
 | **7.5.2b** | §3.8.6 | hash-to-element (Miller-Rabin + Jacobi + Tonelli-Shanks) | **CLOSED** |
-| 7.5.3+ | §3.8.1, 8.4.4 | evaluate / Wesolowski prove + verify / envelope encryption wiring | pending (multi-session) |
+| **7.5.3** | §3.8.7 (new) | Wesolowski VDF evaluate / prove / verify | **CLOSED** |
+| 7.5.4+ | §3.8.1, §8.4.4 | time-lock envelope encryption wiring (ChaCha20-Poly1305 key from `h`) + consensus-layer round-anchor integration | pending |
 | 7.6 | §3.6, 8.4 | threshold mempool + two-regime hysteresis | pending |
 | 7.7 | §8.3, 8.7 | DAG-BFT consensus core | pending (large) |
 | 7.8 | §9 | networking + transaction propagation | pending |
@@ -686,6 +687,29 @@ Phase 7.5.2b surface:
 Phase 7.5.2b metrics: vdf module tests 113 → 150 passing (+37). adamant-crypto LOC ~5,900 → ~7,200 (+~1,300 — modular module + setup additions + tests). Workspace clippy + fmt + strict audit + both resistant-proof guards all pass.
 
 **Phase 7.5 progression**: 7.5.0 + 7.5.1 (a/b/c/d) + 7.5.2a + 7.5.2b closed. The deterministic class-group setup pipeline is complete end-to-end. Next: **Phase 7.5.3** — VDF evaluation (the `T`-sequential-squarings inner loop using `BinaryQuadraticForm::square`) and Wesolowski proof construction (`π = g^q` for `q = ⌊2^T / ℓ⌋`). All class-group infrastructure is in place; 7.5.3 wires the existing pieces into `evaluate(g, T)` and `prove(g, h, T)`.
+
+**Phase 7.5.3 closure (commit `d4c7b5d` here + `d3ca3dc` on adamant-spec)** — Wesolowski VDF evaluate / prove / verify per new §3.8.7 whitepaper subsection. **Closes the §3.8 time-lock VDF construction end-to-end.** The chain can now produce its parameters from the genesis seed (Phase 7.5.2a), sample a canonical class-group generator (Phase 7.5.2b), evaluate the `T`-sequential-squarings inner loop (Phase 7.5.3 evaluate), produce a Wesolowski proof (Phase 7.5.3 prove), and verify it in constant time (Phase 7.5.3 verify).
+
+Whitepaper amendment — §3.8.7 (new): pins the byte-level algorithms for `evaluate`, `hash_to_prime` (Fiat-Shamir prime challenge derivation), `prove`, and `verify`. `CHALLENGE_BITS = 128` genesis-fixed (Wesolowski 2019 §4 soundness: cheating probability `≤ 1/ℓ ≤ 2^-128`, comfortably above the §3.8.2 128-bit classical security target). The §3.8.3 "publicly verifiable in constant time" property realised concretely: `verify` runs in `O(log ℓ) ≈ 128` class-group operations regardless of `T`.
+
+Phase 7.5.3 surface (in `adamant-crypto::vdf::wesolowski`):
+
+- `evaluate(g: &BinaryQuadraticForm, T: u64) -> BinaryQuadraticForm` — `T` sequential class-group squarings producing `h = g^(2^T)`. Sequential by construction; no parallel speedup is known. Genesis target `T ∈ [2_000_000, 7_500_000]` per §3.8.2.
+- `prove(g, T) -> Result<ProveResult, WesolowskiError>` — returns `{h, π}` where `π = g^q` and `q = ⌊2^T / ℓ⌋` for the Fiat-Shamir prime `ℓ = hash_to_prime(g, h, T)`. Implementation: `evaluate` then square-and-multiply on `q`. Total cost `~2T` class-group operations.
+- `verify(g, h, T, π) -> Result<bool, WesolowskiError>` — recomputes `ℓ`, computes `r = 2^T mod ℓ` (fast via `BigUint::modpow`), checks `π^ℓ · g^r ≡ h` in the class group.
+- `ProveResult { h, pi }` — return shape of `prove`.
+- `WesolowskiError { MismatchedDiscriminants, NotPositiveDefinite, HashToPrimeBudgetExhausted }`.
+- `CHALLENGE_BITS = 128` (pub const, consensus-binding).
+
+Internal helpers (private):
+- `hash_to_prime(g, h, T)` — Fiat-Shamir prime challenge derivation via `WESOLOWSKI_CHALLENGE` domain tag (registered in Phase 7.5.0). Re-uses `vdf::modular::is_probable_prime` from Phase 7.5.2b with 40 deterministically-derived Miller-Rabin witnesses.
+- `pow(base, exponent)` — left-to-right square-and-multiply over `BigUint` exponents using `BinaryQuadraticForm::{square, compose}`.
+
+33 new unit tests covering: evaluate edge cases (T=0 returns input; T=1 is square; determinism; discriminant preservation; result-is-reduced; panic on non-positive-definite); `hash_to_prime` determinism + distinct-T-distinct-ℓ + returns-actual-128-bit-prime; `pow` exponent-0/1/2/4/8 + matches-evaluate at `2^T`; **prove + verify round-trip** at T=1, 10, 50; prove rejects non-positive-definite; verify rejects tampered `h`, tampered `π`, wrong `T`, swapped `g`/`h`; mismatched-discriminant + non-positive-definite error paths; determinism; cross-seed soundness at T=200 (both verify correctly under their own generators; cross-seed proofs do NOT verify — exercises the real `q != 0` case where `π` is non-trivially `g^q`); **end-to-end integration** (`derive_discriminant → hash_to_element → prove → verify` against a 2048-bit derived discriminant, wiring all of Phase 7.5.2a + 7.5.2b + 7.5.3 together).
+
+Phase 7.5.3 metrics: vdf module tests 150 → 183 passing (+33). adamant-crypto LOC ~7,200 → ~8,100 (+~900 — wesolowski module + tests). Workspace clippy + fmt + strict audit + both resistant-proof guards all pass.
+
+**Phase 7.5 progression (cumulative)**: 7.5.0 + 7.5.1 (a/b/c/d) + 7.5.2a + 7.5.2b + 7.5.3 closed. **The §3.8 time-lock VDF construction is feature-complete** (parameters + setup + arithmetic + operations + proof verification). Next sub-arc: **Phase 7.5.4** — wiring `TimeLockEnvelope` to ChaCha20-Poly1305 via the `TIME_LOCK_SYMMETRIC_KEY` domain tag, plus consensus-layer round-anchor integration per §8.4.4 (the round-anchor decryption-publication binding). After that, Phase 7.6 (threshold mempool + two-regime hysteresis at the §8.4.2 viability boundary).
 
 **Phase 6 hygiene follow-up (commit `0cc2848`)** — `adamant-halo2` ECC chip tests gated behind `expensive-tests` feature. Four forked-upstream tests (`ecc::chip::constants::tests::lagrange_coeffs`, `zs_and_us`, `ecc::chip::mul_fixed::short::tests::invalid_magnitude_sign`, `ecc::tests::ecc_chip`) reconstruct full fixed-base Lagrange-coefficient tables and run MockProver at k=13 across the ECC chip surface; debug-mode runtime exceeds 60s each and was blocking workspace test runs at 20+ minutes after Phase 6.8b.3 vendored them in byte-faithfully. New `expensive-tests = []` feature on `adamant-halo2` (mirrors the `adamant-privacy` posture introduced at Phase 6.8b.5); each test carries `#[cfg_attr(not(feature = "expensive-tests"), ignore = "...")]`. Empirical result: `cargo test -p adamant-halo2 --lib` reports 58 passed + 4 ignored in 3.6s (down from 20+ min hang); full workspace `cargo test` completes cleanly. Tests still compile so the upstream byte-faithful posture and refactor-checking are preserved — only the runtime ignore flag flips. Test-time only; no production-binary impact. Resistant-proof guards continue to pass; workspace audit strict mode passes; doc coverage remains 100% across 9 Adamant-authored crates.
 
