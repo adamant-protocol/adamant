@@ -69,10 +69,29 @@
 //! 7.8.1 with the §9.2.2 feature gates.
 
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::multiple_crate_versions,
+    reason = "libp2p's transitive dep tree contains multiple-\
+              version duplicates for several common Rust \
+              ecosystem crates (hashlink, socket2, thiserror, \
+              unsigned-varint, yamux). These are entirely \
+              inside libp2p's networking-infrastructure \
+              subtree, none touch Adamant's cryptographic or \
+              consensus surface, and resolving them would \
+              require forking specific libp2p sub-crates \
+              (rejected per §14.4 Decision 4 Option A). Scope \
+              this allow narrowly to the networking crate; the \
+              workspace-wide multiple_crate_versions = \"warn\" \
+              discipline remains in force everywhere else."
+)]
 
 use serde::{Deserialize, Serialize};
 
 use adamant_consensus::{RoundNumber, Vertex};
+
+pub mod node;
+
+pub use node::{AdamantBehaviour, NetworkConfig, NetworkError, NetworkEvent, NetworkNode};
 
 /// Adamant network protocol version. Distinct from a
 /// transaction's per-version field (the

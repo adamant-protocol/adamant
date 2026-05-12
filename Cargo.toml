@@ -259,6 +259,40 @@ num-integer = "=0.1.46"
 num-traits = "=0.2.19"
 packed_struct = "0.10.1"                                              # NEW (§6.2.1.6 batch; transitive via move-command-line-common)
 petgraph = "0.8.1"                                                    # NEW (§6.2.1.6 batch; direct dep of move-bytecode-verifier and move-regex-borrow-graph)
+# libp2p — networking infrastructure tier per §14.1 + §14.4
+# Decision 4 (RESOLVED Option A). Spec-pinned subset per §9.2.2:
+# QUIC primary + TCP fallback, Noise XX security, Yamux
+# multiplexing, Kademlia discovery, gossipsub pubsub, identify
+# protocol, DNS resolution. `macros` feature enables the
+# `NetworkBehaviour` derive used by the adamant-network crate.
+# `tokio` feature wires libp2p's runtime selection to the
+# workspace tokio.
+libp2p = { version = "=0.56.0", features = [
+    "quic",
+    "tcp",
+    "noise",
+    "yamux",
+    "kad",
+    "gossipsub",
+    "identify",
+    "dns",
+    "macros",
+    "tokio",
+] }
+# tokio — async runtime for the §9 networking layer. The
+# workspace standard async runtime per CLAUDE.md Section 7;
+# admitted here at Phase 7.8.1 alongside libp2p. `rt-multi-thread`
+# for multi-core scheduling, `net` for socket plumbing, `time`
+# for libp2p's tick machinery, `sync` for cross-task channels,
+# `macros` for the `#[tokio::main]` / `#[tokio::test]` ergonomic
+# attributes.
+tokio = { version = "=1.52.3", features = [
+    "rt-multi-thread",
+    "net",
+    "time",
+    "sync",
+    "macros",
+] }
 phf = { version = "0.11", features = ["macros"] }                     # NEW (§6.2.1.6 batch; transitive via move-symbol-pool)
 primitive-types = { version = "0.10.1", features = ["impl-serde"] }
 proptest-derive = "0.5"
@@ -277,6 +311,11 @@ uint = "0.9.4"
 variant_count = "1.1.0"
 vfs = "0.10.0"                                                        # NEW (§6.2.1.6 batch; transitive via move-command-line-common)
 walkdir = "2.3.1"                                                     # NEW (§6.2.1.6 batch; transitive via move-command-line-common)
+# futures — async stream/sink combinators used by the libp2p
+# Swarm event loop. Re-exported in part by libp2p but the
+# adamant-network crate also uses `futures::StreamExt` directly
+# in the event-loop driver. Workspace-utility tier (Category E).
+futures = "=0.3.31"
 
 # Vendored Sui-Move crates (path entries enable per-crate
 # `<crate>.workspace = true` inheritance from upstream's Cargo.tomls).

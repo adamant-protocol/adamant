@@ -12,6 +12,13 @@ publish.workspace = true
 adamant-consensus = { path = "../adamant-consensus" }
 serde = { workspace = true }
 bcs = { workspace = true }
+# libp2p + tokio admitted at Phase 7.8.1 per CLAUDE.md §14.4
+# Decision 4 (RESOLVED Option A). Production-side wrapper around
+# libp2p's API; libp2p is NOT forked. The Adamant network layer
+# pins libp2p's wire-protocol configuration per §9.2.2.
+libp2p = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
 
 [lints]
 workspace = true
