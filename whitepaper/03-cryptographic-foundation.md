@@ -463,6 +463,71 @@ Computing `r = 2^T mod ℓ` costs `O(log T · log ℓ)` operations on `O(log ℓ
 
 **Domain separation.** The `WESOLOWSKI_CHALLENGE` tag is distinct from `CLASS_GROUP_DISCRIMINANT` (§3.8.6) and `CLASS_GROUP_ELEMENT_SEED` (§3.8.6) so prime challenges cannot collide with discriminants or class-group generators under any related seed material. Per §3.3.1, all three tags are consensus-binding; changing any one is a hard fork.
 
+### 3.8.8 Time-lock envelope encryption
+
+This subsection pins the byte-level algorithm for the user-side encryption and round-anchor-side decryption flows that consume the §3.8.7 Wesolowski operations to produce a publicly-verifiable time-lock encrypted envelope.
+
+**Symmetric-key derivation.** Given the VDF solution `h` (a class-group element):
+
+```
+key = shake_256_tagged(TIME_LOCK_SYMMETRIC_KEY, BCS(ClassGroupElement(h)), 32)
+```
+
+The 32-byte output is the ChaCha20-Poly1305 key per §3.5. The `TIME_LOCK_SYMMETRIC_KEY` domain tag was registered at Phase 7.5.0 (`b"ADAMANT-v1-time-lock-symmetric-key"`).
+
+**Encryption (user-side).** Given the chain-fixed `TimeLockParameters {D, T}`, a byte-string plaintext `m`, a random 32-byte seed `s_g`, and a random 12-byte nonce:
+
+```
+1. g          ← hash_to_element(s_g, D, m_bits)        # §3.8.6, m_bits = |D|/2
+2. (h, π)     ← prove(g, T)                            # §3.8.7
+3. key        ← derive_symmetric_key(h)
+4. body       ← ChaCha20-Poly1305-Encrypt(key, nonce, m, aad = ∅)
+5. envelope   ← TimeLockEnvelope {
+                  puzzle: g.to_class_group_element(),
+                  ciphertext: nonce ‖ body,
+                  well_formedness_proof: WesolowskiProof { pi: π.to_class_group_element() },
+                }
+```
+
+The 12-byte nonce is prefixed to the ChaCha20-Poly1305 ciphertext body within the `ciphertext` field. AAD is empty: the puzzle-key binding suffices to prevent cross-envelope substitution (a different `g` produces a different `h`, hence a different `key`, hence decryption-failure on substituted ciphertexts).
+
+The `well_formedness_proof` is the user's Wesolowski proof `π = g^q` for `q = ⌊2^T / ℓ⌋` and `ℓ = hash_to_prime(g, h, T)`. Because `prove` is deterministic in `(g, T)`, this proof is byte-identical to the proof the round anchor produces during decryption (see below). Its role per §3.8.1 step 2 is to commit the user to a specific `h` at envelope-publication time — the chain can subsequently verify that the anchor's claimed `h` matches the user's commitment.
+
+**Decryption (round-anchor-side).** Given a published envelope and the chain-fixed `TimeLockParameters`:
+
+```
+1. g          ← decode envelope.puzzle into a BinaryQuadraticForm under D
+2. (h, π)     ← prove(g, T)                            # T sequential squarings
+3. key        ← derive_symmetric_key(h)
+4. nonce      ← envelope.ciphertext[0..12]
+5. body       ← envelope.ciphertext[12..]
+6. m          ← ChaCha20-Poly1305-Decrypt(key, nonce, body, aad = ∅)
+7. decryption ← TimeLockDecryption {
+                  solution: h.to_class_group_element(),
+                  evaluation_proof: WesolowskiProof { pi: π.to_class_group_element() },
+                }
+```
+
+The anchor publishes `(m, decryption)` atomically with its consensus vertex per §8.4.4 Mitigation B (decryption-publication binding).
+
+**Public verification.** Given the envelope, the anchor's published decryption, and the chain-fixed parameters, any party can verify the decryption and recover the plaintext in constant time:
+
+```
+1. g       ← envelope.puzzle decoded
+2. h       ← decryption.solution decoded
+3. π       ← decryption.evaluation_proof decoded
+4. if !verify(g, h, T, π): reject (§3.8.7)
+5. key     ← derive_symmetric_key(h)
+6. nonce   ← envelope.ciphertext[0..12]
+7. body    ← envelope.ciphertext[12..]
+8. m       ← ChaCha20-Poly1305-Decrypt(key, nonce, body, aad = ∅)
+9. return m
+```
+
+Verification is `O(log ℓ) ≈ 128` class-group operations per §3.8.7. The full public-verification chain (verify proof + symmetric decrypt) takes sub-millisecond at any `T` on consensus-grade hardware. This is the property §3.8.3 calls "publicly verifiable".
+
+**Optional anchor cross-check.** The anchor MAY verify the user's `well_formedness_proof` against the anchor's recomputed `h` before publishing: if `verify(g, h, T, envelope.well_formedness_proof) == false`, the envelope is malformed and the anchor rejects it. Since `prove(g, T)` is deterministic, an honest user's `well_formedness_proof` is byte-identical to the anchor's `π`; checking is therefore equivalent to byte-comparing the two `ClassGroupElement`s. The check is OPTIONAL: an anchor that omits it still publishes a correct decryption, but a malformed envelope wastes the anchor's `T`-squaring work without it.
+
 ## 3.9 Zero-knowledge proofs
 
 The protocol's privacy layer (section 7) and recursive verification (section 8) use zero-knowledge succinct non-interactive arguments of knowledge (zk-SNARKs). Two specific systems are used: **Halo 2** for general-purpose proving with no trusted setup, and **KZG commitments** as a building block for vector commitments and for state commitments inside the consensus layer.
