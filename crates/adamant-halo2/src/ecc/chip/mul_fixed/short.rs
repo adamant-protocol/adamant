@@ -400,7 +400,16 @@ pub mod tests {
         Ok(())
     }
 
+    // Forked-upstream expensive ECC test. Runs MockProver against
+    // the short-form fixed-base multiplication circuit across the
+    // full magnitude / sign error matrix; minute-scale in debug.
+    // Gated via `adamant-halo2`'s `expensive-tests` feature so
+    // default `cargo test` does not block on it.
     #[test]
+    #[cfg_attr(
+        not(feature = "expensive-tests"),
+        ignore = "expensive ECC test (forked-upstream MockProver short-mul matrix); run with --features expensive-tests"
+    )]
     fn invalid_magnitude_sign() {
         use crate::proofs::{
             circuit::{Layouter, SimpleFloorPlanner},

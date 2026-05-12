@@ -248,7 +248,17 @@ mod tests {
     }
 
     proptest! {
+        // Forked-upstream expensive ECC test. The proptest loops
+        // `test_lagrange_coeffs` (full fixed-base Lagrange-coefficient
+        // table reconstruction) over many sampled Pallas points; debug-
+        // mode runtime exceeds 60 s. Gated via `adamant-halo2`'s
+        // `expensive-tests` feature so default `cargo test` does not
+        // block on it.
         #[test]
+        #[cfg_attr(
+            not(feature = "expensive-tests"),
+            ignore = "expensive ECC test (forked-upstream proptest); run with --features expensive-tests"
+        )]
         fn lagrange_coeffs(
             base in arb_point(),
         ) {
@@ -256,7 +266,14 @@ mod tests {
         }
     }
 
+    // Forked-upstream expensive ECC test. Reconstructs `(z, u)` window
+    // tables across `NUM_WINDOWS` for a random Pallas base — minute-scale
+    // in debug. Same gating posture as `lagrange_coeffs`.
     #[test]
+    #[cfg_attr(
+        not(feature = "expensive-tests"),
+        ignore = "expensive ECC test (forked-upstream window-table reconstruction); run with --features expensive-tests"
+    )]
     fn zs_and_us() {
         let base = pallas::Point::random(rand::rngs::OsRng);
         let (z, u): (Vec<u64>, Vec<[pallas::Base; H]>) =

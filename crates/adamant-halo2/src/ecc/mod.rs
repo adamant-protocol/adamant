@@ -903,7 +903,16 @@ pub(crate) mod tests {
         }
     }
 
+    // Forked-upstream expensive ECC test. Runs MockProver at k=13
+    // (~8,192 rows) across the full ECC chip surface (fixed-base
+    // multiplication, witness validation, error cases) — minute-
+    // scale in debug. Gated via `adamant-halo2`'s `expensive-tests`
+    // feature so default `cargo test` does not block on it.
     #[test]
+    #[cfg_attr(
+        not(feature = "expensive-tests"),
+        ignore = "expensive ECC test (forked-upstream MockProver full chip); run with --features expensive-tests"
+    )]
     fn ecc_chip() {
         let k = 13;
         let circuit = MyCircuit { test_errors: true };

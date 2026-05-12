@@ -106,6 +106,18 @@ multicore = ["maybe-rayon/threads"]
 # Sinsemilla (Orchard-specific; not used by the §7.3.2
 # validity circuit).
 vendored-test-suite = []
+# Gate for ECC chip tests that perform full fixed-base scalar
+# multiplication setup (`compute_lagrange_coeffs`,
+# `find_zs_and_us`, plus MockProver runs over the ECC chip).
+# These are upstream `halo2_gadgets` tests forked byte-faithfully
+# at Phase 6.8b.3; they take minutes each in debug mode
+# (multi-thousand-window fixed-base table computation) and were
+# blocking workspace test runs in default cargo test. By default
+# (no feature) they are `#[ignore]`d; running with
+# `cargo test -p adamant-halo2 --features expensive-tests`
+# or `cargo test -- --ignored` includes them. Mirrors the
+# `adamant-privacy::expensive-tests` posture (Phase 6.8b.5).
+expensive-tests = []
 
 # Lint posture for forked upstream code, mirroring the Phase
 # 5/5b.1a/b precedent for vendored Sui-Move crates (see
