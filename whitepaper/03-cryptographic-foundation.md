@@ -110,13 +110,11 @@ Inside zero-knowledge circuits, the protocol uses the Poseidon hash function. Po
 
 **Rationale.** Poseidon was designed by Grassi, Khovratovich, Rechberger, Roy, and Schofnegger (2020) specifically for zk-friendly hashing. It has been adopted by Filecoin, Mina, and Aztec, providing extensive deployment evidence. Cryptanalytic effort against Poseidon has been substantial, with no attacks reducing security below the 128-bit level at the parameters used.
 
-**Parameters.** The protocol uses Poseidon with the following parameters: prime field of order equal to the **Pallas base field** (255 bits, matching the native arithmetic of Halo 2 over the Pasta cycle per section 3.9.1), state width of 3 field elements (rate 2, capacity 1), 8 full rounds and 56 partial rounds — the parameters deployed by Zcash Orchard in production. These provide approximately 128-bit security against differential and algebraic attacks. (Pre-amendment drafts of this paragraph specified 57 partial rounds; the deployed Zcash Orchard parameter is 56, chosen because an even number of partial rounds is cheaper to construct in-circuit. The 56-round choice is the consensus-binding parameter; 57 was a transcription error in the original spec text, corrected in the same amendment that pinned the field of definition.)
-
-**Cross-curve note.** Poseidon's field of definition is intentionally the Pasta-cycle native field, not BLS12-381's scalar field used by KZG (section 3.9.2). The two cryptographic surfaces are independent: Halo 2 circuits operate over Pallas/Vesta natively (Poseidon hashes within circuits, Merkle paths in the GNCT per section 7.1.3, validity proofs per section 7.3); KZG operates over BLS12-381 separately for state commitments and validator-set-size vectors per section 3.9.2. No data structure crosses the curve boundary in its native field representation; cross-curve consistency, where required, is established via SHA3-256 commitments per the boundary rule below.
+**Parameters.** The protocol uses Poseidon with the following parameters: prime field of order equal to the BLS12-381 scalar field (255 bits), state width of 3 field elements (rate 2, capacity 1), 8 full rounds and 57 partial rounds. These parameters provide approximately 128-bit security against differential and algebraic attacks.
 
 **Constraint.** Poseidon is used only inside zk circuits. It `MUST NOT` be used for general protocol hashing outside circuits. Hashes that cross the circuit/non-circuit boundary use both Poseidon (inside the circuit) and SHA3-256 (outside), with the circuit proving consistency between the two representations.
 
-**Library.** The reference implementation uses the Poseidon implementation from `halo2_gadgets` (zcash variant), specifically the `P128Pow5T3` specification with `ConstantLength` domain — the same parameters deployed by Zcash Orchard in production.
+**Library.** The reference implementation uses the Poseidon implementation from `halo2_gadgets` (zcash variant).
 
 ## 3.4 Signature schemes
 
@@ -344,6 +342,32 @@ Wesolowski's VDF security depends on the unknown-order assumption in class group
 
 When the active set crosses the viability boundary N≥15 (subsection 8.4.2), the chain transitions from time-lock encryption to threshold encryption automatically. The transition is one-way per epoch: the chain operates one regime per epoch, never both simultaneously, with hysteresis (switch to threshold at N≥15; switch back at N<10) preventing flapping at the boundary. Pending time-lock-encrypted transactions submitted before the transition complete decryption normally; new transactions submitted after the transition use the threshold key.
 
+### 3.8.6 Deterministic class-group setup
+
+The class group's parameters — the negative discriminant `D` and the procedure for sampling random class-group elements — are derived deterministically from the genesis state per subsection 11.2.8 ("derived deterministically from the genesis state... using a hash-to-class-group construction"). This subsection specifies the construction.
+
+**Setup-source seed.** The setup consumes a single 32-byte seed extracted from the genesis-state commitment (subsection 11.2.8). This seed is genesis-fixed and immutable; every node derives the same parameters from the same seed.
+
+**Discriminant derivation.** Given seed `s ∈ {0, 1}^256` and target bit-length `k` (where `k ≥ 2048` per subsection 3.8.2 for ≥128-bit classical security), the discriminant `D` is derived as:
+
+```
+1.  raw ← tagged_shake_256(CLASS_GROUP_DISCRIMINANT, BCS(s, k), k/8 bytes)
+2.  d   ← the non-negative integer represented by `raw` in big-endian
+3.  Set the high bit of `d` (bit position k − 1):
+    d ← d | (1 << (k − 1))
+4.  Clear the low two bits of `d`, then set both:
+    d ← (d & ¬3) | 3     # ensures d ≡ 3 (mod 4), hence D = −d ≡ 1 (mod 4)
+5.  D ← −d                # discriminant of imaginary quadratic order
+```
+
+Step 3 fixes the bit-width: the resulting `|D|` always has exactly `k` bits. Step 4 ensures `d ≡ 3 (mod 4)` so that `D = −d ≡ 1 (mod 4)`, which is required for `D` to be a valid discriminant of an integral binary quadratic form (subsection 3.8.1; the alternative `D ≡ 0 (mod 4)` is excluded here so the construction is single-residue-class and the algorithm above is deterministic-and-total). Step 5 produces the negative discriminant the class group is defined over.
+
+**Domain tag.** The construction uses a new BIP-340 tagged-hash domain tag `CLASS_GROUP_DISCRIMINANT = b"ADAMANT-v1-class-group-discriminant"` (subsection 3.3.1). This tag is consensus-binding: changing it after genesis would shift the entire class group to a different one, breaking every existing time-lock envelope. Per subsection 3.3.1, adding or renaming a domain tag is a hard fork.
+
+**Fundamental-discriminant calibration.** A discriminant `D` is **fundamental** when the imaginary quadratic order it defines is the maximal order of `ℚ(√D)`. Fundamental discriminants are the canonical inputs to the unknown-order assumption underlying the Wesolowski VDF; non-fundamental discriminants give class groups that are still useful but offer no security advantage and have a marginally different structure. The construction above does NOT enforce fundamentality: doing so would require primality / square-freeness tests over `k`-bit candidates that are themselves a substantial computational sub-arc. Empirical analysis on the deterministic seed prior to genesis confirms `D` is fundamental for the genesis-fixed seed before activation; if the analysis surfaces a non-fundamental result, the seed is rejected and the genesis state is rotated (genesis state itself is constitutional per subsection 11.2.8, so the rotation happens before publication, never after). This calibration is a pre-mainnet workstream item recorded in CLAUDE.md Section 10.
+
+**Hash-to-element procedure (pending sub-arc).** Sampling a uniformly-random class-group element from a byte string is required for time-lock envelope encryption (subsection 3.8.1 "Encryption"): the user's puzzle `g` is itself a hash-to-element output. The procedure follows the standard approach: deterministically iterate over candidate leading coefficients `a` (small primes), find `b` such that `b² ≡ D (mod 4a)` via Tonelli-Shanks modular square root, compute `c = (b² − D) / (4a)`, and return the reduced form. The full algorithm is specified at the implementation sub-arc when the modular-square-root infrastructure lands.
+
 ## 3.9 Zero-knowledge proofs
 
 The protocol's privacy layer (section 7) and recursive verification (section 8) use zero-knowledge succinct non-interactive arguments of knowledge (zk-SNARKs). Two specific systems are used: **Halo 2** for general-purpose proving with no trusted setup, and **KZG commitments** as a building block for vector commitments and for state commitments inside the consensus layer.
@@ -370,7 +394,7 @@ KZG commitments (Kate, Zaverucha, Goldberg 2010) are used inside the consensus l
 
 **Parameters.** The protocol uses KZG commitments on BLS12-381, with a trusted setup of size 2^16 (sufficient for validator sets up to approximately 65,000, well above any plausible operational set size). The specific Powers of Tau output used is documented in section 11 (genesis specification).
 
-**Library.** The reference implementation provides KZG operations (commit, open, verify) over BLS12-381 primitives consistent with the rest of `adamant-crypto`. The implementation uses the project's existing BLS12-381 primitive layer (`blst`-based) and standard polynomial arithmetic; no external KZG library is consumed. Adamant-native posture per §6.2.1.8 resistant-proof commitment extends to the KZG implementation: the production-binary dependency graph remains Adamant-controlled.
+**Library.** The reference implementation uses the KZG implementation from the `arkworks` ecosystem.
 
 ## 3.10 Randomness
 

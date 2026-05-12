@@ -599,6 +599,29 @@ pub static WESOLOWSKI_CHALLENGE: DomainTag = DomainTag::new(b"ADAMANT-v1-wesolow
 pub static TIME_LOCK_SYMMETRIC_KEY: DomainTag =
     DomainTag::new(b"ADAMANT-v1-time-lock-symmetric-key");
 
+/// Domain tag for the deterministic class-group discriminant
+/// derivation from the genesis seed per whitepaper §3.8.6.
+///
+/// Composition (per §3.8.6):
+///
+/// ```text
+/// raw = tagged_shake_256(CLASS_GROUP_DISCRIMINANT, BCS((seed, bit_len)), bit_len/8)
+/// d   = big-endian integer of `raw`
+/// d  |= 1 << (bit_len - 1)         # fix the high bit
+/// d   = (d & !3) | 3               # ensure d ≡ 3 (mod 4), so D = -d ≡ 1 (mod 4)
+/// D   = -d                         # the discriminant
+/// ```
+///
+/// Pinning this tag is consensus-binding: changing it after
+/// genesis would shift the entire class group to a different
+/// one, breaking every existing time-lock envelope. Per §3.3.1,
+/// adding or renaming a domain tag is a hard fork.
+///
+/// Registered at Phase 7.5.2a as part of the §3.8.6
+/// deterministic class-group setup amendment.
+pub static CLASS_GROUP_DISCRIMINANT: DomainTag =
+    DomainTag::new(b"ADAMANT-v1-class-group-discriminant");
+
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and
 /// test-vector regressions.
