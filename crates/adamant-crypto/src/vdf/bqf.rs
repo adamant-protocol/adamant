@@ -1,20 +1,22 @@
 //! Binary quadratic forms over imaginary quadratic order, per
 //! whitepaper §3.8.1.
 //!
-//! Phase 7.5.1a/b — the class-group arithmetic foundation. The
-//! Wesolowski VDF over class groups of imaginary quadratic order
-//! per §3.8.1 represents group elements as **reduced positive
-//! definite binary quadratic forms** `f(x, y) = ax² + bxy + cy²`
-//! with negative discriminant `D = b² − 4ac < 0`. This module
-//! ships the form type (Phase 7.5.1a), the reduction algorithm
-//! that brings any form to its canonical representative
-//! (Phase 7.5.1a), the form-level predicates the rest of the VDF
-//! layer relies on (Phase 7.5.1a), and Gauss composition — the
-//! class-group multiplication operation (Phase 7.5.1b).
+//! Phase 7.5.1a/b/c — the class-group arithmetic foundation.
+//! The Wesolowski VDF over class groups of imaginary quadratic
+//! order per §3.8.1 represents group elements as **reduced
+//! positive definite binary quadratic forms** `f(x, y) = ax² +
+//! bxy + cy²` with negative discriminant `D = b² − 4ac < 0`.
+//! This module ships the form type (Phase 7.5.1a), the
+//! reduction algorithm that brings any form to its canonical
+//! representative (Phase 7.5.1a), the form-level predicates the
+//! rest of the VDF layer relies on (Phase 7.5.1a), Gauss
+//! composition — the class-group multiplication operation
+//! (Phase 7.5.1b), and fast squaring per Cohen 5.4.8 — the
+//! performance-critical operation the Wesolowski VDF
+//! evaluation calls `T` times (Phase 7.5.1c).
 //!
-//! Fast squaring (NUDPL specialisation) lands at Phase 7.5.1c;
-//! the `ClassGroupElement ↔ BinaryQuadraticForm` encoding bridge
-//! at 7.5.1d.
+//! The `ClassGroupElement ↔ BinaryQuadraticForm` encoding
+//! bridge lands at Phase 7.5.1d.
 //!
 //! # Background
 //!
@@ -89,14 +91,20 @@
 //! - [`BqfError::MismatchedDiscriminants`] — error variant for
 //!   composition of forms living in different class groups.
 //!
+//! # What this module adds at Phase 7.5.1c
+//!
+//! - [`BinaryQuadraticForm::square`] — fast squaring per Cohen
+//!   "A Course in Computational Algebraic Number Theory"
+//!   Algorithm 5.4.8. Returns the **reduced** square
+//!   `f ∘ f = f²` using a specialised single-extended-GCD
+//!   pipeline (vs the two extended GCDs general composition
+//!   performs). The Wesolowski VDF evaluation calls this `T`
+//!   times sequentially per envelope, with `T ∈ [2_000_000,
+//!   7_500_000]` per §3.8.2, so the constant-factor saving is
+//!   material.
+//!
 //! # What lands at later Phase 7.5.1 sub-sub-arcs
 //!
-//! - **7.5.1c** — fast squaring (Shanks NUDPL specialisation).
-//!   The Wesolowski VDF performs `T` sequential squarings during
-//!   evaluation, and a specialised squaring saves one extended
-//!   GCD per iteration. General composition (this commit) covers
-//!   correctness; `square()` lands at 7.5.1c as a performance
-//!   optimisation.
 //! - **7.5.1d** — canonical byte encoding for [`crate::vdf::ClassGroupElement`].
 //!   The form is encoded as `(a, b)` only — `c` is recoverable
 //!   from `c = (b² − D) / (4a)` given the chain-fixed discriminant.
@@ -586,6 +594,101 @@ impl BinaryQuadraticForm {
         let mut result = Self::new(a_new, b_new, c_new)?;
         result.reduce();
         Ok(result)
+    }
+
+    /// Computes `self ∘ self` in the class group, returning the
+    /// reduced square.
+    ///
+    /// Implements Cohen, "A Course in Computational Algebraic
+    /// Number Theory" Algorithm 5.4.8 (Squaring of Forms). This
+    /// is the performance-critical specialisation of
+    /// [`Self::compose`] for the case `f₁ = f₂`: the algorithm
+    /// performs **one** extended GCD (on `(b, a)`) instead of
+    /// the two that general composition performs (on `(a₂, a₁)`
+    /// and then potentially on `(s, d₁)`).
+    ///
+    /// The Wesolowski VDF evaluation per §3.8.1 + §3.8.2 calls
+    /// `square()` sequentially `T` times per envelope, with
+    /// `T ∈ [2_000_000, 7_500_000]`, so the constant-factor
+    /// saving accumulates to a material reduction in
+    /// decryption-time wall-clock for the round anchor.
+    ///
+    /// # Algorithm sketch
+    ///
+    /// Given `f = (a, b, c)` of discriminant `D`:
+    ///
+    /// 1. Extended Euclid on `(b, a)`: obtain `d = gcd(b, a)`
+    ///    and `μ` such that `μ·b + ν·a = d` for some `ν`.
+    ///    `μ` is the modular inverse of `b/d` modulo `a/d`.
+    /// 2. Set `A_over_d = a / d`.
+    /// 3. Solve for the linkage `nu = (−μ · c) mod (a/d)` in
+    ///    `[0, a/d)`. This is the unique residue making the
+    ///    next step yield a form whose discriminant is `D`.
+    /// 4. Build:
+    ///    - `A_new = (a/d)²`
+    ///    - `B_new = b + 2 · (a/d) · nu`
+    ///    - `C_new = (B_new² − D) / (4 · A_new)`
+    ///
+    ///    and reduce.
+    ///
+    /// # Correctness identity
+    ///
+    /// For every positive definite `f`,
+    /// `f.square() == f.compose(&f).unwrap()`. The square is a
+    /// performance optimisation; correctness is identical to
+    /// [`Self::compose`] applied to two equal operands. The
+    /// `square_matches_compose_self` test pins this property
+    /// across a representative-class sample.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self` is not positive definite. The
+    /// algorithm is specialised to the imaginary quadratic
+    /// class group; on indefinite inputs the final reduction
+    /// step would diverge. Use [`Self::is_positive_definite`]
+    /// to validate inputs.
+    #[must_use]
+    #[allow(
+        clippy::many_single_char_names,
+        reason = "Cohen Algorithm 5.4.8 uses single-letter variable names \
+                  (b, a, c, d, mu, nu) matching the published algorithm; \
+                  renaming would break the comment-vs-code traceability \
+                  the security review will rely on."
+    )]
+    pub fn square(&self) -> Self {
+        assert!(
+            self.is_positive_definite(),
+            "BinaryQuadraticForm::square requires a positive definite form (a > 0, c > 0, D < 0)"
+        );
+
+        let two = BigInt::from(2);
+        let d_self = self.discriminant();
+
+        // Step 1: extended Euclid on (b, a).
+        // eg.x * b + eg.y * a = eg.gcd = d.
+        let eg = self.b.extended_gcd(&self.a);
+        let d = eg.gcd;
+        let mu = eg.x;
+
+        // Step 2: A_over_d = a / d. Always exact since d | a.
+        let a_over_d = &self.a / &d;
+
+        // Step 3: nu = (−μ · c) mod (a/d) in [0, a/d).
+        // The choice of `nu` makes (B_new² − D) divisible by
+        // 4·A_new exactly; this is the linkage condition that
+        // makes the resulting form integral.
+        let nu = (-&mu * &self.c).mod_floor(&a_over_d);
+
+        // Step 4: build (A_new, B_new, C_new).
+        let a_new = &a_over_d * &a_over_d;
+        let b_new = &self.b + &two * &a_over_d * &nu;
+        let four_a_new = BigInt::from(4) * &a_new;
+        let c_new = (&b_new * &b_new - &d_self).div_floor(&four_a_new);
+
+        let mut result =
+            Self::new(a_new, b_new, c_new).expect("square preserves a > 0 (A_new = (a/d)² ≥ 1)");
+        result.reduce();
+        result
     }
 }
 
@@ -1186,5 +1289,144 @@ mod tests {
         let reduced_result = f_reduced.compose(&f_reduced).expect("compose");
         let unreduced_result = f_unreduced.compose(&f_unreduced).expect("compose");
         assert_eq!(reduced_result, unreduced_result);
+    }
+
+    // ---- Phase 7.5.1c: squaring tests ----
+    //
+    // The square() method is a Cohen 5.4.8 specialisation of
+    // compose() for the f₁ = f₂ case. The headline consistency
+    // property — square(f) == compose(f, f) — is pinned across a
+    // representative-class sample. Other tests target the
+    // group-theoretic identities the VDF will rely on.
+
+    #[test]
+    fn square_identity_d_minus_23_is_identity() {
+        // e² = e for D = −23.
+        let e = principal_d23();
+        let sq = e.square();
+        assert_eq!(sq, e);
+    }
+
+    #[test]
+    fn square_generator_d_minus_23_is_generator_squared() {
+        // f² = (2, −1, 3) for D = −23.
+        let f = generator_d23();
+        let sq = f.square();
+        assert_eq!(sq, generator_squared_d23());
+    }
+
+    #[test]
+    fn square_of_generator_squared_d_minus_23_is_generator() {
+        // (f²)² = f⁴ = f (class number 3).
+        let f_sq = generator_squared_d23();
+        let f_qd = f_sq.square();
+        assert_eq!(f_qd, generator_d23());
+    }
+
+    #[test]
+    fn square_preserves_discriminant() {
+        let f = generator_d23();
+        let sq = f.square();
+        assert_eq!(sq.discriminant(), BigInt::from(-23));
+    }
+
+    #[test]
+    fn square_result_is_reduced() {
+        let f = generator_d23();
+        assert!(f.square().is_reduced());
+    }
+
+    /// Headline correctness identity: `square(f) ≡ compose(f, f)`
+    /// for every positive definite form. Pinned across the full
+    /// D = −23 class group + the D = −20 class group, plus some
+    /// non-reduced equivalents.
+    #[test]
+    fn square_matches_compose_self() {
+        let mut fixtures = vec![
+            principal_d23(),
+            generator_d23(),
+            generator_squared_d23(),
+            // D = -20 class group
+            BinaryQuadraticForm::new(BigInt::from(1), BigInt::from(0), BigInt::from(5))
+                .expect("D=-20 identity"),
+            BinaryQuadraticForm::new(BigInt::from(2), BigInt::from(2), BigInt::from(3))
+                .expect("D=-20 generator"),
+            // Non-reduced equivalent of generator_d23
+            BinaryQuadraticForm::new(BigInt::from(3), BigInt::from(5), BigInt::from(4))
+                .expect("unreduced f for D=-23"),
+        ];
+
+        // A few medium-sized positive definite forms with
+        // various discriminants to exercise larger BigInt
+        // arithmetic.
+        fixtures.push(
+            BinaryQuadraticForm::new(BigInt::from(5), BigInt::from(3), BigInt::from(10_000))
+                .expect("medium fixture"),
+        );
+        fixtures.push(
+            BinaryQuadraticForm::new(
+                BigInt::from(17),
+                BigInt::from(11),
+                BigInt::from(1_000_003_i64),
+            )
+            .expect("medium fixture 2"),
+        );
+
+        for f in &fixtures {
+            if !f.is_positive_definite() {
+                continue;
+            }
+            let via_square = f.square();
+            let via_compose = f.compose(f).expect("compose");
+            assert_eq!(
+                via_square,
+                via_compose,
+                "square(f) and compose(f, f) disagree for f = ({}, {}, {}) with D = {}",
+                f.a,
+                f.b,
+                f.c,
+                f.discriminant(),
+            );
+        }
+    }
+
+    #[test]
+    fn square_d_minus_20_generator_is_identity() {
+        // For D = −20 the class group has order 2, so the
+        // non-identity element squares to identity.
+        let g = BinaryQuadraticForm::new(BigInt::from(2), BigInt::from(2), BigInt::from(3))
+            .expect("D=-20 generator");
+        let e = BinaryQuadraticForm::new(BigInt::from(1), BigInt::from(0), BigInt::from(5))
+            .expect("D=-20 identity");
+        assert_eq!(g.square(), e);
+    }
+
+    #[test]
+    fn square_handles_unreduced_input() {
+        // Squaring should be well-defined on the equivalence
+        // class, not the specific representative.
+        let f_reduced = generator_d23();
+        let f_unreduced =
+            BinaryQuadraticForm::new(BigInt::from(3), BigInt::from(5), BigInt::from(4))
+                .expect("unreduced equivalent of f");
+        assert_eq!(f_unreduced.reduced(), f_reduced);
+        assert_eq!(f_reduced.square(), f_unreduced.square());
+    }
+
+    /// Repeated squaring matches the iterated `compose` chain:
+    /// `square(square(f)) == compose(compose(f, f), compose(f, f))`.
+    /// This is the property the Wesolowski VDF evaluation relies on
+    /// when it computes `g^(2^T)` via `T` sequential squarings.
+    #[test]
+    fn repeated_squaring_matches_iterated_compose() {
+        let f = generator_d23();
+        // Two squarings = f⁴ in the class group.
+        let via_repeated_square = f.square().square();
+        // Iterated compose: ((f ∘ f) ∘ (f ∘ f)) = (f²) ∘ (f²) = f⁴.
+        let f_sq = f.compose(&f).expect("compose");
+        let via_compose = f_sq.compose(&f_sq).expect("compose");
+        assert_eq!(via_repeated_square, via_compose);
+        // And for D=-23 with class number 3, f⁴ = f.
+        assert_eq!(via_repeated_square, f);
     }
 }
