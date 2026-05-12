@@ -908,7 +908,7 @@ Phase 7.8 sub-arc roadmap (registered in `adamant-network::lib.rs` module docs):
 | Sub-arc | Whitepaper | Surface | Status |
 |---|---|---|---|
 | **7.8.0** | §9.3.1 | wire-format types | **CLOSED** |
-| 7.8.1 | §9.2, §9.3 | libp2p integration + gossipsub propagation | pending |
+| **7.8.1** | §9.2, §9.3 | libp2p integration + gossipsub propagation | **CLOSED** |
 | 7.8.2 | §9.5 | anti-DoS + submission proofs + fee floors | pending |
 | 7.8.3 | §9.6 | discovery + bootstrap nodes | pending |
 | 7.8.4 | §9.7 | mempool design + synchronisation | pending |
@@ -921,7 +921,42 @@ Workspace changes:
 
 Phase 7.8.0 metrics: `cargo test -p adamant-network --lib` reports 19/19 passing. New crate metrics: 301 LOC, 15 pub items, 100% doc coverage, `#![forbid(unsafe_code)]`. Workspace lib tests 2,776 → 2,795 (+19). All 10 Adamant-authored crates at 100% doc coverage. Workspace clippy + fmt + strict audit + both resistant-proof guards all pass. No spec amendment; no new domain tags; no new production-binary workspace dependencies (libp2p lands at Phase 7.8.1).
 
-**Next sub-arc — Phase 7.8.1**: libp2p integration. Pins the exact `libp2p` version + the §9.2.2 feature gates (`quic`, `tcp`, `noise`, `yamux`, `kad`, `gossipsub`, `identify`, `dns`, `macros`). Wires the Phase 7.8.0 `NetworkMessage` types onto the libp2p gossipsub behaviour. Substantial sub-arc; may surface for spec-author plan-gate input at start if the libp2p version-pin or feature-subset selection raises constitutional-impact questions.
+**Phase 7.8.1 closure (commit `00ff614`)** — libp2p integration per whitepaper §9.2 + §9.3. Wires the Phase 7.8.0 wire-format types (`NetworkMessage`, `GossipsubTopic`) onto the libp2p substrate per the §9.2.2 configuration. Per §14.4 Decision 4 Option A, libp2p is admitted to Category E networking-infrastructure tier; the `adamant-network` crate is the production-side wrapper around libp2p's API (libp2p NOT forked).
+
+Workspace dependencies added (exact-pinned per CLAUDE.md §14.1 discipline):
+
+- **`libp2p = "=0.56.0"`** with the §9.2.2 spec-pinned feature subset: `quic`, `tcp`, `noise`, `yamux`, `kad`, `gossipsub`, `identify`, `dns`, `macros`, `tokio`.
+- **`tokio = "=1.52.3"`** with `rt-multi-thread`, `net`, `time`, `sync`, `macros` features. Workspace standard async runtime per CLAUDE.md Section 7; admitted here at Phase 7.8.1.
+- **`futures = "=0.3.31"`** — async stream/sink combinators used by the libp2p Swarm event loop. Category E workspace utility.
+
+Phase 7.8.1 surface (new `adamant-network::node` module):
+
+- **`NetworkConfig`** — caller-supplied configuration: keypair, listen addresses, bootstrap peers, gossipsub tuning. Builder-style chainables (`with_listen_address` / `with_bootstrap_peer` / `with_max_message_size` / `with_heartbeat_interval`).
+- **`AdamantBehaviour`** — composite libp2p `NetworkBehaviour` combining `gossipsub::Behaviour` + `identify::Behaviour`. Defined inside a scoped `behaviour` module with `#![allow(missing_docs)]` narrowly scoping the libp2p derive-macro-emitted sibling `AdamantBehaviourEvent` enum (whose variants the derive macro doesn't doc-comment).
+- **`NetworkNode`** — high-level handle owning the libp2p `Swarm<AdamantBehaviour>`. `launch` / `local_peer_id` / `publish` / `next_event` API. **Auto-subscribes to both `GossipsubTopic` values at startup** per the §8 + §9.3 protocol-mandated subscription set.
+- **`NetworkEvent`** enum — application-level events: `Message`, `PeerConnected`, `PeerDisconnected`, `BootstrapDialFailed`, `NewListenAddress`. Non-`#[non_exhaustive]` per consensus-critical-surface discipline.
+- **`NetworkError`** — 9 typed variants covering every rejection path (`GossipsubSetupFailed`, `IdentifySetupFailed`, `SwarmBuildFailed`, `ListenAddressFailed`, `DialFailed`, `PublishFailed`, `MessageEncodingFailed`, `MessageDecodingFailed`, `SubscriptionFailed`). `Display` + `std::error::Error` with pairwise-distinct messages.
+
+Transport stack per §9.2.2:
+- QUIC primary (libp2p's built-in QUIC with encryption + multiplexing).
+- TCP fallback with Noise XX security + Yamux multiplexing.
+- DNS resolution for multiaddrs.
+- gossipsub v1.1 with 200ms heartbeat (matching §8.2's 250ms round target) + 1 MiB max message size + strict validation.
+- identify protocol with `/adamant/identify/1.0.0` + agent string `"adamant-network/0.1"`.
+
+Deferred to follow-on sub-arcs (registered in `node.rs` module docs):
+- Kademlia DHT for peer discovery → Phase 7.8.3.
+- Anti-DoS submission-proof gating → Phase 7.8.2.
+- Mempool synchronisation + replacement policy → Phase 7.8.4.
+- Onion routing + timing obfuscation per §9.4.2 / §9.4.3 → later sub-arc (out-of-band for the core networking surface).
+
+**Lint scope**: `adamant-network` gets a narrowly-scoped crate-level `#![allow(clippy::multiple_crate_versions)]` to accommodate libp2p's transitive dep tree (`hashlink`, `socket2`, `thiserror`, `unsigned-varint`, `yamux` duplicates). The workspace-wide `multiple_crate_versions = "warn"` discipline stays in force everywhere else. None of the duplicates touch Adamant's cryptographic or consensus surface — they're all inside libp2p's networking-infrastructure subtree.
+
+10 new unit tests covering: `NetworkConfig::new` defaults + 4 `with_*` builder-chain helpers; `NetworkError` 9-variant Display distinctness + `std::error::Error` impl; identify-protocol + agent-string version pin (asserts `/adamant/identify/1.0.0` matches `NETWORK_PROTOCOL_VERSION = 1`); **smoke tests via `#[tokio::test]`**: `network_node_launch_smoke_test` (a node constructs without networking — no listen-addresses or bootstrap-peers); `two_independent_nodes_have_distinct_peer_ids` (two parallel-launched nodes get distinct `PeerId`s).
+
+Phase 7.8.1 metrics: `cargo test -p adamant-network --lib` reports 29/29 passing (19 from 7.8.0 + 10 new). Crate metrics: 717 LOC (was 301), 28 pub items (was 15), 100% doc coverage, `#![forbid(unsafe_code)]`. Workspace lib tests 2,795 → 2,805 (+10). All 10 Adamant-authored crates at 100% doc coverage. Workspace clippy + fmt + strict audit + both resistant-proof guards all pass. No spec amendment; no new domain tags.
+
+**Next sub-arc — Phase 7.8.2**: anti-DoS + submission proofs + fee floors per §9.5. Pins the `SubmissionProof` inner structure (currently opaque bytes); wires the per-peer rate limiter + the §9.5.2 fee-floor + the §9.5.4 cryptographic verification before propagation. May overlap with §10 fee economics integration; surface for spec-author input if the §9.5.1 submission-proof construction shape (proof-of-work vs stake-bound attestation) needs ratification.
 
 **Phase 6 hygiene follow-up (commit `0cc2848`)** — `adamant-halo2` ECC chip tests gated behind `expensive-tests` feature. Four forked-upstream tests (`ecc::chip::constants::tests::lagrange_coeffs`, `zs_and_us`, `ecc::chip::mul_fixed::short::tests::invalid_magnitude_sign`, `ecc::tests::ecc_chip`) reconstruct full fixed-base Lagrange-coefficient tables and run MockProver at k=13 across the ECC chip surface; debug-mode runtime exceeds 60s each and was blocking workspace test runs at 20+ minutes after Phase 6.8b.3 vendored them in byte-faithfully. New `expensive-tests = []` feature on `adamant-halo2` (mirrors the `adamant-privacy` posture introduced at Phase 6.8b.5); each test carries `#[cfg_attr(not(feature = "expensive-tests"), ignore = "...")]`. Empirical result: `cargo test -p adamant-halo2 --lib` reports 58 passed + 4 ignored in 3.6s (down from 20+ min hang); full workspace `cargo test` completes cleanly. Tests still compile so the upstream byte-faithful posture and refactor-checking are preserved — only the runtime ignore flag flips. Test-time only; no production-binary impact. Resistant-proof guards continue to pass; workspace audit strict mode passes; doc coverage remains 100% across 9 Adamant-authored crates.
 
