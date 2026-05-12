@@ -145,6 +145,8 @@
 //!
 //! [`TIME_LOCK_SYMMETRIC_KEY`]: crate::domain::TIME_LOCK_SYMMETRIC_KEY
 
+pub mod bqf;
+
 use core::fmt;
 
 use serde::{Deserialize, Serialize};

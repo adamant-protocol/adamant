@@ -42,6 +42,15 @@ zeroize = { workspace = true }
 # stable Adamant type.
 bcs = { workspace = true }
 serde = { workspace = true }
+# Big-integer arithmetic for Phase 7.5.1+ Wesolowski VDF class-group
+# layer (`vdf::bqf` binary quadratic forms over imaginary quadratic
+# order). Cat E workspace utility per CLAUDE.md §14.1 — mirrors the
+# `petgraph` / `ethnum` posture: mature, non-consensus-defining
+# infrastructure where Adamant-native reimplementation is audit-net-
+# negative.
+num-bigint = { workspace = true }
+num-integer = { workspace = true }
+num-traits = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }

@@ -244,6 +244,18 @@ insta = "1.42.0"
 itertools = "0.10.0"
 leb128 = "0.2.5"
 num = "0.4.0"
+# Big-integer arithmetic for the Phase 7.5 Wesolowski VDF class-group
+# layer (`adamant-crypto::vdf::bqf`). Adamant-native posture per
+# CLAUDE.md §14: `num-bigint` is the Cat E workspace-utility BigInt
+# layer (mature, ~10 years, used by `arkworks`, RustCrypto-orbit;
+# parallel posture to `petgraph` and `ethnum`). Exact-pinned to the
+# resolved versions already in Cargo.lock (transitively from
+# vendored Sui at the time of pinning) so no transitive surface
+# churn. `serde` feature enabled for BCS round-trip of class-group
+# elements.
+num-bigint = { version = "=0.4.6", features = ["serde"] }
+num-integer = "=0.1.46"
+num-traits = "=0.2.19"
 packed_struct = "0.10.1"                                              # NEW (§6.2.1.6 batch; transitive via move-command-line-common)
 petgraph = "0.8.1"                                                    # NEW (§6.2.1.6 batch; direct dep of move-bytecode-verifier and move-regex-borrow-graph)
 phf = { version = "0.11", features = ["macros"] }                     # NEW (§6.2.1.6 batch; transitive via move-symbol-pool)
