@@ -90,12 +90,14 @@ use serde::{Deserialize, Serialize};
 use adamant_consensus::{RoundNumber, Vertex};
 
 pub mod anti_dos;
+pub mod mempool;
 pub mod node;
 
 pub use anti_dos::{
     compute_submission_proof, duration_to_micros, validate_submission, AntiDosError, FeeFloor,
     RateLimitConfig, RateLimitDecision, RateLimiter, MAX_DIFFICULTY_BITS,
 };
+pub use mempool::{InsertOutcome, Mempool, MempoolError, DEFAULT_MEMPOOL_CAPACITY};
 pub use node::{AdamantBehaviour, NetworkConfig, NetworkError, NetworkEvent, NetworkNode};
 
 /// Adamant network protocol version. Distinct from a
