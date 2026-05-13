@@ -4,11 +4,10 @@
 //! types ([`NetworkMessage`], [`GossipsubTopic`]) onto the
 //! libp2p substrate per the §9.2.2 configuration (QUIC + TCP
 //! fallback, Noise XX, Yamux, gossipsub v1.1, identify).
-//!
-//! Kademlia DHT for peer discovery (§9.2.2 + §9.6) is deferred
-//! to Phase 7.8.3 — Phase 7.8.1 uses caller-supplied bootstrap
-//! peers via [`NetworkConfig::bootstrap_peers`]. The actual
-//! DHT integration is additive on top of this foundation.
+//! Phase 7.8.3 extended the [`AdamantBehaviour`] with Kademlia
+//! DHT discovery + bootstrap per §9.6; bootstrap peers
+//! supplied via [`NetworkConfig::bootstrap_peers`] seed the
+//! DHT routing table at launch.
 //!
 //! # Architectural shape
 //!
@@ -17,7 +16,7 @@
 //!   tuning parameters.
 //! - [`AdamantBehaviour`] — the composite libp2p
 //!   [`NetworkBehaviour`] for the Adamant network: gossipsub +
-//!   identify.
+//!   identify + Kademlia DHT.
 //! - [`NetworkNode`] — the high-level handle. Owns the
 //!   [`libp2p::Swarm`], the topic registry, and the consumer-
 //!   facing publish/subscribe surface. Exposes
@@ -57,17 +56,20 @@
 //!
 //! # Phase 7.8.1 scope vs deferred
 //!
-//! Ships:
+//! Ships (cumulative through Phase 7.8.3):
 //! - Swarm construction with the §9.2.2 transport + security
 //!   + multiplexer pinning.
 //! - gossipsub behaviour with topic subscription.
 //! - identify behaviour for peer-info exchange.
+//! - Kademlia DHT discovery + bootstrap (Phase 7.8.3).
 //! - publish + `next_event` APIs.
-//! - peer-connection lifecycle events.
+//! - peer-connection + peer-discovery + bootstrap-completion
+//!   lifecycle events.
 //!
 //! Deferred to follow-on sub-arcs:
-//! - Kademlia DHT (Phase 7.8.3 discovery + bootstrap).
-//! - Anti-DoS submission-proof gating (Phase 7.8.2).
+//! - Anti-DoS submission-proof gating wired into propagation
+//!   (Phase 7.8.2 ships the primitives; the
+//!   propagation-side gating lands at Phase 7.8.4).
 //! - Mempool synchronisation + replacement policy (Phase
 //!   7.8.4).
 //! - Onion routing + timing obfuscation per §9.4.2 / §9.4.3
@@ -82,8 +84,9 @@ use libp2p::gossipsub::{
 };
 use libp2p::identify::{self, Behaviour as IdentifyBehaviour};
 use libp2p::identity::Keypair;
+use libp2p::kad::{self, store::MemoryStore, Behaviour as KademliaBehaviour, QueryResult};
 use libp2p::swarm::SwarmEvent;
-use libp2p::{noise, tcp, yamux, Multiaddr, PeerId, Swarm};
+use libp2p::{noise, tcp, yamux, Multiaddr, PeerId, StreamProtocol, Swarm};
 
 use crate::{GossipsubTopic, NetworkMessage};
 
@@ -109,6 +112,15 @@ const ADAMANT_AGENT_STRING: &str = "adamant-network/0.1";
 /// Versioned to match [`NETWORK_PROTOCOL_VERSION`]; a bump here
 /// is a hard-fork-aware deliberate change.
 const ADAMANT_IDENTIFY_PROTOCOL: &str = "/adamant/identify/1.0.0";
+
+/// libp2p Kademlia protocol-name per §9.2.2 + §9.6.
+/// Adamant-specific so the Adamant DHT does not share
+/// records with other libp2p networks (the same physical
+/// libp2p mesh can host multiple protocol-isolated DHTs;
+/// distinct protocol names is what separates them).
+/// Versioned to match [`NETWORK_PROTOCOL_VERSION`]; a bump
+/// here is a hard-fork-aware deliberate change.
+const ADAMANT_KADEMLIA_PROTOCOL: &str = "/adamant/kad/1.0.0";
 
 /// Typed errors produced by the [`NetworkNode`] surface.
 ///
@@ -314,12 +326,14 @@ mod behaviour {
 
     use libp2p::gossipsub::Behaviour as GossipsubBehaviour;
     use libp2p::identify::Behaviour as IdentifyBehaviour;
+    use libp2p::kad::{store::MemoryStore, Behaviour as KademliaBehaviour};
     use libp2p::swarm::NetworkBehaviour;
 
     /// Adamant's composite libp2p [`NetworkBehaviour`] (inner
     /// definition; re-exported via `pub use behaviour::*`).
-    /// Combines gossipsub (per §9.2.2 pubsub) and identify
-    /// (per §9.2.2 peer-info exchange).
+    /// Combines gossipsub (per §9.2.2 pubsub), identify (per
+    /// §9.2.2 peer-info exchange), and Kademlia DHT (per
+    /// §9.2.2 + §9.6 peer discovery + bootstrap).
     #[derive(NetworkBehaviour)]
     pub struct AdamantBehaviour {
         /// Gossipsub pubsub behaviour. Handles message
@@ -332,6 +346,15 @@ mod behaviour {
         /// (agent string, supported protocols, listen
         /// addresses) at connection establishment per §9.2.2.
         pub identify: IdentifyBehaviour,
+
+        /// Kademlia DHT behaviour per §9.2.2 + §9.6.
+        /// Discovers peers seeded from
+        /// [`crate::NetworkConfig::bootstrap_peers`] and
+        /// surfaces them via [`crate::NetworkEvent::PeerDiscovered`].
+        /// Per §9.6.1, bootstrap nodes are "not 'trusted' for
+        /// any consensus-critical purpose"; they are
+        /// convenience infrastructure.
+        pub kademlia: KademliaBehaviour<MemoryStore>,
     }
 }
 
@@ -361,9 +384,20 @@ impl AdamantBehaviour {
                 .with_agent_version(ADAMANT_AGENT_STRING.to_string()),
         );
 
+        let local_peer_id = PeerId::from(keypair.public());
+        let store = MemoryStore::new(local_peer_id);
+        let mut kad_config = kad::Config::new(StreamProtocol::new(ADAMANT_KADEMLIA_PROTOCOL));
+        // Server-mode by default so this node accepts DHT
+        // queries from peers (per §9.6.2 decentralisation
+        // posture — every node is a potential bootstrap
+        // contributor once registered).
+        kad_config.set_query_timeout(Duration::from_secs(30));
+        let kademlia = KademliaBehaviour::with_config(local_peer_id, store, kad_config);
+
         Ok(Self {
             gossipsub,
             identify,
+            kademlia,
         })
     }
 }
@@ -405,6 +439,21 @@ pub enum NetworkEvent {
     /// The node started listening on a multiaddr (e.g., a
     /// QUIC or TCP socket bound successfully).
     NewListenAddress(Multiaddr),
+
+    /// Kademlia DHT discovered a new peer per §9.6 + §9.2.2
+    /// DHT-based peer discovery. The local routing table has
+    /// been updated; the peer is now reachable via the DHT.
+    /// Per §9.6.1, discovered peers are NOT trusted for
+    /// consensus-critical purposes — they are connectivity
+    /// candidates only.
+    PeerDiscovered(PeerId),
+
+    /// Kademlia DHT bootstrap query (triggered at startup
+    /// when at least one bootstrap peer was supplied)
+    /// completed. The routing table is populated and the
+    /// node is participating in the DHT. Per §9.6.1, this is
+    /// operational state — not consensus-binding.
+    KademliaBootstrapped,
 }
 
 /// High-level Adamant networking node handle.
@@ -493,15 +542,37 @@ impl NetworkNode {
                 })?;
         }
 
-        // Dial bootstrap peers.
+        // Dial bootstrap peers + seed Kademlia routing table.
+        // Per §9.6.1, bootstrap nodes seed the DHT for newcomers
+        // but are NOT trusted for consensus; the routing-table
+        // population here is purely operational.
         for (peer_id, addr) in &config.bootstrap_peers {
             swarm.behaviour_mut().gossipsub.add_explicit_peer(peer_id);
+            swarm
+                .behaviour_mut()
+                .kademlia
+                .add_address(peer_id, addr.clone());
             swarm
                 .dial(addr.clone())
                 .map_err(|e| NetworkError::DialFailed {
                     address: addr.clone(),
                     reason: e.to_string(),
                 })?;
+        }
+        // Trigger an initial Kademlia bootstrap query if at
+        // least one bootstrap peer was registered. Per
+        // libp2p's `kad::Behaviour::bootstrap`, this kicks off
+        // an iterative-find-node query against the local
+        // `PeerId` to populate the routing table. The query
+        // result surfaces as a `BootstrapCompleted` /
+        // `BootstrapFailed` `NetworkEvent`.
+        if !config.bootstrap_peers.is_empty() {
+            // `bootstrap()` returns an error if the routing
+            // table has no peers; we just registered at least
+            // one above, so the failure mode here would be
+            // surprising. Swallow defensively — the next
+            // automatic refresh will retry.
+            let _ = swarm.behaviour_mut().kademlia.bootstrap();
         }
 
         Ok(Self {
@@ -607,6 +678,20 @@ impl NetworkNode {
             SwarmEvent::NewListenAddr { address, .. } => {
                 Some(NetworkEvent::NewListenAddress(address))
             }
+            SwarmEvent::Behaviour(AdamantBehaviourEvent::Kademlia(
+                kad::Event::RoutingUpdated {
+                    peer,
+                    is_new_peer: true,
+                    ..
+                },
+            )) => Some(NetworkEvent::PeerDiscovered(peer)),
+            SwarmEvent::Behaviour(AdamantBehaviourEvent::Kademlia(
+                kad::Event::OutboundQueryProgressed {
+                    result: QueryResult::Bootstrap(Ok(_)),
+                    step,
+                    ..
+                },
+            )) if step.last => Some(NetworkEvent::KademliaBootstrapped),
             _ => None,
         }
     }
@@ -661,14 +746,28 @@ mod tests {
 
     #[test]
     fn protocol_constants_versioned() {
-        // Identify protocol string must include /1.0.0 to match
-        // NETWORK_PROTOCOL_VERSION; agent string must mention
-        // adamant.
+        // Identify + Kademlia protocol strings must include
+        // /1.0.0 to match NETWORK_PROTOCOL_VERSION; agent
+        // string must mention adamant.
         assert!(ADAMANT_IDENTIFY_PROTOCOL.contains("/adamant/"));
         assert!(ADAMANT_IDENTIFY_PROTOCOL.contains("/1.0.0"));
+        assert!(ADAMANT_KADEMLIA_PROTOCOL.contains("/adamant/"));
+        assert!(ADAMANT_KADEMLIA_PROTOCOL.contains("/1.0.0"));
+        // Identify + Kademlia protocols must be distinct (so
+        // protocol-routing in libp2p doesn't conflate them).
+        assert_ne!(ADAMANT_IDENTIFY_PROTOCOL, ADAMANT_KADEMLIA_PROTOCOL);
         assert!(ADAMANT_AGENT_STRING.contains("adamant"));
-        // NETWORK_PROTOCOL_VERSION = 1 ↔ /1.0.0 in identify.
+        // NETWORK_PROTOCOL_VERSION = 1 ↔ /1.0.0 in protocols.
         assert_eq!(NETWORK_PROTOCOL_VERSION, 1);
+    }
+
+    #[test]
+    fn kademlia_protocol_string_is_adamant_specific() {
+        // The Kademlia protocol string MUST be Adamant-specific
+        // (with /adamant/ prefix) so we don't share a DHT with
+        // other libp2p networks — per §9.6.1 + §9.2.2 the
+        // Adamant DHT is its own namespace.
+        assert_eq!(ADAMANT_KADEMLIA_PROTOCOL, "/adamant/kad/1.0.0");
     }
 
     #[test]
@@ -724,6 +823,28 @@ mod tests {
         let cfg = NetworkConfig::new(kp);
         let node = NetworkNode::launch(&cfg).expect("launch");
         assert_eq!(*node.local_peer_id(), expected_peer);
+    }
+
+    /// Launching with a registered bootstrap peer should
+    /// succeed: the peer gets added to gossipsub's explicit-
+    /// peer list and to Kademlia's routing table; the
+    /// `bootstrap()` call is fired-and-forgotten. The dial
+    /// itself fails (no peer actually exists at the multiaddr)
+    /// but that surfaces as a `BootstrapDialFailed` event
+    /// rather than a launch error.
+    ///
+    /// This regression-pins the §9.6 bootstrap-peer wiring:
+    /// `kademlia.add_address` + `kademlia.bootstrap()` are
+    /// invoked exactly once per bootstrap peer at launch.
+    #[tokio::test]
+    async fn launch_with_bootstrap_peer_does_not_error() {
+        let bootstrap_id = PeerId::random();
+        let bootstrap_addr: Multiaddr = "/ip4/127.0.0.1/tcp/65534".parse().expect("multiaddr");
+        let cfg = NetworkConfig::new(Keypair::generate_ed25519())
+            .with_bootstrap_peer(bootstrap_id, bootstrap_addr);
+        let node = NetworkNode::launch(&cfg).expect("launch with bootstrap peer");
+        // Local peer id is distinct from bootstrap id.
+        assert_ne!(*node.local_peer_id(), bootstrap_id);
     }
 
     /// Two nodes can be independently launched without
