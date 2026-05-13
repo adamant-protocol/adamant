@@ -1,0 +1,23 @@
+[package]
+name = "adamant-node"
+description = "Adamant validator node library + binary. Phase 9 deliverable: the long-running daemon that wires the §8 consensus core (adamant-consensus) + §9 networking layer (adamant-network) into a single validator process. The library surface (`NodeRuntime`, `NodeConfig`) is consumable by tests + simulators; the binary entry point (`adamant-node`) is the production daemon. Phase 9 (this commit) ships the scaffolding wiring; cross-layer integration with the §6 execution layer + §5 state layer lands at Phase 9+ when Phase 4 + Phase 5/6 finish."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+adamant-consensus = { path = "../adamant-consensus" }
+adamant-network = { path = "../adamant-network" }
+serde = { workspace = true }
+bcs = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "adamant-node"
+path = "src/main.rs"

@@ -100,6 +100,16 @@ pub use anti_dos::{
 pub use mempool::{InsertOutcome, Mempool, MempoolError, DEFAULT_MEMPOOL_CAPACITY};
 pub use node::{AdamantBehaviour, NetworkConfig, NetworkError, NetworkEvent, NetworkNode};
 
+/// Re-exports of the libp2p types Adamant consumers most
+/// commonly need at the boundary (peer ids, multiaddrs,
+/// keypair). Consumers MAY import these via
+/// `adamant_network::libp2p::*` to avoid pulling libp2p as a
+/// direct dep.
+pub mod libp2p_re {
+    pub use libp2p::identity::Keypair;
+    pub use libp2p::{Multiaddr, PeerId};
+}
+
 /// Adamant network protocol version. Distinct from a
 /// transaction's per-version field (the
 /// [`NetworkTransaction::version`] byte): this is the wire-

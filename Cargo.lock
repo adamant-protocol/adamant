@@ -114,6 +114,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "adamant-node"
+version = "0.0.1"
+dependencies = [
+ "adamant-consensus",
+ "adamant-network",
+ "bcs",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "adamant-privacy"
 version = "0.0.1"
 dependencies = [
