@@ -117,7 +117,11 @@ pub use schedule::{
     EPOCH_DURATION_TARGET_MS, QUORUM_DENOMINATOR, QUORUM_NUMERATOR, ROUNDS_PER_EPOCH,
     ROUND_DURATION_TARGET_MS,
 };
-pub use slashing::{slashing_penalty_basis_points, SlashOffence, BASIS_POINTS_DENOMINATOR};
+pub use slashing::{
+    apply_slashing, slashing_penalty_basis_points, verify_equivocation_evidence,
+    verify_liveness_failure_evidence, SlashOffence, SlashingError, SlashingEvidence,
+    SlashingOutcome, BASIS_POINTS_DENOMINATOR,
+};
 pub use slot::{Slot, SlotId, SlotStatus, SlotTransfer};
 pub use tier::SecurityTier;
 pub use validator::{Stake, Validator, MIN_VALIDATOR_STAKE_LAUNCH};
