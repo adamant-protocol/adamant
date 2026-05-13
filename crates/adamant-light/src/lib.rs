@@ -64,14 +64,16 @@ use adamant_consensus::{
 };
 use adamant_network::libp2p_re::{Keypair as NetworkKeypair, Multiaddr, PeerId};
 use adamant_network::{NetworkConfig, NetworkError, NetworkNode};
-use adamant_privacy::epoch_recursion::{verify_envelope, EpochRecursionError};
+use adamant_privacy::epoch_recursion::{verify_envelope_with_commitment, EpochRecursionError};
 use adamant_privacy::recursive_proof::RecursiveProofEnvelope;
 use adamant_state::{verify_membership, verify_non_membership, MerkleProof, StateKey};
 
 /// Re-exports of the recursive-proof types light-client
 /// consumers most commonly need at the boundary.
 pub mod recursion_re {
-    pub use adamant_privacy::epoch_recursion::{verify_envelope, EpochRecursionError};
+    pub use adamant_privacy::epoch_recursion::{
+        verify_envelope, verify_envelope_with_commitment, EpochRecursionError,
+    };
     pub use adamant_privacy::recursive_proof::{
         ProofCadence, RecursiveProof, RecursiveProofEnvelope, RecursiveProofPublicInputs,
     };
@@ -298,13 +300,34 @@ impl LightNodeRuntime {
     /// Advance the light client by one epoch boundary
     /// **with** recursive-proof verification per §8.9.
     ///
-    /// Phase 9.3 cross-layer wiring: invokes
-    /// [`adamant_privacy::epoch_recursion::verify_envelope`]
-    /// to cryptographically validate the supplied recursive-
-    /// proof envelope before advancing the light client
-    /// state. This is the §8.9 light-client-grade advance —
-    /// no trust in the boundary's claimed commitments; the
-    /// proof attests directly to the chain-state transition.
+    /// Phase 9.3 + pre-Phase-10 audit closure cross-layer
+    /// wiring: invokes
+    /// [`adamant_privacy::epoch_recursion::verify_envelope_with_commitment`]
+    /// to (1) check that the supplied envelope's canonical
+    /// commitment matches the chain-attested
+    /// `boundary.proof_commitment`, and (2) cryptographically
+    /// validate the recursive proof's accumulator-identity
+    /// property. Both checks must pass before the boundary is
+    /// admitted.
+    ///
+    /// This is the §8.9 light-client-grade advance — no trust
+    /// in the boundary's claimed commitments or in the
+    /// envelope alone; the bound check is what ties the
+    /// envelope to the chain's authenticated commitment, and
+    /// the accumulator check is what proves the underlying
+    /// recursion is sound.
+    ///
+    /// # Why this matters (Crypto C-1 remediation)
+    ///
+    /// Before this binding, `verify_envelope` checked only the
+    /// accumulator identity. A malicious service node could
+    /// supply an envelope whose `public_inputs` were fabricated
+    /// under a valid-but-unrelated accumulator (e.g., the
+    /// trivial empty/identity accumulator), and the light
+    /// client would accept forged chain-state commitments.
+    /// The commitment binding here closes that gap: the
+    /// envelope must match the chain-attested commitment
+    /// before any other check runs.
     ///
     /// Per §8.5.5 the verification is fast (~50–200ms on a
     /// modern smartphone); this is what makes light clients
@@ -312,8 +335,9 @@ impl LightNodeRuntime {
     ///
     /// # Errors
     ///
-    /// - [`LightNodeError::RecursiveProof`] if the recursive
-    ///   proof fails verification.
+    /// - [`LightNodeError::RecursiveProof`] if either the
+    ///   commitment mismatch fires or the recursive proof
+    ///   fails accumulator verification.
     /// - [`LightNodeError::LightClient`] if the epoch boundary
     ///   itself fails monotonicity / no-gap checks.
     pub fn verify_and_advance(
@@ -321,10 +345,15 @@ impl LightNodeRuntime {
         boundary: EpochBoundary,
         proof: &RecursiveProofEnvelope,
     ) -> Result<(), LightNodeError> {
-        // Verify the recursive proof first; reject the
-        // advance if it fails.
-        verify_envelope(proof)?;
-        // Recursive proof checks out; advance state.
+        // Bound check: the envelope must commit to the chain-
+        // attested `proof_commitment` from the boundary. The
+        // boundary itself is consensus-attested at the next
+        // epoch (the next recursive proof attests this
+        // boundary's state); matching the commitment means the
+        // envelope is the one the chain committed to.
+        let expected = *boundary.proof_commitment.as_bytes();
+        verify_envelope_with_commitment(proof, &expected)?;
+        // Both checks passed; advance state.
         self.state.advance(boundary)?;
         Ok(())
     }

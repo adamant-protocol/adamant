@@ -39,8 +39,8 @@
 #![forbid(unsafe_code)]
 
 use adamant_consensus::{
-    ValidatorId, ValidatorPublicKeys, BLS_PUBLIC_KEY_BYTES, ED25519_PUBLIC_KEY_BYTES,
-    ML_DSA_PUBLIC_KEY_BYTES,
+    ValidatorId, ValidatorPublicKeys, BLS_PUBLIC_KEY_BYTES, BLS_SIGNATURE_BYTES,
+    ED25519_PUBLIC_KEY_BYTES, ML_DSA_PUBLIC_KEY_BYTES,
 };
 use adamant_crypto::bls;
 
@@ -63,16 +63,25 @@ pub enum Command {
 
     /// Derive the §8.1.2 `ValidatorId` from a public-key
     /// bundle in hex. Each component is hex-encoded; total
-    /// canonical bundle size is 32 (Ed25519) + 1952 (ML-DSA-65)
-    /// + 96 (BLS) = 2,080 bytes.
+    /// canonical bundle size is 32+1952+96+48 = 2,128 bytes
+    /// (Ed25519+`ML-DSA-65`+BLS+`PoP`) post the pre-Phase-10
+    /// audit Crypto C-2 remediation.
     KeysDeriveValidatorId {
         /// Hex-encoded Ed25519 public key (32 bytes).
         ed25519_hex: String,
-        /// Hex-encoded ML-DSA-65 public key (1952 bytes).
+        /// Hex-encoded `ML-DSA-65` public key (1952 bytes).
         ml_dsa_hex: String,
         /// Hex-encoded BLS12-381 G1 compressed public key
         /// (96 bytes).
         bls_hex: String,
+        /// Hex-encoded BLS12-381 proof-of-possession signature
+        /// (48 bytes) — see
+        /// `adamant_consensus::compute_bls_pop_message` for the
+        /// canonical `PoP` message construction. The `PoP` binds
+        /// the BLS public key to the rest of the validator
+        /// bundle; without it BLS aggregate verification is
+        /// vulnerable to the rogue-key attack (§3.4.3).
+        bls_pop_hex: String,
     },
 }
 
@@ -166,6 +175,7 @@ pub fn execute(cmd: &Command) -> Result<CommandOutput, CliError> {
             ed25519_hex,
             ml_dsa_hex,
             bls_hex,
+            bls_pop_hex,
         } => {
             let ed25519_bytes =
                 hex::decode(ed25519_hex).map_err(|e| CliError::HexDecodeFailed {
@@ -180,6 +190,11 @@ pub fn execute(cmd: &Command) -> Result<CommandOutput, CliError> {
                 component: "bls",
                 reason: e.to_string(),
             })?;
+            let bls_pop_bytes =
+                hex::decode(bls_pop_hex).map_err(|e| CliError::HexDecodeFailed {
+                    component: "bls_pop",
+                    reason: e.to_string(),
+                })?;
             if ed25519_bytes.len() != ED25519_PUBLIC_KEY_BYTES {
                 return Err(CliError::PublicKeyWidthMismatch {
                     component: "ed25519",
@@ -201,13 +216,22 @@ pub fn execute(cmd: &Command) -> Result<CommandOutput, CliError> {
                     expected: BLS_PUBLIC_KEY_BYTES,
                 });
             }
+            if bls_pop_bytes.len() != BLS_SIGNATURE_BYTES {
+                return Err(CliError::PublicKeyWidthMismatch {
+                    component: "bls_pop",
+                    actual: bls_pop_bytes.len(),
+                    expected: BLS_SIGNATURE_BYTES,
+                });
+            }
             let mut ed25519 = [0u8; ED25519_PUBLIC_KEY_BYTES];
             ed25519.copy_from_slice(&ed25519_bytes);
             let mut ml_dsa = [0u8; ML_DSA_PUBLIC_KEY_BYTES];
             ml_dsa.copy_from_slice(&ml_dsa_bytes);
             let mut bls = [0u8; BLS_PUBLIC_KEY_BYTES];
             bls.copy_from_slice(&bls_bytes);
-            let pubkeys = ValidatorPublicKeys::new(ed25519, ml_dsa, bls);
+            let mut bls_pop = [0u8; BLS_SIGNATURE_BYTES];
+            bls_pop.copy_from_slice(&bls_pop_bytes);
+            let pubkeys = ValidatorPublicKeys::new(ed25519, ml_dsa, bls, bls_pop);
             let validator_id: ValidatorId = pubkeys.derive_id();
             Ok(CommandOutput {
                 stdout: format!("validator_id: {}\n", hex::encode(validator_id.as_bytes())),
@@ -233,6 +257,7 @@ pub fn parse_args(args: &[String]) -> Option<Command> {
                 ed25519_hex: args.get(2)?.clone(),
                 ml_dsa_hex: args.get(3)?.clone(),
                 bls_hex: args.get(4)?.clone(),
+                bls_pop_hex: args.get(5)?.clone(),
             }),
             _ => None,
         },
@@ -256,10 +281,12 @@ COMMANDS:
         IKM_HEX is the hex-encoded 32+-byte initial-key-material
         seed; production callers MUST source this from a CSPRNG.
 
-    keys derive-validator-id <ED25519_HEX> <ML_DSA_HEX> <BLS_HEX>
+    keys derive-validator-id <ED25519_HEX> <ML_DSA_HEX> <BLS_HEX> <BLS_POP_HEX>
         Compute the §8.1.2 ValidatorId from a public-key
         bundle. Each component is hex-encoded; widths must
-        match the §3.4 spec (32 / 1952 / 96 bytes).
+        match the §3.4 spec (32 / 1952 / 96 / 48 bytes).
+        BLS_POP_HEX is the BLS proof-of-possession signature
+        per §3.4.3 + Crypto C-2 remediation.
 
 PHASE 9.1 SCOPE:
     Offline operator tools only. Networking RPC subcommands
@@ -307,12 +334,14 @@ mod tests {
             [1u8; ED25519_PUBLIC_KEY_BYTES],
             [1u8; ML_DSA_PUBLIC_KEY_BYTES],
             [1u8; BLS_PUBLIC_KEY_BYTES],
+            [1u8; BLS_SIGNATURE_BYTES],
         );
         let expected = pubkeys.derive_id();
         let cmd = Command::KeysDeriveValidatorId {
             ed25519_hex: hex::encode([1u8; ED25519_PUBLIC_KEY_BYTES]),
             ml_dsa_hex: hex::encode([1u8; ML_DSA_PUBLIC_KEY_BYTES]),
             bls_hex: hex::encode([1u8; BLS_PUBLIC_KEY_BYTES]),
+            bls_pop_hex: hex::encode([1u8; BLS_SIGNATURE_BYTES]),
         };
         let out = execute(&cmd).expect("ok");
         let expected_hex = hex::encode(expected.as_bytes());
@@ -330,6 +359,7 @@ mod tests {
             ed25519_hex: hex::encode([1u8; 16]), // wrong: 16 not 32
             ml_dsa_hex: hex::encode([1u8; ML_DSA_PUBLIC_KEY_BYTES]),
             bls_hex: hex::encode([1u8; BLS_PUBLIC_KEY_BYTES]),
+            bls_pop_hex: hex::encode([1u8; BLS_SIGNATURE_BYTES]),
         };
         let err = execute(&cmd).expect_err("must reject");
         match err {
@@ -349,6 +379,7 @@ mod tests {
             ed25519_hex: "not-valid-hex".to_string(),
             ml_dsa_hex: hex::encode([1u8; ML_DSA_PUBLIC_KEY_BYTES]),
             bls_hex: hex::encode([1u8; BLS_PUBLIC_KEY_BYTES]),
+            bls_pop_hex: hex::encode([1u8; BLS_SIGNATURE_BYTES]),
         };
         let err = execute(&cmd).expect_err("must reject");
         assert!(matches!(err, CliError::HexDecodeFailed { .. }));

@@ -289,7 +289,7 @@ pub fn commit(
 /// whitepaper §7.3.2 statement 4: a public `(asset_type,
 /// amount)` pair contributing `amount · V_τ` to the
 /// balance left-hand side.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FeeEntry {
     /// Asset type the fee is paid in.
     pub asset_type: TypeId,

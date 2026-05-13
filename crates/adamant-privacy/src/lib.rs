@@ -45,6 +45,7 @@
 #![forbid(unsafe_code)]
 
 pub mod assertion;
+pub mod binding_sig;
 pub mod circuit;
 pub mod encrypted_note;
 pub mod epoch_recursion;

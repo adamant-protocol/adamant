@@ -338,13 +338,14 @@ mod tests {
     // NetworkKeypair already imported from adamant_network at the module level.
 
     fn fixture_validator_identity() -> ValidatorPublicKeys {
-        ValidatorPublicKeys::new([1u8; 32], [1u8; 1952], [1u8; 96])
+        ValidatorPublicKeys::new([1u8; 32], [1u8; 1952], [1u8; 96], [1u8; 48])
     }
 
     fn fixture_active_set() -> ActiveSet {
         let mut s = ActiveSet::new();
         for seed in 1..=7u8 {
-            let id = ValidatorPublicKeys::new([seed; 32], [seed; 1952], [seed; 96]).derive_id();
+            let id = ValidatorPublicKeys::new([seed; 32], [seed; 1952], [seed; 96], [seed; 48])
+                .derive_id();
             s.register(id, EpochNumber::default()).expect("register");
         }
         s

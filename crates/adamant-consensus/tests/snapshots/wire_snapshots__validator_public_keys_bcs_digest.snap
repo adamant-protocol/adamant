@@ -2,4 +2,4 @@
 source: crates/adamant-consensus/tests/wire_snapshots.rs
 expression: "hex::encode(digest)"
 ---
-65713810bfa73134b2aa669c5c6717e959e67243d53e6c25e7395ca92ee90cc9
+b29a39fa4a34fd173d00f30805f340748d6a1630ca194a6b91ee11803842b215

@@ -94,6 +94,15 @@ pub enum ActiveSetError {
     /// registered `Validator` record before the transfer can
     /// complete.
     BuyerNotRegistered,
+    /// BLS proof-of-possession verification failed at
+    /// registration time. Per §3.4.3 + the Crypto C-2
+    /// remediation, every validator MUST present a valid PoP
+    /// signature binding their BLS public key to the rest of
+    /// their key material; without PoP, BLS aggregate
+    /// verification is vulnerable to the rogue-key attack.
+    /// The validator is NOT admitted; the caller is expected
+    /// to reject the registration outright.
+    InvalidProofOfPossession(crate::identity::PopError),
 }
 
 impl core::fmt::Display for ActiveSetError {
@@ -103,6 +112,10 @@ impl core::fmt::Display for ActiveSetError {
             Self::NotRegistered => f.write_str("validator not registered"),
             Self::UnknownSlot => f.write_str("slot id not found"),
             Self::BuyerNotRegistered => f.write_str("slot-transfer buyer is not registered"),
+            Self::InvalidProofOfPossession(e) => write!(
+                f,
+                "validator registration rejected: invalid BLS proof-of-possession: {e}"
+            ),
         }
     }
 }
@@ -245,11 +258,52 @@ impl ActiveSet {
         self.standby.iter().any(|s| s.validator_id == validator_id)
     }
 
-    /// Register a new validator. Implements §8.1.3 FCFS
-    /// admission: if `active.len() < ceiling`, the validator
-    /// goes into the active set with [`SlotStatus::Active`];
-    /// otherwise they go to the back of the standby queue with
-    /// [`SlotStatus::Standby`].
+    /// Register a new validator's [`crate::ValidatorPublicKeys`]
+    /// bundle, verifying the bundled BLS proof-of-possession
+    /// before admission per the §3.4.3 + Crypto C-2
+    /// remediation.
+    ///
+    /// This is the consensus-binding registration path. The
+    /// `ValidatorId` is derived from the bundle and used to
+    /// admit the validator into either the active set (FCFS at
+    /// or below ceiling) or the standby queue.
+    ///
+    /// # Errors
+    ///
+    /// - [`ActiveSetError::InvalidProofOfPossession`] if the
+    ///   bundle's PoP doesn't verify. The validator is NOT
+    ///   admitted; this is the canonical rogue-key-attack
+    ///   defence point.
+    /// - [`ActiveSetError::AlreadyRegistered`] if the
+    ///   validator (by id) is already in the active set or
+    ///   standby queue.
+    pub fn register_with_pop(
+        &mut self,
+        keys: &crate::identity::ValidatorPublicKeys,
+        registered_at_epoch: EpochNumber,
+    ) -> Result<SlotId, ActiveSetError> {
+        keys.verify_pop()
+            .map_err(ActiveSetError::InvalidProofOfPossession)?;
+        self.register(keys.derive_id(), registered_at_epoch)
+    }
+
+    /// Register a new validator by `ValidatorId` directly,
+    /// **without** the §3.4.3 PoP check. Reserved for paths
+    /// that already verified PoP at a higher layer (e.g.,
+    /// deserialising an on-chain `Validator` record that was
+    /// admitted under an earlier `register_with_pop` call) and
+    /// for test fixtures that don't exercise the PoP path.
+    ///
+    /// Production-path callers SHOULD invoke
+    /// [`Self::register_with_pop`] instead; this method is
+    /// retained for backward compatibility with fixture code
+    /// that builds an `ActiveSet` from a synthetic validator-id
+    /// without going through the full keypair bundle.
+    ///
+    /// Implements §8.1.3 FCFS admission: if `active.len() <
+    /// ceiling`, the validator goes into the active set with
+    /// [`SlotStatus::Active`]; otherwise they go to the back of
+    /// the standby queue with [`SlotStatus::Standby`].
     ///
     /// Returns the assigned [`SlotId`].
     ///
@@ -774,5 +828,56 @@ mod tests {
             set.register(vid(i), EpochNumber::new(0)).unwrap();
         }
         assert_eq!(set.tier(), Some(SecurityTier::Tier3));
+    }
+
+    // ---------- Crypto C-2 remediation: register_with_pop ----------
+
+    /// `register_with_pop` admits a validator whose bundle
+    /// carries a valid PoP.
+    #[test]
+    fn register_with_pop_admits_honest_validator() {
+        use crate::identity::ValidatorPublicKeys;
+        let sk = adamant_crypto::bls::SecretKey::from_ikm(&[0x77; 32]).expect("bls");
+        let keys = ValidatorPublicKeys::with_pop(
+            [0x11; 32],
+            [0x22; 1952],
+            sk.public_key().to_bytes(),
+            &sk,
+        )
+        .expect("ok");
+        let mut set = ActiveSet::new();
+        set.register_with_pop(&keys, EpochNumber::new(0))
+            .expect("honest validator must be admitted");
+        assert_eq!(set.active_size(), 1);
+    }
+
+    /// `register_with_pop` REJECTS a validator whose bundle
+    /// carries a forged or otherwise-invalid PoP — the canonical
+    /// rogue-key-attack defence point.
+    #[test]
+    fn register_with_pop_rejects_invalid_pop() {
+        use crate::identity::ValidatorPublicKeys;
+        let sk_target = adamant_crypto::bls::SecretKey::from_ikm(&[0xAA; 32]).expect("target");
+        let sk_attacker = adamant_crypto::bls::SecretKey::from_ikm(&[0xBB; 32]).expect("attacker");
+        // Attacker constructs a bundle advertising the target's
+        // BLS public key with a PoP signed under their own secret.
+        let ed = [0x11; 32];
+        let ml = [0x22; 1952];
+        let pop_message =
+            crate::identity::compute_bls_pop_message(&ed, &ml, &sk_target.public_key().to_bytes());
+        let forged_pop = sk_attacker.sign(&pop_message);
+        let attack_bundle = ValidatorPublicKeys::new(
+            ed,
+            ml,
+            sk_target.public_key().to_bytes(),
+            forged_pop.to_bytes(),
+        );
+        let mut set = ActiveSet::new();
+        let err = set
+            .register_with_pop(&attack_bundle, EpochNumber::new(0))
+            .expect_err("must reject rogue-key bundle");
+        assert!(matches!(err, ActiveSetError::InvalidProofOfPossession(_)));
+        // State unchanged.
+        assert_eq!(set.active_size(), 0);
     }
 }

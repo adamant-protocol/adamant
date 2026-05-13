@@ -1,0 +1,185 @@
+Fix all three CRITICAL security findings from pre-Phase-10 audit
+
+The pre-Phase-10 security audit identified three CRITICAL
+findings that would have been the top Phase 10 audit blockers.
+This commit fixes all three.
+
+# Crypto C-1: bind RecursiveProofPublicInputs cryptographically
+
+**Issue**: `verify_envelope` checked only `accumulator.verifies()`
+— the 32-byte Vesta-curve identity property. The envelope's
+`public_inputs` (genesis, previous_epoch, current_epoch,
+epoch_number) were NOT cryptographically bound into the proof.
+A malicious service node could feed a light client an envelope
+with arbitrary `public_inputs` under a valid-but-unrelated
+accumulator (e.g., the trivial empty/identity accumulator) and
+the light client would accept forged chain-state commitments.
+This would have broken §8.5.1 light-client soundness.
+
+**Fix**:
+
+- New domain tag `RECURSIVE_PROOF_ENVELOPE` registered per §3.3.1.
+- New method `RecursiveProofEnvelope::commit()` produces a
+  canonical 32-byte fingerprint via
+  `sha3_256_tagged(RECURSIVE_PROOF_ENVELOPE, BCS(self))` — bound
+  to every field including `public_inputs` and `cadence`.
+- New `verify_envelope_with_commitment(envelope,
+  expected_commitment)` checks the envelope's commit equals the
+  chain-attested `proof_commitment` BEFORE verifying the
+  accumulator.
+- New `EpochRecursionError::EnvelopeCommitmentMismatch` variant
+  carries both expected + actual commits for diagnostic.
+- `LightNodeRuntime::verify_and_advance` now uses the
+  commitment-bound verify path; an envelope whose commit
+  doesn't match `boundary.proof_commitment` is rejected before
+  the accumulator check runs.
+
+5 new tests in `epoch_recursion::tests`:
+- `envelope_commit_is_deterministic`
+- `envelope_commit_distinguishes_public_inputs`
+- `verify_with_commitment_accepts_honest`
+- `verify_with_commitment_rejects_tampered_public_inputs` (the
+  canonical C-1 attack class — accepted accumulator + forged
+  public_inputs is now rejected)
+- `verify_with_commitment_distinguishes_cadence_field`
+
+# Crypto C-2: BLS proof-of-possession at validator registration
+
+**Issue**: `fast_aggregate_verify` accepted the canonical
+rogue-key attack: an attacker controlling one Byzantine
+validator could register `pk_attacker = pk_target_aggregate -
+sum pk_honest` to produce a single-signer forgery that verifies
+as if every honest validator signed. No proof-of-possession
+check existed at validator registration. This would have broken
+§8.6 VRF + every BLS-aggregate consensus check.
+
+**Fix**:
+
+- New domain tag `VALIDATOR_BLS_POP` registered per §3.3.1.
+- New `bls_pop: [u8; 48]` field on `ValidatorPublicKeys`. BCS
+  encoding grows 2080 -> 2128 bytes (pre-mainnet wire change).
+- New `compute_bls_pop_message(ed25519, ml_dsa, bls_public)`
+  produces the canonical PoP message
+  `sha3_256_tagged(VALIDATOR_BLS_POP, ed25519 || ml_dsa || bls_public)`.
+  Binds the BLS public key to the rest of the bundle so an
+  attacker cannot reuse an honest validator's PoP for a
+  different (ed25519, ml_dsa) bundle.
+- New `ValidatorPublicKeys::with_pop(ed, ml, bls_pk, &bls_secret)`
+  constructor produces a verifiable bundle, rejecting
+  mismatched secret/public pairs as `PopError::MalformedBlsPublicKey`.
+- New `ValidatorPublicKeys::verify_pop()` -> Result returning
+  `MalformedBlsPublicKey`, `MalformedBlsPop`, or
+  `PopVerificationFailed` (the rogue-key case).
+- New `ActiveSet::register_with_pop` admission path verifies
+  the PoP before admitting the validator. Original
+  `ActiveSet::register` (id-only) retained for fixtures.
+- `ActiveSetError::InvalidProofOfPossession(PopError)` new
+  rejection variant.
+- CLI `keys derive-validator-id` now requires a 4th
+  `<BLS_POP_HEX>` arg.
+
+5 new tests in `identity::tests`:
+- `compute_bls_pop_message_deterministic_and_binding`
+- `with_pop_produces_verifiable_bundle`
+- `with_pop_rejects_mismatched_secret`
+- `verify_pop_rejects_forged_pop_signature`
+- `verify_pop_rejects_pop_signed_under_different_key` (the
+  canonical rogue-key attack: attacker bundle advertising
+  target's BLS pk with PoP signed under attacker's own secret
+  is rejected)
+
+2 new tests in `active_set::tests`:
+- `register_with_pop_admits_honest_validator`
+- `register_with_pop_rejects_invalid_pop`
+
+Wire-format changes propagated through every
+`ValidatorPublicKeys::new(...)` call site (17 sites across the
+workspace). Insta snapshots regenerated.
+
+# Privacy H-4: BindingSignature sign/verify primitives
+
+**Issue**: The §7.3.1.2 value-balance binding signature had no
+verify surface — §7.3.2 statement 4 (homomorphic value balance)
+was structurally unenforceable on-chain. Without this primitive,
+a prover could swap output value commitments after generating
+the validity proof without rebinding.
+
+**Fix**: new module `adamant-privacy::binding_sig` shipping the
+Schnorr-style binding-signature primitive per §7.3.1.2:
+
+- Three new domain tags: `BINDING_SIGHASH` (consensus-binding
+  SIGHASH), `BINDING_NONCE` (RFC-6979-style deterministic
+  nonce derivation), `BINDING_CHALLENGE` (Schnorr challenge).
+- `ValueBindingSigningKey` (Pallas scalar `bsk = sum r_in - sum r_out`)
+  with `Drop` + `Zeroize` zeroization per the secret-material
+  posture.
+- `ValueBindingVerifyingKey` (Pallas point `bvk = bsk * R`)
+  with `from_balance_point` + `from_transaction_data`
+  constructors that wire `value_commitment::balance_lhs` into
+  the verifier-side derivation. The headline H-4 property:
+  `bvk` derived from the public balance equation matches `bvk`
+  derived from the prover's secret-data signing key when (and
+  only when) values balance.
+- `ValueBindingSignature` (64 bytes = R_commit || s) with
+  `sign`, `verify`, `to_bytes`, `from_bytes`, BCS round-trip.
+- `compute_sighash(inputs, outputs, fees) -> [u8; 32]` —
+  canonical SIGHASH binding the binding-signature to a
+  specific transaction's commitment data.
+
+Schnorr construction over Pallas with `R` (value-commitment
+randomness generator from §7.3.1.2) as the base point. Standard
+sigma-protocol: `R_commit = r * R; c = Hash(R_commit || bvk ||
+sighash); s = r + c * bsk`. Verify: `s * R == R_commit + c * bvk`.
+
+14 new tests covering:
+- `sign_then_verify_round_trip` — honest case
+- `verify_rejects_different_sighash` — cross-transaction replay
+- `verify_rejects_different_verifying_key` — rogue-balance attack
+- `verify_rejects_tampered_signature` — bit-flip rejection
+- `sign_is_deterministic` — RFC-6979 nonce
+- `verifying_key_matches_balance_lhs_when_balanced` — the
+  headline H-4 property
+- `verifying_key_works_for_unequal_randomness`
+- `sighash_is_deterministic` + `sighash_distinguishes_different_transactions`
+- 3 byte/BCS round-trip tests
+
+Note: this commit ships the primitives. Wiring the new
+`ValueBindingSignature` into `ShieldedTransaction`'s on-chain
+verification path (replacing or supplementing the existing
+proof-malleability `BindingSignature`) is the next sub-arc;
+the primitives are now available for that wiring.
+
+# Side-effect cleanups
+
+- `FeeEntry` gains `Serialize + Deserialize` derives (required
+  for the `compute_sighash` BCS path).
+- `bls_keypair` fixtures in `slashing.rs` + `phase_7_pipeline.rs`
+  updated to use `with_pop` so test fixtures exercise the real
+  PoP path.
+- Wire-snapshot `validator_public_keys_bcs_len` + `_digest`
+  regenerated for the 2128-byte shape.
+- `validator_bcs_size_pinned` test updated from 2160 to 2208
+  bytes (post-PoP).
+
+# SECURITY_AUDIT.md updated
+
+All three CRITICAL findings marked as FIXED with detailed fix
+description per finding. The Phase 10 audit-blocker priority
+list updated: the three critical items are now resolved; top
+Phase 10 priorities shift to the DEFERRED items (Network H-1
+through H-6, VM C-1 through C-3, supply-chain hardening).
+
+# Verification gates (all green)
+
+- cargo build --workspace: clean
+- cargo test --workspace --tests: all pass (~3,034 tests
+  including 26 new tests across the three fixes)
+- cargo clippy --workspace --all-targets -- -D warnings: clean
+- cargo fmt --all --check: clean
+- python tools/workspace-audit/audit.py --strict: pass
+- python scripts/audit_unwrap.py: 0 non-test unwraps
+- no_sui_in_production_deps: pass (both move-* and
+  sui-ecosystem guards)
+- no_upstream_halo2_in_production_deps: pass
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>

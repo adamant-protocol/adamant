@@ -393,7 +393,7 @@ mod tests {
     use adamant_consensus::{VertexBuilder, VertexSignature, BLS_SIGNATURE_BYTES};
 
     fn fixture_validator_id() -> ValidatorId {
-        ValidatorPublicKeys::new([1u8; 32], [1u8; 1952], [1u8; 96]).derive_id()
+        ValidatorPublicKeys::new([1u8; 32], [1u8; 1952], [1u8; 96], [1u8; 48]).derive_id()
     }
 
     fn fixture_vertex() -> Vertex {

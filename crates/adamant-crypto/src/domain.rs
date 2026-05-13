@@ -705,6 +705,82 @@ pub static STATE_MERKLE_NODE: DomainTag = DomainTag::new(b"ADAMANT-v1-state-merk
 /// Registered at Phase 4 backfill.
 pub static STATE_MERKLE_VALUE: DomainTag = DomainTag::new(b"ADAMANT-v1-state-merkle-value");
 
+/// Domain tag for §8.5 recursive-proof-envelope commitments.
+/// `envelope_commitment = sha3_256_tagged(RECURSIVE_PROOF_ENVELOPE, BCS(envelope))`.
+///
+/// Binds the envelope's `proof` + `public_inputs` + `cadence`
+/// fields into a single 32-byte commitment that the §8.9 light-
+/// client surface checks against the chain-state-published
+/// `proof_commitment` in the [`EpochBoundary`]. Without this
+/// commitment binding, a malicious service node could feed a
+/// light client an envelope whose `public_inputs` were
+/// fabricated under a valid-but-unrelated accumulator — breaking
+/// §8.5.1 soundness.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at the pre-Phase-10 audit closure (Crypto C-1
+/// remediation).
+///
+/// [`EpochBoundary`]: crate
+pub static RECURSIVE_PROOF_ENVELOPE: DomainTag =
+    DomainTag::new(b"ADAMANT-v1-recursive-proof-envelope");
+
+/// Domain tag for §8.1.1 validator BLS proof-of-possession
+/// (`PoP`) signatures. The `PoP` signs
+/// `sha3_256_tagged(VALIDATOR_BLS_POP, BCS(ed25519 || ml_dsa || bls_public))`
+/// under the validator's BLS secret key, providing a
+/// cryptographic attestation that the validator controls the
+/// BLS secret corresponding to their advertised BLS public key.
+///
+/// Without `PoP`, BLS aggregate verification accepts the canonical
+/// rogue-key attack: an attacker registering
+/// `pk_attacker = pk_target_aggregate - Σ pk_honest` can forge
+/// single-signer aggregates that verify as if every honest
+/// validator signed. Per §3.4.3 + §8.6, the `PoP` is required at
+/// validator registration time.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at the pre-Phase-10 audit closure (Crypto C-2
+/// remediation).
+pub static VALIDATOR_BLS_POP: DomainTag = DomainTag::new(b"ADAMANT-v1-validator-bls-pop");
+
+/// Domain tag for §7.3.1.2 binding-signature SIGHASH
+/// derivation. The binding signature signs
+/// `sha3_256_tagged(BINDING_SIGHASH, BCS(input_commitments || output_commitments || public_amount))`
+/// under the secret-key `bsk = Σ r_in - Σ r_out` such that the
+/// signature is verifiable against the homomorphic balance
+/// point `bvk = bsk · R`. The binding ensures input/output
+/// value commitments cannot be swapped after the validity
+/// proof is generated (the binding signature would no longer
+/// verify under the new commitments' implied `bvk`).
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at the pre-Phase-10 audit closure (Privacy H-4
+/// remediation).
+pub static BINDING_SIGHASH: DomainTag = DomainTag::new(b"ADAMANT-v1-binding-sighash");
+
+/// Domain tag for the deterministic-nonce derivation inside
+/// the §7.3.1.2 binding-signature signing path:
+/// `r = HashToScalar(BINDING_NONCE, bsk_bytes || sighash, 64)`.
+/// RFC-6979-style determinism that removes the
+/// nonce-reuse footgun without requiring an external CSPRNG.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at the pre-Phase-10 audit closure (Privacy H-4
+/// remediation).
+pub static BINDING_NONCE: DomainTag = DomainTag::new(b"ADAMANT-v1-binding-nonce");
+
+/// Domain tag for the Schnorr-challenge derivation inside the
+/// §7.3.1.2 binding-signature verify path:
+/// `c = HashToScalar(BINDING_CHALLENGE, R_commit || bvk || sighash, 64)`.
+/// Distinct from `BINDING_NONCE` so nonce and challenge cannot
+/// collide across the binding-signature transcript surface.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at the pre-Phase-10 audit closure (Privacy H-4
+/// remediation).
+pub static BINDING_CHALLENGE: DomainTag = DomainTag::new(b"ADAMANT-v1-binding-challenge");
+
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and
 /// test-vector regressions.
@@ -768,6 +844,11 @@ mod uniqueness_tests {
             &STATE_MERKLE_LEAF,
             &STATE_MERKLE_NODE,
             &STATE_MERKLE_VALUE,
+            &RECURSIVE_PROOF_ENVELOPE,
+            &VALIDATOR_BLS_POP,
+            &BINDING_SIGHASH,
+            &BINDING_NONCE,
+            &BINDING_CHALLENGE,
         ]
     }
 

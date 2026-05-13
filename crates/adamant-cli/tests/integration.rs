@@ -8,7 +8,8 @@
 
 use adamant_cli::{execute, parse_args, CliError, Command, HELP_TEXT};
 use adamant_consensus::{
-    ValidatorPublicKeys, BLS_PUBLIC_KEY_BYTES, ED25519_PUBLIC_KEY_BYTES, ML_DSA_PUBLIC_KEY_BYTES,
+    ValidatorPublicKeys, BLS_PUBLIC_KEY_BYTES, BLS_SIGNATURE_BYTES, ED25519_PUBLIC_KEY_BYTES,
+    ML_DSA_PUBLIC_KEY_BYTES,
 };
 
 /// `version` round-trip: parse + execute the version command,
@@ -77,13 +78,15 @@ fn derive_validator_id_matches_direct_derivation() {
     let ed25519 = [0x11; ED25519_PUBLIC_KEY_BYTES];
     let ml_dsa = [0x22; ML_DSA_PUBLIC_KEY_BYTES];
     let bls = [0x33; BLS_PUBLIC_KEY_BYTES];
-    let pubkeys = ValidatorPublicKeys::new(ed25519, ml_dsa, bls);
+    let bls_pop = [0x44; BLS_SIGNATURE_BYTES];
+    let pubkeys = ValidatorPublicKeys::new(ed25519, ml_dsa, bls, bls_pop);
     let expected_id = pubkeys.derive_id();
 
     let cmd = Command::KeysDeriveValidatorId {
         ed25519_hex: hex::encode(ed25519),
         ml_dsa_hex: hex::encode(ml_dsa),
         bls_hex: hex::encode(bls),
+        bls_pop_hex: hex::encode(bls_pop),
     };
     let out = execute(&cmd).expect("execute");
 
@@ -106,6 +109,7 @@ fn derive_validator_id_rejects_wrong_ed25519_width() {
         ed25519_hex: hex::encode([0x11; 16]), // too short
         ml_dsa_hex: hex::encode([0x22; ML_DSA_PUBLIC_KEY_BYTES]),
         bls_hex: hex::encode([0x33; BLS_PUBLIC_KEY_BYTES]),
+        bls_pop_hex: hex::encode([0x44; BLS_SIGNATURE_BYTES]),
     };
     let err = execute(&cmd).expect_err("expected width mismatch");
     match err {
@@ -130,6 +134,7 @@ fn derive_validator_id_rejects_wrong_ml_dsa_width() {
         ed25519_hex: hex::encode([0x11; ED25519_PUBLIC_KEY_BYTES]),
         ml_dsa_hex: hex::encode([0x22; 100]), // wrong
         bls_hex: hex::encode([0x33; BLS_PUBLIC_KEY_BYTES]),
+        bls_pop_hex: hex::encode([0x44; BLS_SIGNATURE_BYTES]),
     };
     let err = execute(&cmd).expect_err("expected width mismatch");
     assert!(matches!(
@@ -148,6 +153,7 @@ fn derive_validator_id_rejects_wrong_bls_width() {
         ed25519_hex: hex::encode([0x11; ED25519_PUBLIC_KEY_BYTES]),
         ml_dsa_hex: hex::encode([0x22; ML_DSA_PUBLIC_KEY_BYTES]),
         bls_hex: hex::encode([0x33; 20]), // wrong
+        bls_pop_hex: hex::encode([0x44; BLS_SIGNATURE_BYTES]),
     };
     let err = execute(&cmd).expect_err("expected width mismatch");
     assert!(matches!(
@@ -166,6 +172,7 @@ fn derive_validator_id_rejects_invalid_hex() {
         ed25519_hex: "not-valid-hex!!".to_string(),
         ml_dsa_hex: hex::encode([0x22; ML_DSA_PUBLIC_KEY_BYTES]),
         bls_hex: hex::encode([0x33; BLS_PUBLIC_KEY_BYTES]),
+        bls_pop_hex: hex::encode([0x44; BLS_SIGNATURE_BYTES]),
     };
     let err = execute(&cmd).expect_err("expected hex error");
     assert!(matches!(

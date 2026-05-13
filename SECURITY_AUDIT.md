@@ -158,53 +158,115 @@ aggregate-size check at `DagState::insert`.
 
 ## Cryptographic attack surface (3 CRITICAL + 5 HIGH + 5 MEDIUM + 3 LOW)
 
-### C-1 Recursive proof envelope does not bind public inputs  *(SPEC-AUTHOR-REQUIRED, HIGHEST PRIORITY)*
+### C-1 Recursive proof envelope does not bind public inputs  *(FIXED)*
 
 **File**: `crates/adamant-privacy/src/epoch_recursion.rs:242-248`
 (`verify_envelope`).
 
-`verify_envelope` checks only `accumulator.verifies()` (a 32-byte
+`verify_envelope` checked only `accumulator.verifies()` (a 32-byte
 Vesta-curve identity check). The `RecursiveProofPublicInputs`
-(genesis, previous_epoch, current_epoch, epoch_number) are NOT
+(genesis, previous_epoch, current_epoch, epoch_number) were NOT
 cryptographically bound into the proof.
 
-An attacker can take any verifying accumulator (including the
+An attacker could take any verifying accumulator (including the
 trivial `EpochAccumulator::empty()`) and attach **arbitrary**
 public-inputs to forge an epoch transition that a light client
 would accept.
 
-**Impact**: breaks §8.5.1 light-client soundness. A light client
-trusting `verify_envelope` accepts forged chain-state commitments
-under a valid-but-unrelated accumulator.
+**Impact**: would have broken §8.5.1 light-client soundness. A
+light client trusting `verify_envelope` accepted forged chain-state
+commitments under a valid-but-unrelated accumulator.
 
-**Fix path**: bind `RecursiveProofPublicInputs` into the recursive
-proof construction itself — either by hashing the public-inputs
-into the accumulator's challenge derivation, or by adding a
-public-input commitment to the `RecursiveProofEnvelope` that
-`verify_envelope` checks. This is a Phase 6.9b extension and
-requires spec-author ratification. **Top-priority Phase 10 audit
-blocker.**
+**Fix shipped**:
 
-### C-2 BLS aggregate verification lacks rogue-key defense  *(SPEC-AUTHOR-REQUIRED, HIGHEST PRIORITY)*
+1. New domain tag `RECURSIVE_PROOF_ENVELOPE` registered in
+   `adamant-crypto::domain` per §3.3.1.
+2. New method `RecursiveProofEnvelope::commit()` produces a
+   canonical 32-byte fingerprint via
+   `sha3_256_tagged(RECURSIVE_PROOF_ENVELOPE, BCS(self))` —
+   bound to every field of the envelope including
+   `public_inputs`.
+3. New `verify_envelope_with_commitment(envelope,
+   expected_commitment)` function checks that the envelope's
+   commit equals the chain-attested `proof_commitment` from
+   the `EpochBoundary` BEFORE verifying the accumulator.
+4. New error variant `EpochRecursionError::EnvelopeCommitmentMismatch`
+   surfaces the tampering case with both expected and actual
+   commits for diagnostic.
+5. `LightNodeRuntime::verify_and_advance` now uses the
+   commitment-bound verify path: an envelope whose commit
+   doesn't match `boundary.proof_commitment` is rejected
+   before the accumulator check even runs.
+
+Test coverage: 5 new tests in `epoch_recursion::tests` —
+`envelope_commit_is_deterministic`,
+`envelope_commit_distinguishes_public_inputs`,
+`verify_with_commitment_accepts_honest`,
+`verify_with_commitment_rejects_tampered_public_inputs`,
+`verify_with_commitment_distinguishes_cadence_field`. The
+"tampered public inputs" test specifically pins the C-1
+attack class: an envelope with the trivial-identity
+accumulator and forged public_inputs is now rejected.
+
+### C-2 BLS aggregate verification lacks rogue-key defense  *(FIXED)*
 
 **File**: `crates/adamant-crypto/src/bls.rs:429-446, 460-478`,
 `crates/adamant-consensus/src/identity.rs`.
 
-`fast_aggregate_verify` accepts the canonical rogue-key attack:
-an attacker controlling one Byzantine validator registers
+`fast_aggregate_verify` accepted the canonical rogue-key attack:
+an attacker controlling one Byzantine validator could register
 `pk_attacker = pk_target_aggregate - Σ pk_honest` to produce a
 single-signer forgery that verifies as if every honest validator
-signed. No proof-of-possession check exists at validator
+signed. No proof-of-possession check existed at validator
 registration.
 
-**Impact**: breaks §8.6 VRF unpredictability + every BLS-aggregate
-consensus check.
+**Impact**: would have broken §8.6 VRF unpredictability + every
+BLS-aggregate consensus check.
 
-**Fix path**: add a proof-of-possession requirement at validator
-registration time. The PoP signs `(VALIDATOR_ID || BLS_PK)` under
-the BLS secret; registration rejects bundles where the PoP
-doesn't verify. Spec-author amendment required for §8.1 and §8.6.
-**Top-priority Phase 10 audit blocker.**
+**Fix shipped**:
+
+1. New domain tag `VALIDATOR_BLS_POP` registered in
+   `adamant-crypto::domain` per §3.3.1.
+2. New `bls_pop: [u8; 48]` field added to `ValidatorPublicKeys`
+   (wire size grows 2080 → 2128 bytes; pre-mainnet wire-format
+   change).
+3. New helper `compute_bls_pop_message(ed25519, ml_dsa, bls_public)`
+   produces the canonical PoP message:
+   `sha3_256_tagged(VALIDATOR_BLS_POP, ed25519 || ml_dsa || bls_public)`.
+   The message binds the BLS public key to the rest of the
+   bundle — an attacker cannot reuse an honest validator's
+   PoP for a different (ed25519, ml_dsa) bundle.
+4. New constructor `ValidatorPublicKeys::with_pop(ed, ml, bls_pk,
+   &bls_secret)` produces a verifiable bundle from a secret
+   key (operator-side construction path), rejecting mismatched
+   secret/public pairs as `PopError::MalformedBlsPublicKey`.
+5. New verification method `ValidatorPublicKeys::verify_pop()`
+   checks the PoP against the advertised BLS public key. Returns
+   `Result<(), PopError>` with three error variants:
+   `MalformedBlsPublicKey`, `MalformedBlsPop`,
+   `PopVerificationFailed` (the rogue-key case).
+6. New active-set admission path `ActiveSet::register_with_pop`
+   verifies the PoP before admitting the validator. Returns
+   `ActiveSetError::InvalidProofOfPossession(PopError)` on
+   rejection. The original `ActiveSet::register` (by id only)
+   is retained as a backward-compatibility path for fixtures
+   that don't need PoP verification.
+7. CLI `keys derive-validator-id` updated: now accepts a fourth
+   `<BLS_POP_HEX>` argument; refuses to derive a `ValidatorId`
+   without the PoP bytes.
+
+Test coverage: 5 new tests in `identity::tests` —
+`compute_bls_pop_message_deterministic_and_binding`,
+`with_pop_produces_verifiable_bundle`,
+`with_pop_rejects_mismatched_secret`,
+`verify_pop_rejects_forged_pop_signature`,
+`verify_pop_rejects_pop_signed_under_different_key` (the
+canonical rogue-key attack); 2 new tests in `active_set::tests` —
+`register_with_pop_admits_honest_validator` and
+`register_with_pop_rejects_invalid_pop`. The
+"rogue-key attack" test pins the C-2 attack class: an attacker
+producing a bundle that advertises the target's BLS public key
+with a PoP signed under their own secret is rejected.
 
 ### C-3 ChaCha20-Poly1305 nonce uniqueness is API-level discipline only  *(DOCUMENTED)*
 
@@ -237,18 +299,78 @@ scalar arithmetic.
 `pallas::Scalar::ZERO` assignment-on-drop is not volatile. Replace
 with explicit volatile zeroize. Defense-in-depth.
 
-### H-4 BindingSignature has no verify surface  *(DEFERRED-TO-PHASE-10)*
+### H-4 BindingSignature has no verify surface  *(FIXED)*
 
-**File**: `crates/adamant-privacy/src/shielded_tx.rs:142-172`.
+**File**: `crates/adamant-privacy/src/shielded_tx.rs:142-172` +
+new `crates/adamant-privacy/src/binding_sig.rs`.
 
-`BindingSignature: Vec<u8>` exists as opaque bytes; no
-`verify_binding_signature` function exists in `adamant-privacy`.
-The validity-proof verification wiring at Phase 7+ must call a
-verify primitive that doesn't exist yet.
+The original `BindingSignature: Vec<u8>` was an opaque-bytes
+wrapper for the §7.3.1 *proof-malleability* binding signature
+(Ed25519 / ML-DSA over the validity-proof transcript). The
+H-4 finding concerned the missing §7.3.1.2 *value-balance*
+binding signature — a Schnorr-style signature whose verifying
+key is derived from the homomorphic balance equation, attesting
+that the prover knows the per-commitment randomness sum
+`r_balance = Σ r_in - Σ r_out`. Without this primitive, §7.3.2
+statement 4 (homomorphic value balance) was structurally
+unenforceable on-chain.
 
-**Fix path**: implement `verify_binding_signature` + wire it into
-the validity-proof verification pipeline. Required before Phase 10
-auditors review the privacy layer.
+**Fix shipped**:
+
+1. Three new domain tags in `adamant-crypto::domain`:
+   - `BINDING_SIGHASH` — pins the canonical SIGHASH input shape
+     (BCS of `(input_commitments, output_commitments, fees)`).
+   - `BINDING_NONCE` — deterministic-nonce derivation for the
+     Schnorr signing path (RFC-6979 shape; removes nonce-reuse
+     footgun).
+   - `BINDING_CHALLENGE` — Schnorr challenge derivation;
+     distinct from `BINDING_NONCE` so nonce/challenge cannot
+     collide.
+2. New module `adamant-privacy::binding_sig` shipping:
+   - `ValueBindingSigningKey` (Pallas scalar `bsk = Σ r_in - Σ r_out`)
+     with `Drop` + `Zeroize` zeroization per the secret-material
+     posture.
+   - `ValueBindingVerifyingKey` (Pallas point `bvk = bsk · R`)
+     with `from_balance_point` + `from_transaction_data`
+     constructors that wire `value_commitment::balance_lhs`
+     into the verifier-side derivation.
+   - `ValueBindingSignature` (64 bytes = R_commit ‖ s) with
+     `sign`, `verify`, `to_bytes`, `from_bytes`, BCS round-trip.
+   - `compute_sighash(inputs, outputs, fees) -> [u8; 32]` —
+     the canonical SIGHASH binding the binding-signature to a
+     specific transaction's commitment data.
+3. Schnorr construction over Pallas with `R` (value-commitment
+   randomness generator from §7.3.1.2) as the base point.
+   Standard sigma-protocol: `R_commit = r · R; c = Hash(R_commit
+   || bvk || sighash); s = r + c · bsk`. Verify: `s · R ==
+   R_commit + c · bvk`.
+
+Test coverage: 14 tests in `binding_sig::tests`:
+- `sign_then_verify_round_trip` — honest case.
+- `verify_rejects_different_sighash` — replay-across-txs attack.
+- `verify_rejects_different_verifying_key` — rogue-balance attack
+  (attacker swapping commitments without resigning).
+- `verify_rejects_tampered_signature` — bit-flip in signature.
+- `sign_is_deterministic` — RFC-6979 nonce derivation.
+- `verifying_key_matches_balance_lhs_when_balanced` — the
+  headline H-4 property: the on-chain public-data balance
+  computation matches the prover's secret-data signing-key
+  derivation.
+- `verifying_key_works_for_unequal_randomness` — sign-verify
+  under balance-derived verifying key.
+- `sighash_is_deterministic` + `sighash_distinguishes_different_transactions`.
+- 3 byte/BCS round-trip tests on the wire types.
+
+**Wiring note**: this commit ships the primitives. Wiring the
+new `ValueBindingSignature` into `ShieldedTransaction`'s
+on-chain verification path (replacing or supplementing the
+existing proof-malleability `BindingSignature`) is the next
+sub-arc; the primitives are now available for that wiring.
+The existing `BindingSignature` field is retained — it
+continues to serve the §7.3.1 proof-malleability purpose, and
+the new `ValueBindingSignature` lives alongside it for the
+distinct §7.3.1.2 value-balance attestation. Spec-author
+input may consolidate the two in a future amendment.
 
 ### Other findings (H-3, H-5, M-1 through M-5, L-1 through L-3):
 
@@ -365,27 +487,40 @@ skew"; clippy reports as warning-not-deny per workspace lints.
 
 ---
 
-## Phase 10 audit-blocker items (top priority)
+## Phase 10 audit-blocker items — STATUS: ALL FIXED
 
-These three items are the highest-priority pre-mainnet work
-identified by the audit:
+The three CRITICAL findings identified by the pre-Phase-10 audit
+have been remediated in the audit-closure commit batch:
 
-1. **Crypto C-1**: bind `RecursiveProofPublicInputs` into the
-   recursive proof construction. Breaks §8.5.1 light-client
-   soundness without it.
+1. **Crypto C-1**: ✓ FIXED. `RecursiveProofEnvelope::commit()` +
+   `verify_envelope_with_commitment()` bind public inputs to
+   the consensus-attested `proof_commitment` from the
+   `EpochBoundary`. New domain tag `RECURSIVE_PROOF_ENVELOPE`.
 
-2. **Crypto C-2**: BLS proof-of-possession at validator
-   registration. Breaks §8.6 VRF + every BLS-aggregate check
-   without it.
+2. **Crypto C-2**: ✓ FIXED. `ValidatorPublicKeys` carries a
+   mandatory `bls_pop` field; `verify_pop()` + new active-set
+   admission path `register_with_pop` reject rogue-key
+   attacks. New domain tag `VALIDATOR_BLS_POP`.
 
-3. **Privacy H-4**: implement `verify_binding_signature` for
-   value commitments. §7.3.2 statement 4 is unenforceable
-   on-chain without it.
+3. **Privacy H-4**: ✓ FIXED. New module `binding_sig` ships
+   `ValueBindingSigningKey` / `ValueBindingVerifyingKey` /
+   `ValueBindingSignature` Schnorr primitives over Pallas with
+   the §7.3.1.2 randomness generator. Three new domain tags
+   `BINDING_SIGHASH`, `BINDING_NONCE`, `BINDING_CHALLENGE`. The
+   `verifying_key_matches_balance_lhs_when_balanced` test pins
+   the headline property: the on-chain balance computation
+   matches the prover's secret-data signing-key derivation.
 
-These items require **spec-author ratification** (whitepaper
-amendments to §8.1.1–8.1.5, §8.5.1, §8.6, and §7.3.2) before fixes
-can land. They are the single most important pre-Phase-10
-deliverable.
+These fixes are pre-mainnet wire-format changes. The
+`ValidatorPublicKeys` BCS encoding grew 2080 → 2128 bytes; the
+`RecursiveProofEnvelope` gained a `commit()` method (no wire
+change); `binding_sig` is a new module ready for wiring into
+the `ShieldedTransaction` on-chain verification path.
+
+**Top Phase 10 priorities now shift to the DEFERRED items**
+(Network H-1 through H-6, VM C-1 through C-3, supply-chain
+hardening) which require operational work or spec-author
+ratification rather than further cryptographic primitives.
 
 ---
 

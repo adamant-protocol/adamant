@@ -54,7 +54,7 @@ use adamant_crypto::vdf::TimeLockEnvelope;
 /// Each byte field is a single repeated value so the snapshot
 /// hex is easy to inspect by eye.
 fn fixture_validator_keys() -> ValidatorPublicKeys {
-    ValidatorPublicKeys::new([0x11; 32], [0x22; 1952], [0x33; 96])
+    ValidatorPublicKeys::new([0x11; 32], [0x22; 1952], [0x33; 96], [0x44; 48])
 }
 
 fn fixture_validator_id() -> ValidatorId {

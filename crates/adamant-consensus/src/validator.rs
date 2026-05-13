@@ -194,7 +194,8 @@ impl Validator {
 mod tests {
     use super::*;
     use crate::identity::{
-        BLS_PUBLIC_KEY_BYTES, ED25519_PUBLIC_KEY_BYTES, ML_DSA_PUBLIC_KEY_BYTES,
+        BLS_PUBLIC_KEY_BYTES, BLS_SIGNATURE_BYTES, ED25519_PUBLIC_KEY_BYTES,
+        ML_DSA_PUBLIC_KEY_BYTES,
     };
 
     fn fixed_validator() -> Validator {
@@ -202,6 +203,7 @@ mod tests {
             [0x11; ED25519_PUBLIC_KEY_BYTES],
             [0x22; ML_DSA_PUBLIC_KEY_BYTES],
             [0x33; BLS_PUBLIC_KEY_BYTES],
+            [0x44; BLS_SIGNATURE_BYTES],
         );
         let operator = Address::from_bytes([0x44; 32]);
         Validator::new(keys, operator, Stake::from_adm(1_500), EpochNumber::new(0))
@@ -277,10 +279,11 @@ mod tests {
     fn validator_bcs_size_pinned() {
         let v = fixed_validator();
         let bytes = bcs::to_bytes(&v).unwrap();
-        // Address is 32 bytes; EpochNumber and Stake are 8 bytes
-        // each; ValidatorPublicKeys is 2080 bytes; ValidatorId is
-        // 32 bytes. 32 + 2080 + 32 + 8 + 8 = 2160.
-        assert_eq!(bytes.len(), 2160);
+        // Post Crypto C-2 PoP: ValidatorPublicKeys is 2128 bytes
+        // (32 + 1952 + 96 + 48). Address is 32 bytes;
+        // EpochNumber and Stake are 8 bytes each; ValidatorId is
+        // 32 bytes. 32 + 2128 + 32 + 8 + 8 = 2208.
+        assert_eq!(bytes.len(), 2208);
     }
 
     #[test]

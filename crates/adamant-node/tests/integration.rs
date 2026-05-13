@@ -17,7 +17,7 @@ use adamant_network::libp2p_re::Keypair;
 use adamant_node::{NodeConfig, NodeRuntime};
 
 fn fixture_validator_keys(seed: u8) -> ValidatorPublicKeys {
-    ValidatorPublicKeys::new([seed; 32], [seed; 1952], [seed; 96])
+    ValidatorPublicKeys::new([seed; 32], [seed; 1952], [seed; 96], [seed; 48])
 }
 
 /// Build an active set with `n` validators at the launch

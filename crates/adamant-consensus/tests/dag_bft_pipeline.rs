@@ -74,7 +74,7 @@ use rand_core::OsRng;
 // ===============================================================
 
 fn validator_pubkeys(seed: u8) -> ValidatorPublicKeys {
-    ValidatorPublicKeys::new([seed; 32], [seed; 1952], [seed; 96])
+    ValidatorPublicKeys::new([seed; 32], [seed; 1952], [seed; 96], [seed; 48])
 }
 
 fn validator_id(seed: u8) -> ValidatorId {

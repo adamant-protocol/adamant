@@ -97,9 +97,13 @@ pub use dag::{DagError, DagState};
 pub use epoch::{EpochNumber, RoundNumber};
 pub use genesis::{GenesisCohortMarker, GENESIS_COHORT_MARKER_BYTES, GENESIS_COHORT_SIZE};
 pub use identity::{
-    ValidatorId, ValidatorPublicKeys, BLS_PUBLIC_KEY_BYTES, ED25519_PUBLIC_KEY_BYTES,
-    ML_DSA_PUBLIC_KEY_BYTES, VALIDATOR_ID_BYTES, VALIDATOR_PUBLIC_KEYS_BYTES,
+    compute_bls_pop_message, PopError, ValidatorId, ValidatorPublicKeys, BLS_PUBLIC_KEY_BYTES,
+    ED25519_PUBLIC_KEY_BYTES, ML_DSA_PUBLIC_KEY_BYTES, VALIDATOR_ID_BYTES,
+    VALIDATOR_PUBLIC_KEYS_BYTES,
 };
+// `BLS_SIGNATURE_BYTES` is already re-exported from `vertex` (line
+// below); identity also defines a same-valued constant for its own
+// use. Both reference 48 bytes per §3.4.3.
 pub use light_client::{
     EpochBoundary, LightClientError, LightClientState, ProofCommitment, StateCommitment,
     TierSignal, PROOF_COMMITMENT_BYTES, STATE_COMMITMENT_BYTES,

@@ -537,7 +537,7 @@ mod tests {
     use crate::identity::{ValidatorId, ValidatorPublicKeys};
 
     fn validator_id(seed: u8) -> ValidatorId {
-        ValidatorPublicKeys::new([seed; 32], [seed; 1952], [seed; 96]).derive_id()
+        ValidatorPublicKeys::new([seed; 32], [seed; 1952], [seed; 96], [seed; 48]).derive_id()
     }
 
     fn fixture_active_set(n: u8) -> ActiveSet {

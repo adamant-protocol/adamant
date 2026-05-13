@@ -680,7 +680,7 @@ mod tests {
     use adamant_crypto::bls;
 
     fn validator_pubkeys(seed: u8) -> ValidatorPublicKeys {
-        ValidatorPublicKeys::new([seed; 32], [seed; 1952], [seed; 96])
+        ValidatorPublicKeys::new([seed; 32], [seed; 1952], [seed; 96], [seed; 48])
     }
 
     fn validator_id(seed: u8) -> ValidatorId {
@@ -722,7 +722,11 @@ mod tests {
     fn bls_keypair(sk_seed: &[u8; 32]) -> (ValidatorPublicKeys, ValidatorId) {
         let sk = bls::SecretKey::from_ikm(sk_seed).expect("bls");
         let pk = sk.public_key();
-        let pubkeys = ValidatorPublicKeys::new([0u8; 32], [0u8; 1952], pk.to_bytes());
+        // Use `with_pop` so the fixture has a real, verifiable
+        // proof-of-possession bound to the BLS keypair — exercises
+        // the post-C-2 admission path.
+        let pubkeys = ValidatorPublicKeys::with_pop([0u8; 32], [0u8; 1952], pk.to_bytes(), &sk)
+            .expect("with_pop");
         let id = pubkeys.derive_id();
         (pubkeys, id)
     }

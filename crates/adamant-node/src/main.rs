@@ -40,7 +40,7 @@ async fn main() {
     // operator-managed keys + chain-state-recovered active
     // set + genesis-spec bootstrap peers.
     let network_keypair = Keypair::generate_ed25519();
-    let validator_identity = ValidatorPublicKeys::new([0u8; 32], [0u8; 1952], [0u8; 96]);
+    let validator_identity = ValidatorPublicKeys::new([0u8; 32], [0u8; 1952], [0u8; 96], [0u8; 48]);
     let mut active_set = ActiveSet::new();
     active_set
         .register(validator_identity.derive_id(), EpochNumber::default())

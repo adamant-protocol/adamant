@@ -151,6 +151,7 @@
 //!   a parallel Vesta-side circuit infrastructure has to land
 //!   in `adamant-halo2`.
 
+use adamant_crypto::{domain, hash::sha3_256_tagged};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
@@ -322,6 +323,53 @@ impl RecursiveProofEnvelope {
             public_inputs,
             cadence,
         }
+    }
+
+    /// Compute the canonical 32-byte commitment to this
+    /// envelope — `sha3_256_tagged(RECURSIVE_PROOF_ENVELOPE,
+    /// BCS(self))`.
+    ///
+    /// Binds the envelope's `proof` + `public_inputs` + `cadence`
+    /// fields into a single 32-byte fingerprint that the §8.9
+    /// light-client surface compares against the
+    /// chain-state-published `proof_commitment` field of
+    /// `EpochBoundary`. The boundary itself is consensus-bound
+    /// (signed + recursive-proof-attested at the next epoch), so
+    /// matching the commitment means the envelope is
+    /// authentically the one the chain committed to.
+    ///
+    /// # Why this matters (Crypto C-1 remediation)
+    ///
+    /// Before this binding, `verify_envelope` only checked the
+    /// accumulator's identity property. The envelope's
+    /// `public_inputs` (`genesis`, `previous_epoch`,
+    /// `current_epoch`, `epoch_number`) were NOT
+    /// cryptographically bound into the proof. A malicious
+    /// service node could feed a light client an envelope with
+    /// arbitrary `public_inputs` under a valid-but-unrelated
+    /// accumulator (e.g., the trivial empty/identity accumulator
+    /// from `EpochAccumulator::empty()`) and the light client
+    /// would accept forged chain-state commitments.
+    ///
+    /// The commit-and-check pattern here closes that gap: the
+    /// light client gets `proof_commitment` from the
+    /// (consensus-attested) `EpochBoundary`, computes
+    /// `envelope.commit()` on the supplied envelope, and rejects
+    /// the advance if they don't match. Tampering with any field
+    /// of the envelope (including `public_inputs`) changes the
+    /// commit value.
+    ///
+    /// # Panics
+    ///
+    /// Cannot panic in practice. The internal `expect` is a
+    /// contract assertion: BCS serialisation of this struct
+    /// (plain-data shape, no custom serializers) is infallible.
+    #[must_use]
+    pub fn commit(&self) -> [u8; 32] {
+        let bcs_bytes = bcs::to_bytes(self).expect(
+            "Adamant invariant: RecursiveProofEnvelope is BCS-serialisable by construction",
+        );
+        sha3_256_tagged(&domain::RECURSIVE_PROOF_ENVELOPE, &bcs_bytes)
     }
 
     /// Whether this envelope is structurally consistent with

@@ -101,6 +101,21 @@ pub enum EpochRecursionError {
     /// numbers aren't sequential, or `previous_epoch` of next
     /// doesn't equal `current_epoch` of prior).
     EnvelopeChainBroken,
+    /// The envelope's canonical commitment per
+    /// [`RecursiveProofEnvelope::commit`] does not match the
+    /// expected value supplied to
+    /// [`verify_envelope_with_commitment`]. This catches the
+    /// Crypto C-1 attack class: a malicious service node
+    /// supplying an envelope whose `public_inputs` were
+    /// fabricated under a valid-but-unrelated accumulator.
+    EnvelopeCommitmentMismatch {
+        /// 32-byte expected commitment (from the
+        /// consensus-attested `EpochBoundary`).
+        expected: [u8; 32],
+        /// 32-byte commitment computed from the supplied
+        /// envelope.
+        actual: [u8; 32],
+    },
 }
 
 impl core::fmt::Display for EpochRecursionError {
@@ -117,6 +132,10 @@ impl core::fmt::Display for EpochRecursionError {
             Self::AccumulatorSerdeError(e) => write!(f, "accumulator serde error: {e}"),
             Self::AccumulatorRejected => f.write_str("recursive accumulator rejected"),
             Self::EnvelopeChainBroken => f.write_str("envelope chain broken"),
+            Self::EnvelopeCommitmentMismatch { expected, actual } => write!(
+                f,
+                "envelope commitment mismatch: expected {expected:02x?}, got {actual:02x?}"
+            ),
         }
     }
 }
@@ -247,6 +266,55 @@ pub fn verify_envelope(envelope: &RecursiveProofEnvelope) -> Result<(), EpochRec
     Ok(())
 }
 
+/// Verify a [`RecursiveProofEnvelope`] cryptographically AND
+/// check it commits to the supplied 32-byte expected
+/// commitment per [`RecursiveProofEnvelope::commit`].
+///
+/// This is the **light-client-grade** verify entry point. The
+/// expected commitment comes from the consensus-attested
+/// [`EpochBoundary`]'s `proof_commitment` field; the supplied
+/// envelope is the recursive-proof artifact that the light
+/// client received off the gossipsub topic (potentially from
+/// an untrusted service node).
+///
+/// # Why both checks are required (Crypto C-1 remediation)
+///
+/// - The accumulator-identity check alone admits a forged
+///   envelope under the trivial empty/identity accumulator
+///   with arbitrary `public_inputs`. The commitment check is
+///   what binds the envelope's public inputs to consensus.
+/// - The commitment check alone doesn't validate the proof's
+///   soundness. The accumulator-identity check is what
+///   verifies the underlying recursive proof.
+///
+/// Both checks together: the chain commits to a specific
+/// envelope shape (via `proof_commitment`); the envelope is
+/// authentically that shape (via `commit()`); and that
+/// envelope's accumulator is valid (via `verifies()`).
+///
+/// # Errors
+///
+/// - [`EpochRecursionError::EnvelopeCommitmentMismatch`] if
+///   the envelope's commit does not match `expected_commitment`.
+/// - All errors from [`verify_envelope`].
+pub fn verify_envelope_with_commitment(
+    envelope: &RecursiveProofEnvelope,
+    expected_commitment: &[u8; 32],
+) -> Result<(), EpochRecursionError> {
+    // Compute the envelope's canonical commitment first. The
+    // accumulator check is cheaper to fail-fast on, but the
+    // commitment check is the consensus-binding gate so we
+    // make it explicit.
+    let actual = envelope.commit();
+    if &actual != expected_commitment {
+        return Err(EpochRecursionError::EnvelopeCommitmentMismatch {
+            expected: *expected_commitment,
+            actual,
+        });
+    }
+    verify_envelope(envelope)
+}
+
 /// Verify that `next` chains structurally onto `prev`. Combines
 /// [`RecursiveProofEnvelope::chains_to`]'s structural check with
 /// [`verify_envelope`]'s cryptographic check on `next`.
@@ -371,6 +439,148 @@ mod tests {
             Err(EpochRecursionError::AccumulatorRejected)
         ));
     }
+
+    // ---------------------------------------------------------------
+    // Crypto C-1 remediation: envelope-commitment binding
+    // ---------------------------------------------------------------
+
+    /// `RecursiveProofEnvelope::commit` is deterministic — same
+    /// envelope always produces the same commitment.
+    #[test]
+    fn envelope_commit_is_deterministic() {
+        let genesis = fixed_genesis();
+        let env = envelope_from_accumulator(
+            EpochAccumulator::empty(),
+            genesis,
+            genesis,
+            genesis,
+            0,
+            ProofCadence::Steady,
+        );
+        let c1 = env.commit();
+        let c2 = env.commit();
+        assert_eq!(c1, c2);
+    }
+
+    /// Distinct envelopes (even with same accumulator) produce
+    /// distinct commits. This is the property the C-1 fix
+    /// relies on: tampering with `public_inputs` changes the
+    /// commit, so the consensus-attested `proof_commitment` no
+    /// longer matches.
+    #[test]
+    fn envelope_commit_distinguishes_public_inputs() {
+        let genesis = fixed_genesis();
+        let env_a = envelope_from_accumulator(
+            EpochAccumulator::empty(),
+            genesis,
+            genesis,
+            genesis,
+            0,
+            ProofCadence::Steady,
+        );
+        // Tamper: change current_epoch to a fabricated value.
+        let env_b = envelope_from_accumulator(
+            EpochAccumulator::empty(),
+            genesis,
+            genesis,
+            fixed_chain_commitment(99), // forged commitment
+            0,
+            ProofCadence::Steady,
+        );
+        assert_ne!(
+            env_a.commit(),
+            env_b.commit(),
+            "tampered public_inputs must produce different commit"
+        );
+    }
+
+    /// `verify_envelope_with_commitment` accepts the honest case:
+    /// envelope verifies AND its commit matches expected.
+    #[test]
+    fn verify_with_commitment_accepts_honest() {
+        let genesis = fixed_genesis();
+        let env = envelope_from_accumulator(
+            EpochAccumulator::empty(),
+            genesis,
+            genesis,
+            genesis,
+            0,
+            ProofCadence::Steady,
+        );
+        let expected = env.commit();
+        verify_envelope_with_commitment(&env, &expected).expect("honest must verify");
+    }
+
+    /// `verify_envelope_with_commitment` rejects the C-1 attack:
+    /// an envelope with a valid accumulator but tampered
+    /// `public_inputs` (whose commit doesn't match
+    /// expected_commitment) is rejected as
+    /// `EnvelopeCommitmentMismatch`.
+    #[test]
+    fn verify_with_commitment_rejects_tampered_public_inputs() {
+        let genesis = fixed_genesis();
+        let honest = envelope_from_accumulator(
+            EpochAccumulator::empty(),
+            genesis,
+            genesis,
+            genesis,
+            0,
+            ProofCadence::Steady,
+        );
+        let honest_commit = honest.commit();
+        // Adversary tampers public_inputs (forged current_epoch)
+        // but keeps the valid empty accumulator.
+        let forged = envelope_from_accumulator(
+            EpochAccumulator::empty(),
+            genesis,
+            genesis,
+            fixed_chain_commitment(0xDEAD), // forged
+            0,
+            ProofCadence::Steady,
+        );
+        // Adversary's accumulator alone verifies — so the legacy
+        // `verify_envelope` accepts it.
+        verify_envelope(&forged).expect("accumulator alone verifies");
+        // But the commitment-bound check rejects it.
+        let err = verify_envelope_with_commitment(&forged, &honest_commit)
+            .expect_err("commitment-bound check must reject forged envelope");
+        match err {
+            EpochRecursionError::EnvelopeCommitmentMismatch { expected, actual } => {
+                assert_eq!(expected, honest_commit);
+                assert_eq!(actual, forged.commit());
+                assert_ne!(expected, actual);
+            }
+            other => panic!("expected EnvelopeCommitmentMismatch, got {other:?}"),
+        }
+    }
+
+    /// Tampering with the `cadence` field also produces a
+    /// distinct commit — every envelope field is bound.
+    #[test]
+    fn verify_with_commitment_distinguishes_cadence_field() {
+        let genesis = fixed_genesis();
+        let env_steady = envelope_from_accumulator(
+            EpochAccumulator::empty(),
+            genesis,
+            genesis,
+            genesis,
+            0,
+            ProofCadence::Steady,
+        );
+        let env_fallback = envelope_from_accumulator(
+            EpochAccumulator::empty(),
+            genesis,
+            genesis,
+            genesis,
+            0,
+            ProofCadence::Fallback,
+        );
+        assert_ne!(env_steady.commit(), env_fallback.commit());
+    }
+
+    // ---------------------------------------------------------------
+    // Existing tests
+    // ---------------------------------------------------------------
 
     /// A two-epoch chain: genesis (epoch 0) → epoch 1, with both
     /// accumulators empty (identity). Structural chain link

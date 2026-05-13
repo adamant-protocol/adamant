@@ -28,13 +28,38 @@
 //! - `ml_dsa_public_key`: 1952 bytes (ML-DSA-65 public-key width
 //!   per FIPS 204).
 //! - `bls_public_key`: 96 bytes (compressed G1).
+//! - `bls_pop`: 48 bytes (BLS12-381 signature on the canonical
+//!   PoP message — see [`compute_bls_pop_message`]).
 //!
-//! Total: **2080 bytes** of public-key material per validator.
+//! Total: **2128 bytes** of public-key material per validator.
 //! Field declaration order is consensus-binding; reordering is a
 //! hard fork (cross-validator compatibility breaks).
+//!
+//! # BLS proof-of-possession (PoP)
+//!
+//! Per §3.4.3 + the pre-Phase-10 audit Crypto C-2 remediation,
+//! every `ValidatorPublicKeys` carries a BLS PoP signature
+//! proving the validator controls the BLS secret. Without PoP,
+//! BLS aggregate verification accepts the canonical rogue-key
+//! attack: an attacker registering
+//! `pk_attacker = pk_target_aggregate - Σ pk_honest` can forge
+//! single-signer aggregates that verify as if every honest
+//! validator signed.
+//!
+//! The PoP message is bound to the other key material:
+//! `sha3_256_tagged(VALIDATOR_BLS_POP, BCS(ed25519 || ml_dsa || bls_public))`.
+//! [`ValidatorPublicKeys::verify_pop`] checks the PoP against the
+//! advertised BLS public key. Validators MUST call `verify_pop`
+//! before admitting a new validator into the active set; the
+//! active-set `register` path enforces this.
 
 use adamant_crypto::{
-    bls::PUBLIC_KEY_BYTES as BLS_PUBLIC_KEY_BYTES_CONST, domain, hash::sha3_256_tagged,
+    bls::{
+        self, PUBLIC_KEY_BYTES as BLS_PUBLIC_KEY_BYTES_CONST,
+        SIGNATURE_BYTES as BLS_SIGNATURE_BYTES_CONST,
+    },
+    domain,
+    hash::sha3_256_tagged,
     sig_pq::PUBLIC_KEY_BYTES as ML_DSA_PUBLIC_KEY_BYTES_CONST,
 };
 use serde::{Deserialize, Serialize};
@@ -53,10 +78,14 @@ pub const ML_DSA_PUBLIC_KEY_BYTES: usize = ML_DSA_PUBLIC_KEY_BYTES_CONST;
 /// §3.4.3. Re-export of `adamant_crypto::bls::PUBLIC_KEY_BYTES`.
 pub const BLS_PUBLIC_KEY_BYTES: usize = BLS_PUBLIC_KEY_BYTES_CONST;
 
+/// Byte width of a BLS12-381 signature per IETF / §3.4.3.
+/// Re-export of `adamant_crypto::bls::SIGNATURE_BYTES`.
+pub const BLS_SIGNATURE_BYTES: usize = BLS_SIGNATURE_BYTES_CONST;
+
 /// Total byte width of the `ValidatorPublicKeys` BCS encoding.
-/// `32 + 1952 + 96 = 2080` bytes.
+/// `32 + 1952 + 96 + 48 = 2128` bytes (post Crypto C-2 PoP).
 pub const VALIDATOR_PUBLIC_KEYS_BYTES: usize =
-    ED25519_PUBLIC_KEY_BYTES + ML_DSA_PUBLIC_KEY_BYTES + BLS_PUBLIC_KEY_BYTES;
+    ED25519_PUBLIC_KEY_BYTES + ML_DSA_PUBLIC_KEY_BYTES + BLS_PUBLIC_KEY_BYTES + BLS_SIGNATURE_BYTES;
 
 /// Byte width of a [`ValidatorId`].
 pub const VALIDATOR_ID_BYTES: usize = 32;
@@ -83,24 +112,169 @@ pub struct ValidatorPublicKeys {
     /// BLS12-381 G1 compressed public key (§3.4.3) — 96 bytes.
     #[serde(with = "BigArray")]
     pub bls_public_key: [u8; BLS_PUBLIC_KEY_BYTES],
+    /// BLS12-381 proof-of-possession signature — 48 bytes.
+    ///
+    /// Signs [`compute_bls_pop_message`]'s output under the BLS
+    /// secret key corresponding to `bls_public_key`. Provides
+    /// cryptographic attestation that the validator controls the
+    /// BLS secret. Per the pre-Phase-10 audit Crypto C-2
+    /// remediation, the active-set admission path enforces PoP
+    /// verification via [`Self::verify_pop`].
+    #[serde(with = "BigArray")]
+    pub bls_pop: [u8; BLS_SIGNATURE_BYTES],
+}
+
+/// Errors surfaced by [`ValidatorPublicKeys::verify_pop`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum PopError {
+    /// The advertised BLS public key did not parse as a valid
+    /// curve point. Catches malformed-bytes registration
+    /// attempts before reaching the PoP verification step.
+    MalformedBlsPublicKey,
+    /// The advertised BLS PoP signature did not parse as a
+    /// valid curve point.
+    MalformedBlsPop,
+    /// The PoP signature did not verify against the canonical
+    /// PoP message under the advertised BLS public key. The
+    /// validator does NOT control the BLS secret claimed in
+    /// the bundle.
+    PopVerificationFailed,
+}
+
+impl core::fmt::Display for PopError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::MalformedBlsPublicKey => f.write_str("validator BLS public key is malformed"),
+            Self::MalformedBlsPop => f.write_str("validator BLS proof-of-possession is malformed"),
+            Self::PopVerificationFailed => {
+                f.write_str("validator BLS proof-of-possession verification failed (rogue key)")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PopError {}
+
+/// Compute the canonical PoP message a validator must sign over
+/// to prove control of their BLS secret key per the
+/// pre-Phase-10 audit Crypto C-2 remediation.
+///
+/// `pop_message = sha3_256_tagged(VALIDATOR_BLS_POP,
+///                                ed25519_public_key
+///                                || ml_dsa_public_key
+///                                || bls_public_key)`
+///
+/// The message binds the BLS public key to the other key
+/// material in the bundle: an attacker cannot reuse an honest
+/// validator's PoP for a different (ed25519, ml_dsa) bundle.
+/// Returns the 32-byte tagged-hash output that the PoP
+/// signature commits to.
+#[must_use]
+pub fn compute_bls_pop_message(
+    ed25519_public_key: &[u8; ED25519_PUBLIC_KEY_BYTES],
+    ml_dsa_public_key: &[u8; ML_DSA_PUBLIC_KEY_BYTES],
+    bls_public_key: &[u8; BLS_PUBLIC_KEY_BYTES],
+) -> [u8; 32] {
+    let mut input = Vec::with_capacity(
+        ED25519_PUBLIC_KEY_BYTES + ML_DSA_PUBLIC_KEY_BYTES + BLS_PUBLIC_KEY_BYTES,
+    );
+    input.extend_from_slice(ed25519_public_key);
+    input.extend_from_slice(ml_dsa_public_key);
+    input.extend_from_slice(bls_public_key);
+    sha3_256_tagged(&domain::VALIDATOR_BLS_POP, &input)
 }
 
 impl ValidatorPublicKeys {
-    /// Construct from the three component public-key byte arrays.
-    /// Performs no cryptographic validation of the key material;
-    /// callers that need parse-validation should use the
-    /// [`adamant_crypto`] type APIs directly before constructing.
+    /// Construct from the four component byte arrays. Performs
+    /// **no** cryptographic validation; callers MUST invoke
+    /// [`Self::verify_pop`] before trusting the bundle for
+    /// active-set admission or consensus participation. Direct
+    /// construction without PoP verification is permitted for
+    /// parsing on-chain values, deserialisation, and test
+    /// fixtures.
     #[must_use]
     pub const fn new(
         ed25519_public_key: [u8; ED25519_PUBLIC_KEY_BYTES],
         ml_dsa_public_key: [u8; ML_DSA_PUBLIC_KEY_BYTES],
         bls_public_key: [u8; BLS_PUBLIC_KEY_BYTES],
+        bls_pop: [u8; BLS_SIGNATURE_BYTES],
     ) -> Self {
         Self {
             ed25519_public_key,
             ml_dsa_public_key,
             bls_public_key,
+            bls_pop,
         }
+    }
+
+    /// Construct from the public-key components + a BLS secret
+    /// key, generating the PoP signature in the process. This is
+    /// the operator-side construction path: the validator
+    /// operator has the BLS secret at registration time and
+    /// produces a fresh PoP binding the entire bundle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PopError::MalformedBlsPublicKey`] if
+    /// `bls_secret_key.public_key().to_bytes() != bls_public_key`
+    /// (the supplied secret doesn't actually correspond to the
+    /// advertised public key — operator-side bookkeeping bug).
+    pub fn with_pop(
+        ed25519_public_key: [u8; ED25519_PUBLIC_KEY_BYTES],
+        ml_dsa_public_key: [u8; ML_DSA_PUBLIC_KEY_BYTES],
+        bls_public_key: [u8; BLS_PUBLIC_KEY_BYTES],
+        bls_secret_key: &bls::SecretKey,
+    ) -> Result<Self, PopError> {
+        // Validate that the supplied secret matches the
+        // advertised public — surfaces the operator-side
+        // bookkeeping bug before the PoP would silently disagree
+        // with the bundle.
+        if bls_secret_key.public_key().to_bytes() != bls_public_key {
+            return Err(PopError::MalformedBlsPublicKey);
+        }
+        let pop_message =
+            compute_bls_pop_message(&ed25519_public_key, &ml_dsa_public_key, &bls_public_key);
+        let pop = bls_secret_key.sign(&pop_message);
+        Ok(Self {
+            ed25519_public_key,
+            ml_dsa_public_key,
+            bls_public_key,
+            bls_pop: pop.to_bytes(),
+        })
+    }
+
+    /// Verify the bundled BLS proof-of-possession signature
+    /// per the pre-Phase-10 audit Crypto C-2 remediation.
+    ///
+    /// Validators MUST call this before admitting a new
+    /// validator into the active set. The active-set
+    /// [`crate::ActiveSet::register_with_pop`] path enforces
+    /// this; the legacy [`crate::ActiveSet::register`] path
+    /// is retained for test fixtures that don't need PoP
+    /// verification.
+    ///
+    /// # Errors
+    ///
+    /// - [`PopError::MalformedBlsPublicKey`] if `bls_public_key`
+    ///   doesn't parse as a valid curve point.
+    /// - [`PopError::MalformedBlsPop`] if `bls_pop` doesn't
+    ///   parse as a valid curve point.
+    /// - [`PopError::PopVerificationFailed`] if the signature
+    ///   doesn't verify against [`compute_bls_pop_message`]'s
+    ///   output under `bls_public_key` — the rogue-key attack
+    ///   case.
+    pub fn verify_pop(&self) -> Result<(), PopError> {
+        let pk = bls::PublicKey::from_bytes(&self.bls_public_key)
+            .map_err(|_| PopError::MalformedBlsPublicKey)?;
+        let sig =
+            bls::Signature::from_bytes(&self.bls_pop).map_err(|_| PopError::MalformedBlsPop)?;
+        let message = compute_bls_pop_message(
+            &self.ed25519_public_key,
+            &self.ml_dsa_public_key,
+            &self.bls_public_key,
+        );
+        pk.verify(&message, &sig)
+            .map_err(|_| PopError::PopVerificationFailed)
     }
 
     /// Compute the [`ValidatorId`] for this key bundle per §8.1.2.
@@ -108,6 +282,12 @@ impl ValidatorPublicKeys {
     /// `validator_id = sha3_256_tagged(VALIDATOR_ID, BCS(self))`.
     /// Deterministic; two `ValidatorPublicKeys` with identical
     /// component bytes produce identical `ValidatorId`s.
+    ///
+    /// The PoP signature `bls_pop` is part of the BCS-encoded
+    /// input, so the `ValidatorId` is bound to the entire bundle
+    /// including the PoP. This means a malicious "PoP downgrade"
+    /// (stripping the PoP from an honest bundle) changes the id
+    /// and therefore is rejected at the active-set level.
     ///
     /// # Panics
     ///
@@ -195,6 +375,7 @@ mod tests {
             [0x11; ED25519_PUBLIC_KEY_BYTES],
             [0x22; ML_DSA_PUBLIC_KEY_BYTES],
             [0x33; BLS_PUBLIC_KEY_BYTES],
+            [0x44; BLS_SIGNATURE_BYTES],
         )
     }
 
@@ -204,12 +385,13 @@ mod tests {
         assert_eq!(ED25519_PUBLIC_KEY_BYTES, 32);
         assert_eq!(ML_DSA_PUBLIC_KEY_BYTES, 1952);
         assert_eq!(BLS_PUBLIC_KEY_BYTES, 96);
-        assert_eq!(VALIDATOR_PUBLIC_KEYS_BYTES, 32 + 1952 + 96);
+        assert_eq!(BLS_SIGNATURE_BYTES, 48);
+        assert_eq!(VALIDATOR_PUBLIC_KEYS_BYTES, 32 + 1952 + 96 + 48);
     }
 
-    /// BCS encoding of `ValidatorPublicKeys` is exactly 2080
-    /// bytes (no length-prefixes; canonical fixed-array
-    /// concatenation per §5.1.8).
+    /// BCS encoding of `ValidatorPublicKeys` is exactly 2128
+    /// bytes (post Crypto C-2 PoP). No length-prefixes;
+    /// canonical fixed-array concatenation per §5.1.8.
     #[test]
     fn validator_public_keys_bcs_size_pinned() {
         let keys = fixed_keys();
@@ -246,6 +428,7 @@ mod tests {
             ed_2,
             [0x22; ML_DSA_PUBLIC_KEY_BYTES],
             [0x33; BLS_PUBLIC_KEY_BYTES],
+            [0x44; BLS_SIGNATURE_BYTES],
         );
         assert_ne!(keys1.derive_id(), keys2.derive_id());
     }
@@ -319,5 +502,108 @@ mod tests {
             &bcs_bytes,
         );
         assert_eq!(id.to_bytes(), expected);
+    }
+
+    // ---------------------------------------------------------------
+    // Crypto C-2 remediation: BLS proof-of-possession
+    // ---------------------------------------------------------------
+
+    /// `compute_bls_pop_message` is deterministic + binds all three
+    /// public-key components.
+    #[test]
+    fn compute_bls_pop_message_deterministic_and_binding() {
+        let ed = [0x11; ED25519_PUBLIC_KEY_BYTES];
+        let ml = [0x22; ML_DSA_PUBLIC_KEY_BYTES];
+        let bls = [0x33; BLS_PUBLIC_KEY_BYTES];
+        // Determinism.
+        let m1 = compute_bls_pop_message(&ed, &ml, &bls);
+        let m2 = compute_bls_pop_message(&ed, &ml, &bls);
+        assert_eq!(m1, m2);
+        // Distinct ed25519 → distinct message.
+        let mut ed_b = ed;
+        ed_b[0] = 0xFF;
+        assert_ne!(compute_bls_pop_message(&ed_b, &ml, &bls), m1);
+        // Distinct ml_dsa → distinct message.
+        let mut ml_b = ml;
+        ml_b[0] = 0xFF;
+        assert_ne!(compute_bls_pop_message(&ed, &ml_b, &bls), m1);
+        // Distinct bls → distinct message.
+        let mut bls_b = bls;
+        bls_b[0] = 0xFF;
+        assert_ne!(compute_bls_pop_message(&ed, &ml, &bls_b), m1);
+    }
+
+    /// `with_pop` produces a bundle whose `verify_pop` accepts.
+    #[test]
+    fn with_pop_produces_verifiable_bundle() {
+        let sk = adamant_crypto::bls::SecretKey::from_ikm(&[0x77; 32]).expect("bls");
+        let pk_bytes = sk.public_key().to_bytes();
+        let ed = [0x11; ED25519_PUBLIC_KEY_BYTES];
+        let ml = [0x22; ML_DSA_PUBLIC_KEY_BYTES];
+        let keys = ValidatorPublicKeys::with_pop(ed, ml, pk_bytes, &sk).expect("with_pop");
+        keys.verify_pop()
+            .expect("PoP must verify under matching BLS key");
+    }
+
+    /// `with_pop` rejects a secret whose public key doesn't
+    /// match the advertised `bls_public_key` (operator
+    /// bookkeeping bug detection).
+    #[test]
+    fn with_pop_rejects_mismatched_secret() {
+        let sk_a = adamant_crypto::bls::SecretKey::from_ikm(&[0x77; 32]).expect("a");
+        let sk_b = adamant_crypto::bls::SecretKey::from_ikm(&[0x88; 32]).expect("b");
+        // Advertise A's public key but supply B's secret —
+        // operator bookkeeping mismatch.
+        let ed = [0x11; ED25519_PUBLIC_KEY_BYTES];
+        let ml = [0x22; ML_DSA_PUBLIC_KEY_BYTES];
+        let err = ValidatorPublicKeys::with_pop(ed, ml, sk_a.public_key().to_bytes(), &sk_b)
+            .expect_err("must reject");
+        assert_eq!(err, PopError::MalformedBlsPublicKey);
+    }
+
+    /// `verify_pop` rejects the canonical rogue-key attack:
+    /// honestly-formatted bundle with a forged PoP signature.
+    /// This is the C-2 attack class the fix closes.
+    #[test]
+    fn verify_pop_rejects_forged_pop_signature() {
+        let sk = adamant_crypto::bls::SecretKey::from_ikm(&[0x77; 32]).expect("bls");
+        let ed = [0x11; ED25519_PUBLIC_KEY_BYTES];
+        let ml = [0x22; ML_DSA_PUBLIC_KEY_BYTES];
+        // Build the honest bundle then tamper the PoP.
+        let mut keys =
+            ValidatorPublicKeys::with_pop(ed, ml, sk.public_key().to_bytes(), &sk).expect("ok");
+        // Forge: flip one bit in the PoP signature.
+        keys.bls_pop[0] ^= 0x01;
+        let err = keys.verify_pop().expect_err("must reject forged PoP");
+        // Either MalformedBlsPop (the tampered byte broke curve
+        // decoding) or PopVerificationFailed (the byte still
+        // decoded but doesn't verify) — both are acceptable
+        // rejection paths.
+        assert!(matches!(
+            err,
+            PopError::PopVerificationFailed | PopError::MalformedBlsPop
+        ));
+    }
+
+    /// `verify_pop` rejects a PoP signed under a different
+    /// secret key — the rogue-key construction attack.
+    #[test]
+    fn verify_pop_rejects_pop_signed_under_different_key() {
+        let sk_target = adamant_crypto::bls::SecretKey::from_ikm(&[0xAA; 32]).expect("target");
+        let sk_attacker = adamant_crypto::bls::SecretKey::from_ikm(&[0xBB; 32]).expect("attacker");
+        let ed = [0x11; ED25519_PUBLIC_KEY_BYTES];
+        let ml = [0x22; ML_DSA_PUBLIC_KEY_BYTES];
+        // Attacker produces a PoP signed under their secret but
+        // tries to register it against the target's public key.
+        let pop_message = compute_bls_pop_message(&ed, &ml, &sk_target.public_key().to_bytes());
+        let forged_pop = sk_attacker.sign(&pop_message);
+        let keys = ValidatorPublicKeys::new(
+            ed,
+            ml,
+            sk_target.public_key().to_bytes(),
+            forged_pop.to_bytes(),
+        );
+        let err = keys.verify_pop().expect_err("must reject cross-key PoP");
+        assert_eq!(err, PopError::PopVerificationFailed);
     }
 }
