@@ -910,7 +910,7 @@ Phase 7.8 sub-arc roadmap (registered in `adamant-network::lib.rs` module docs):
 | **7.8.0** | §9.3.1 | wire-format types | **CLOSED** |
 | **7.8.1** | §9.2, §9.3 | libp2p integration + gossipsub propagation | **CLOSED** |
 | **7.8.2** | §9.5 | anti-DoS + submission proofs + fee floors | **CLOSED** |
-| 7.8.3 | §9.6 | discovery + bootstrap nodes | pending |
+| **7.8.3** | §9.6 | Kademlia DHT discovery + bootstrap | **CLOSED** |
 | 7.8.4 | §9.7 | mempool design + synchronisation | pending |
 
 Workspace changes:
@@ -983,7 +983,26 @@ Phase 7.8.2 surface:
 
 Phase 7.8.2 metrics: `cargo test -p adamant-network --lib` reports 57 passing (29 from prior + 28 new). adamant-network LOC 717 → 1,203 (+486); pub items 28 → 45 (+17). adamant-crypto LOC 6,252 → 6,253 (+1; domain tag); pub items 221 → 222 (+1). Workspace lib tests 2,805 → 2,833 (+28). All 10 Adamant-authored crates at 100% doc coverage. All gates green.
 
-**Next sub-arc — Phase 7.8.3**: Kademlia DHT discovery + bootstrap nodes per §9.6. Adds `libp2p::kad` to the `AdamantBehaviour` (feature already enabled), wires DHT lookups against caller-supplied bootstrap nodes, populates the peer table. Per §9.6.1 "bootstrap nodes are not 'trusted' for any consensus-critical purpose" — they're convenience infrastructure. Surface for spec-author input only if specific bootstrap-node-listing or DHT-tuning details need pinning.
+**Phase 7.8.3 closure (commit `f60b8db`)** — Kademlia DHT discovery + bootstrap per whitepaper §9.6. Extends Phase 7.8.1's `AdamantBehaviour` with a third sub-behaviour (`kademlia`); seeds the DHT routing table from caller-supplied bootstrap peers at launch; surfaces discovery + bootstrap-completion events through the existing `NetworkEvent` surface. Per §9.6.1 "bootstrap nodes are not 'trusted' for any consensus-critical purpose. They are convenience infrastructure." — Phase 7.8.3 honours that posture, treating discovered peers as operational connectivity candidates only.
+
+Phase 7.8.3 surface additions:
+
+- **`ADAMANT_KADEMLIA_PROTOCOL = "/adamant/kad/1.0.0"`** — protocol-name pinning the Adamant DHT into its own namespace (libp2p supports protocol-isolated DHTs sharing a physical mesh; the distinct protocol name keeps Adamant's DHT separate from any other libp2p network's). Versioned to match `NETWORK_PROTOCOL_VERSION`; a bump is a hard-fork-aware deliberate change.
+- **`AdamantBehaviour.kademlia: KademliaBehaviour<MemoryStore>`** — third sub-behaviour. Configured with the §9.2.2-pinned protocol name + 30s query timeout (libp2p default values for routing-table replication, query parallelism, etc. are inherited unchanged).
+- **`NetworkNode::launch` seeds the DHT**: for each bootstrap peer, calls `kademlia.add_address(peer, multiaddr)`; after registering all bootstrap peers, fires `kademlia.bootstrap()` to kick off an initial routing-table fill. The bootstrap result surfaces as a `KademliaBootstrapped` event.
+- **`NetworkEvent::PeerDiscovered(PeerId)`** — emitted on each new DHT routing-table entry (`kad::Event::RoutingUpdated { is_new_peer: true, .. }`).
+- **`NetworkEvent::KademliaBootstrapped`** — emitted when the Kademlia bootstrap query progresses past its final step (`kad::Event::OutboundQueryProgressed { result: QueryResult::Bootstrap(Ok(_)), step.last: true, .. }`).
+
+Tests added (2):
+- `protocol_constants_versioned` extended to cover the Kademlia protocol string (asserts `/adamant/` prefix + `/1.0.0` suffix + distinct from identify protocol).
+- `kademlia_protocol_string_is_adamant_specific` pins the exact string `"/adamant/kad/1.0.0"`.
+- `launch_with_bootstrap_peer_does_not_error` `#[tokio::test]` smoke-tests the `kademlia.add_address` + `kademlia.bootstrap` wiring — the dial itself fails (no peer exists at the placeholder multiaddr) but that surfaces as a `BootstrapDialFailed` event rather than a launch error; the registration path must succeed.
+
+Module-level docs updated to reflect Phase 7.8.3's cumulative scope (Kademlia now shipped, not deferred).
+
+Phase 7.8.3 metrics: `cargo test -p adamant-network --lib` reports 59 passing (57 from prior + 2 new — `kademlia_protocol_string_is_adamant_specific` + `launch_with_bootstrap_peer_does_not_error`; the `protocol_constants_versioned` extension reuses the existing test slot). adamant-network LOC 1,203 → 1,252 (+49). adamant-network pub items unchanged at 45 (the new `NetworkEvent` variants are visible via the existing enum; new const + behaviour-field are sub-public). Workspace lib tests 2,833 → 2,835 (+2). All 10 Adamant-authored crates at 100% doc coverage. All gates green: clippy + fmt + strict audit + both resistant-proof guards. No spec amendment; no new domain tags; no new production-binary deps (libp2p::kad feature was already admitted at Phase 7.8.1).
+
+**Next sub-arc — Phase 7.8.4**: mempool design + synchronisation per §9.7. Pins the priority-queue mempool design (ranked by fee per §9.7.1 + §10); wires the Phase 7.8.2 anti-DoS gating into propagation (§9.5.4 cryptographic verification before propagation); surfaces mempool-sync events for new nodes catching up.
 
 **Phase 6 hygiene follow-up (commit `0cc2848`)** — `adamant-halo2` ECC chip tests gated behind `expensive-tests` feature. Four forked-upstream tests (`ecc::chip::constants::tests::lagrange_coeffs`, `zs_and_us`, `ecc::chip::mul_fixed::short::tests::invalid_magnitude_sign`, `ecc::tests::ecc_chip`) reconstruct full fixed-base Lagrange-coefficient tables and run MockProver at k=13 across the ECC chip surface; debug-mode runtime exceeds 60s each and was blocking workspace test runs at 20+ minutes after Phase 6.8b.3 vendored them in byte-faithfully. New `expensive-tests = []` feature on `adamant-halo2` (mirrors the `adamant-privacy` posture introduced at Phase 6.8b.5); each test carries `#[cfg_attr(not(feature = "expensive-tests"), ignore = "...")]`. Empirical result: `cargo test -p adamant-halo2 --lib` reports 58 passed + 4 ignored in 3.6s (down from 20+ min hang); full workspace `cargo test` completes cleanly. Tests still compile so the upstream byte-faithful posture and refactor-checking are preserved — only the runtime ignore flag flips. Test-time only; no production-binary impact. Resistant-proof guards continue to pass; workspace audit strict mode passes; doc coverage remains 100% across 9 Adamant-authored crates.
 
