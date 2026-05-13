@@ -4,13 +4,22 @@ import os
 import re
 
 ROOTS = [
-    'crates/adamant-vm/src',
-    'crates/adamant-crypto/src',
     'crates/adamant-account/src',
+    'crates/adamant-bytecode-format/src',
+    'crates/adamant-cli/src',
+    'crates/adamant-consensus/src',
+    'crates/adamant-crypto/src',
+    'crates/adamant-crypto-blst-extra/src',
+    # adamant-halo2 EXCLUDED: forked Zcash codebase per CLAUDE.md
+    # §14.4 Decision 1 Path C2; byte-faithful upstream preservation.
+    # Inherited unwraps are vendored audit history, not Adamant-authored risk.
+    'crates/adamant-light/src',
+    'crates/adamant-network/src',
+    'crates/adamant-node/src',
+    'crates/adamant-privacy/src',
     'crates/adamant-state/src',
     'crates/adamant-types/src',
-    'crates/adamant-bytecode-format/src',
-    'crates/adamant-crypto-blst-extra/src',
+    'crates/adamant-vm/src',
 ]
 
 

@@ -1,30 +1,34 @@
 //! Build-system independence check enforcing the resistant-proof
 //! posture per whitepaper §6.2.1 and §6.2.1.8: vendored Sui-Move
-//! crates must not appear in the `adamant-vm` production-binary's
-//! dependency graph.
+//! crates must not appear in any Adamant-authored production-
+//! binary's dependency graph.
 //!
 //! The test walks `cargo metadata`'s resolved dependency tree
-//! starting from `adamant-vm`'s normal (non-dev, non-build)
-//! dependency edges and asserts no `move-*` crate is reachable.
-//! Dev-dependencies and build-dependencies are explicitly
-//! permitted by §6.2.1.8's carve-out for test-only / build-
-//! tooling-only / CI-only dependencies; they're excluded from
-//! the walk via the `dep_kinds` filter.
+//! starting from each Adamant production crate's normal
+//! (non-dev, non-build) dependency edges and asserts no `move-*`
+//! crate is reachable. Dev-dependencies and build-dependencies
+//! are explicitly permitted by §6.2.1.8's carve-out for test-
+//! only / build-tooling-only / CI-only dependencies; they're
+//! excluded from the walk via the `dep_kinds` filter.
 //!
-//! Phase 5/5b.5 E-1b adds this check as the mechanical guardrail
+//! Phase 5/5b.5 E-1b added this check as the mechanical guardrail
 //! for the architectural commitment in §6.2.1.8: "no implementation
 //! that depends on Sui-Move's logic at deploy-time or runtime is
-//! conforming". If a future change accidentally introduces a
-//! production-side `move-*` dep, this test fails with the
-//! offending crate's name.
+//! conforming". Pre-Phase-10 audit extended coverage from
+//! `adamant-vm` alone to ALL 13 in-scope Adamant production
+//! crates (excluding `adamant-halo2` per its byte-faithful forked
+//! posture). If a future change accidentally introduces a
+//! production-side `move-*` dep anywhere in the workspace, this
+//! test fails with the offending crate's name + the chain of
+//! crates that pulled it in.
 //!
 //! Mechanism: invokes `cargo metadata --format-version 1` via
 //! `std::process::Command`, parses the JSON output by hand (no
 //! third-party `cargo_metadata` crate dependency), builds a
 //! package-id → name map from the `packages` array, walks the
-//! resolve graph from `adamant-vm`'s `normal`-kind edges via the
-//! `resolve.nodes[i].deps[j].dep_kinds` filter, and asserts no
-//! reached crate's name starts with `move-`.
+//! resolve graph from each target crate's `normal`-kind edges
+//! via the `resolve.nodes[i].deps[j].dep_kinds` filter, and
+//! asserts no reached crate's name starts with `move-`.
 
 use std::collections::HashMap;
 use std::process::Command;
@@ -35,37 +39,61 @@ use std::process::Command;
 /// member list in the root `Cargo.toml`.
 const FORBIDDEN_PREFIX: &str = "move-";
 
-/// Crate name whose production dependency tree this test walks.
-const TARGET_CRATE: &str = "adamant-vm";
+/// Adamant-authored production crates whose dependency graphs
+/// must not contain any `move-*` crate. `adamant-halo2` is
+/// excluded — it's the forked Halo 2 crate per CLAUDE.md §14.4
+/// Decision 1 Path C2 and does not transitively pull Sui.
+const TARGET_CRATES: &[&str] = &[
+    "adamant-account",
+    "adamant-bytecode-format",
+    "adamant-cli",
+    "adamant-consensus",
+    "adamant-crypto",
+    "adamant-crypto-blst-extra",
+    "adamant-light",
+    "adamant-network",
+    "adamant-node",
+    "adamant-privacy",
+    "adamant-state",
+    "adamant-types",
+    "adamant-vm",
+];
 
-/// Walk `cargo metadata`'s resolve graph starting from the
-/// `adamant-vm` package's normal-kind dependency edges. Asserts
-/// no `move-*` crate is reachable.
+/// Walk `cargo metadata`'s resolve graph starting from each
+/// Adamant production crate's normal-kind dependency edges.
+/// Asserts no `move-*` crate is reachable from any of them.
 #[test]
-fn adamant_vm_production_deps_contain_no_sui_move_crates() {
+fn adamant_production_deps_contain_no_sui_move_crates() {
     let metadata_json = run_cargo_metadata();
     let id_to_name = build_id_to_name_map(&metadata_json);
-    let target_id = id_to_name
-        .iter()
-        .find(|(_, name)| *name == TARGET_CRATE)
-        .map_or_else(
-            || panic!("`cargo metadata` did not surface `{TARGET_CRATE}` package"),
-            |(id, _)| id.clone(),
-        );
+    let mut all_violations: Vec<(String, Vec<String>)> = Vec::new();
 
-    let reachable = walk_normal_deps(&metadata_json, &target_id);
-    let forbidden: Vec<String> = reachable
-        .iter()
-        .filter_map(|id| id_to_name.get(id).cloned())
-        .filter(|name| name.starts_with(FORBIDDEN_PREFIX))
-        .collect();
+    for target in TARGET_CRATES {
+        let target_id = id_to_name
+            .iter()
+            .find(|(_, name)| name == target)
+            .map_or_else(
+                || panic!("`cargo metadata` did not surface `{target}` package"),
+                |(id, _)| id.clone(),
+            );
+
+        let reachable = walk_normal_deps(&metadata_json, &target_id);
+        let forbidden: Vec<String> = reachable
+            .iter()
+            .filter_map(|id| id_to_name.get(id).cloned())
+            .filter(|name| name.starts_with(FORBIDDEN_PREFIX))
+            .collect();
+        if !forbidden.is_empty() {
+            all_violations.push(((*target).to_string(), forbidden));
+        }
+    }
+
     assert!(
-        forbidden.is_empty(),
-        "`{TARGET_CRATE}` production dependency graph contains forbidden Sui-Move \
-         crate(s) (whitepaper §6.2.1.8 resistant-proof posture violated):\n  {forbidden:?}\n\
+        all_violations.is_empty(),
+        "Adamant production dependency graphs contain forbidden Sui-Move crate(s) \
+         (whitepaper §6.2.1.8 resistant-proof posture violated):\n{all_violations:#?}\n\
          Move-* crates must appear only in [dev-dependencies] or [build-dependencies], \
-         never in [dependencies]. See `crates/adamant-vm/Cargo.toml` for the canonical \
-         placement and `vendor/README.md` for the vendored-crate list."
+         never in [dependencies]. See each offending crate's Cargo.toml + vendor/README.md."
     );
 }
 

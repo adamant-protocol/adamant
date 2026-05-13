@@ -13,13 +13,21 @@ import os
 import re
 
 ROOTS = [
-    'crates/adamant-vm/src',
-    'crates/adamant-crypto/src',
     'crates/adamant-account/src',
+    'crates/adamant-bytecode-format/src',
+    'crates/adamant-cli/src',
+    'crates/adamant-consensus/src',
+    'crates/adamant-crypto/src',
+    'crates/adamant-crypto-blst-extra/src',
+    # adamant-halo2 EXCLUDED: forked Zcash codebase per CLAUDE.md
+    # §14.4 Decision 1 Path C2; byte-faithful upstream preservation.
+    'crates/adamant-light/src',
+    'crates/adamant-network/src',
+    'crates/adamant-node/src',
+    'crates/adamant-privacy/src',
     'crates/adamant-state/src',
     'crates/adamant-types/src',
-    'crates/adamant-bytecode-format/src',
-    'crates/adamant-crypto-blst-extra/src',
+    'crates/adamant-vm/src',
 ]
 
 
@@ -30,6 +38,14 @@ def is_under_tests_dir(path):
 def is_test_only_file(path):
     posix = path.replace('\\', '/')
     return posix.endswith('test_fixtures.rs') or posix.endswith('test_helpers.rs')
+
+
+def is_binary_entry_point(path):
+    """Binary entry points (main.rs) legitimately use println!/eprintln!
+    for operator-facing output and `--help` text. Exempt from the
+    println/eprintln check."""
+    posix = path.replace('\\', '/')
+    return posix.endswith('/main.rs')
 
 
 def mask_test_blocks(lines):
@@ -92,6 +108,10 @@ def main():
                 if is_test_only_file(path):
                     continue
                 for name, pat in patterns.items():
+                    # main.rs is exempt only from the println/eprintln/dbg
+                    # check — binaries legitimately print to stdout/stderr.
+                    if name == 'println/eprintln/dbg' and is_binary_entry_point(path):
+                        continue
                     for ln, line in scan_pattern(path, pat):
                         findings[name].append((path, ln, line))
 

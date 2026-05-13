@@ -147,7 +147,9 @@ impl SpendingPrivateKey {
     pub fn from_bytes(bytes: &[u8; SCALAR_BYTES]) -> Option<Self> {
         let opt = pallas::Scalar::from_repr(*bytes);
         if bool::from(opt.is_some()) {
-            Some(Self(opt.unwrap()))
+            Some(Self(opt.expect(
+                "Adamant invariant: is_some() returned true on the previous line",
+            )))
         } else {
             None
         }
@@ -210,7 +212,9 @@ impl SpendingPublicKey {
     pub fn from_bytes(bytes: &[u8; POINT_COMPRESSED_BYTES]) -> Option<Self> {
         let opt = pallas::Affine::from_bytes(bytes);
         if bool::from(opt.is_some()) {
-            Some(Self(opt.unwrap()))
+            Some(Self(opt.expect(
+                "Adamant invariant: is_some() returned true on the previous line",
+            )))
         } else {
             None
         }
@@ -416,7 +420,8 @@ pub fn derive_stealth_address(
     if bool::from(coords.is_none()) {
         return Err(StealthAddressIsIdentity);
     }
-    let coords = coords.unwrap();
+    let coords = coords
+        .expect("Adamant invariant: is_none() returned false in the early-return guard above");
     let x_bytes = coords.x().to_repr();
     Ok(StealthAddress::from_bytes(x_bytes))
 }

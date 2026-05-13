@@ -269,10 +269,16 @@ impl Circuit<pallas::Base> for NullifierCircuit {
 
         let poseidon = Pow5Chip::configure::<P128Pow5T3>(
             meta,
-            state.try_into().unwrap(),
+            state.try_into().expect(
+                "Adamant invariant: state was constructed as exactly 3 elements for P128Pow5T3",
+            ),
             partial_sbox,
-            rc_a.try_into().unwrap(),
-            rc_b.try_into().unwrap(),
+            rc_a.try_into().expect(
+                "Adamant invariant: rc_a was constructed as exactly 3 elements for P128Pow5T3",
+            ),
+            rc_b.try_into().expect(
+                "Adamant invariant: rc_b was constructed as exactly 3 elements for P128Pow5T3",
+            ),
         );
 
         NullifierConfig { poseidon, instance }

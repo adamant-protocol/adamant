@@ -6,7 +6,9 @@ This file is read automatically at the start of every Codex session in this repo
 
 ## TL;DR
 
-You are working on **Adamant**, a Layer 1 blockchain protocol. The user is **Ryan Geldart**. The whitepaper is complete and lives in `/whitepaper`. Implementation is **just beginning**. We are in Phase 1 (reference implementation), writing Rust from scratch, working through the whitepaper crate by crate. **The whitepaper is the spec; the code implements it.** Standard cryptographic primitives only. Apache 2.0. No tokens, no fundraising, no marketing language ever.
+You are working on **Adamant**, a Layer 1 blockchain protocol. The user is **Ryan Geldart**. The whitepaper is complete and lives in `/whitepaper`. **Phases 1 through 9 are feature-complete on the code side; the workspace is at Phase 10's doorstep** (testnets + security audits + pre-mainnet hardening, which is operational work, not implementation). The workspace has 14 Adamant-authored crates plus 13 vendored Sui-Move crates at tag `mainnet-v1.66.2` (test-only, never in the production binary's dependency graph). **The whitepaper is the spec; the code implements it.** Standard cryptographic primitives only. Apache 2.0. No tokens, no fundraising, no marketing language ever.
+
+**Always consult `CLAUDE.md` Section 10 ("Current status") for the authoritative state-bump record** — that file is updated with each phase closure and CLAUDE.md is the canonical state-tracker for both Claude Code and Codex sessions. This AGENTS.md is a Codex-facing companion that mirrors CLAUDE.md's project briefing; if the two ever drift, CLAUDE.md is authoritative.
 
 ---
 
@@ -487,102 +489,91 @@ Mechanical posture:
 - Production binary depends only on the Adamant-owned fork; upstream version (if any) appears only as test-time cross-validation oracle (Category D) or not at all.
 - Upstream changes affect Adamant only as development-time signals (refresh-and-review work item), never as consensus events.
 
-### 14.4 Pending posture decisions
+### 14.4 Posture decisions
 
-Two posture decisions deserve spec-author deliberation. They are registered here as canonical record of the open questions; the answers land at the appropriate plan-gate.
+Two posture decisions are resolved; two remain open for spec-author deliberation at pre-mainnet hardening. Full text + rationale lives in `CLAUDE.md` §14.4 (authoritative); brief status follows.
 
-#### Decision 1 — Halo 2 / `halo2_gadgets` at Phase 6 plan-gate
+#### Decision 1 — Halo 2 / `halo2_gadgets` (RESOLVED — Path C2)
 
-`halo2_gadgets 0.3` (Zcash / Electric Coin Company ecosystem) is currently in the workspace `[workspace.dependencies]` but not yet pulled into any production-side crate. The Phase 6 privacy-layer workstream (§7 + §3.7.1 + §8.5) will activate the Halo 2 surface for shielded-execution circuits + recursive proof composition.
+Forked `halo2_gadgets` + the necessary subset of `halo2_proofs` into the Adamant-owned `adamant-halo2` crate at Phase 6.8b per the spec-author plan-gate. Adamant's production graph contains zero upstream `halo2_*` crates; the resistant-proof guard at `crates/adamant-privacy/tests/no_upstream_halo2_in_production_deps.rs` mechanically enforces this across all 13 Adamant production crates. The `halo2_gadgets` workspace.dependencies entry was removed at the pre-Phase-10 audit closure (no production consumer remained after the C2 fork).
 
-Three options at Phase 6 plan-gate:
+#### Decision 2 — RocksDB at Phase 4 backfill / pre-mainnet (PENDING)
 
-- **Path C1 — Adamant-native Halo 2 implementation.** Tens of thousands of LOC; substantial pre-mainnet investment. Maximum independence; maximum implementation cost.
-- **Path C2 — Fork `halo2_gadgets` (and necessary subset of `halo2_proofs`) into `adamant-halo2` with `PROVENANCE.md`.** Phase 5/5b.1a/b precedent applied to the ZK proof system. Production-binary control retained; upstream code quality preserved; refresh-cadence controlled.
-- **Path C3 — Accept as bounded-ecosystem (Category B-style).** Pragmatic; same posture as the RustCrypto + blst set. Halo 2 is a substantial standardised proof system with audit history; bounded-ecosystem treatment is defensible.
+The Phase 4 object-storage backfill landed the `StateView` / `StateMutator` trait surface + sparse-Merkle-tree primitive. The concrete persistent backend (RocksDB, sled, redb, etc. — bounded-ecosystem-equivalent, infrastructure tier) is deferred to pre-mainnet hardening.
 
-**Recommendation**: Path C2 likely. The forking-over-vendoring discipline applies cleanly: Adamant owns the fork; upstream is consulted at refresh time, not depended on at runtime. Spec-author call at Phase 6 plan-gate.
+#### Decision 3 — KZG trusted-setup procurement source (PENDING)
 
-**Sub-decision (independent of path)**: `halo2_gadgets` currently has a non-exact pin (`"0.3"` not `"=0.3.x"`). Worth tightening to exact pin regardless of posture path. Pre-mainnet hardening candidate.
+Whitepaper §3.9.2 + §11.2 currently specify Ethereum's KZG Powers of Tau ceremony output (July 2023). The §3.9.2 amendment at instance 30 settled the *implementation* posture (Adamant-native math); the *setup-source* question is independent and stays pending for pre-mainnet deliberation.
 
-#### Decision 2 — RocksDB at Phase 4 backfill / pre-mainnet
+#### Decision 4 — `libp2p` (RESOLVED — Option A: Cat E networking-infrastructure)
 
-The Phase 4 object-storage backfill workstream needs a concrete `StateView` / `StateMutator` implementation against persistent storage (in-memory mocks shipped at Phase 5/6.6 satisfy the trait surface for runtime-side wiring; production storage backend is deferred).
-
-Three options:
-
-- **Bounded-ecosystem (Category B-equivalent for storage).** Industry-standard storage infrastructure (RocksDB, sled, redb, etc.). Pragmatic; storage is non-consensus infrastructure.
-- **Adamant-native storage layer.** Effectively building a database. Massive scope; net-negative for protocol value.
-- **Forked storage layer.** Excessive for a non-consensus dependency.
-
-**Recommendation**: bounded-ecosystem acceptable, treating storage as infrastructure tier (Category E-equivalent). The protocol-binding logic on top of storage is Adamant-native (`adamant-state`); the storage backend itself can be off-the-shelf. Spec-author call at Phase 4 backfill plan-gate.
-
-#### Decision 3 — KZG trusted-setup procurement source
-
-Whitepaper §3.9.2 + §11.2 currently specify Ethereum's KZG Powers of Tau ceremony output (July 2023) as the trusted-setup source. The §3.9.2 amendment at instance 30 settled the *implementation* posture (Adamant-native math); the *setup-source* question is independent.
-
-Two options:
-
-- **EthPoT reuse** (current spec text). Conservative-choice; transfers Ethereum's ceremony confidence at zero marginal cost. Hard-fork-to-update if needed.
-- **Adamant ceremony pre-genesis.** Custom ceremony coordinated by the Adamant ecosystem. Substantial pre-mainnet coordination cost; constitutional-impact (how is the participant set determined?). Maximum protocol autonomy.
-
-**Recommendation**: pending spec-author deliberation at pre-mainnet hardening. The §3.9.2 amendment did not change setup-source language; that's a separate constitutional-impact deliberation.
+Admitted `libp2p` to Category E locked-set at Phase 7.8 plan-gate per the §9.2.1 Principle-VI invocation in the whitepaper. Pinned `libp2p =0.56.0` with the §9.2.2 feature subset (`quic`, `tcp`, `noise`, `yamux`, `kad`, `gossipsub`, `identify`, `dns`, `macros`, `tokio`). Network-layer correctness is *delivery*, not state-transition correctness — the resistant-proof framework's audit-surface concerns are addressed at the consensus + crypto layers above.
 
 ### 14.5 Phase-by-phase build map
 
-The following map records which phases are complete, in progress, or pending, with explicit Category labels for each major deliverable. Categories are A (Adamant-native required), B (bounded ecosystem), C (Adamant-native bridge layer), D (test-time only), E (workspace utility). The map is canonical-record forward planning; spec-author may revise scope at any phase plan-gate.
+The following map records the implementation status with explicit Category labels for each major deliverable. Categories are A (Adamant-native required), B (bounded ecosystem), C (Adamant-native bridge layer), D (test-time only), E (workspace utility). For the authoritative phase history, consult `CLAUDE.md` Section 10.
 
-**Phase 1–2: Foundation (DONE)**
+**Phases 1–2: Foundation (CLOSED)**
 - `adamant-types` + `adamant-crypto` wrappers — Cat A + B/C bridge layer.
 
-**Phase 3: Cryptographic primitives (DONE)**
+**Phase 3: Cryptographic primitives (CLOSED)**
 - Hashing/sig/AEAD wrappers around bounded ecosystem — Cat B.
 - BIP-340 tagged-hash construction — Cat C bridge.
 - Threshold encryption — Cat C bridge.
-- KZG — Cat C bridge (implementation pending; spec settled at instance 30).
+- KZG — Cat C bridge (Adamant-native on `blst` per §3.9.2 amendment instance 30).
 - ML-KEM-768 wrapper — Cat B.
 
-**Phase 4: Transactions + lifecycle (DONE)**
-- Transaction type + TxHash + lifecycle validators — Cat A.
+**Phase 4: State + lifecycle (CLOSED; including Phase 4 backfill)**
+- `adamant-state`: object lifecycle validators + sparse-Merkle-tree state-commitment + `StateView` / `StateMutator` traits — Cat A.
 
-**Phase 5: Verifier (DONE; Phase 5/5 closed at commit `5e1bb0d` with 9 architectural commitments per CONTRIBUTING.md spec-first verification instances 16–24)**
-- `adamant-bytecode-format` fork — Cat A (Phase 5/5b.1a/b precedent for forking-over-vendoring).
-- `adamant-vm` verifier — Cat A.
-- Cross-module Rule 3 walker — Cat A.
+**Phase 5: Bytecode verifier + AVM runtime (CLOSED)**
+- `adamant-bytecode-format` fork — Cat A (Phase 5/5b.1a/b forking-over-vendoring precedent).
+- `adamant-vm` verifier (11 module-level passes + 5 per-function passes + 7 Adamant rules + cross-module Rule 3 walker) — Cat A.
+- AVM runtime + multi-dimensional gas accounting — Cat A.
+- KZG bytecode dispatch + `module_deploy` wiring — Cat A on Cat C bridge.
 
-**Phase 5/6: AVM Runtime (~93%; current phase)**
-- AVM runtime + bytecode dispatch — Cat A.
-- Multi-dimensional gas accounting — Cat A.
-- Transaction-boundary integration (`load_read_set` + `commit_buffer`) — Cat A.
-- KZG implementation pending (Cat C bridge; dedicated session).
-- 5/6.7 + 5/6.8 stdlib pending.
-
-**Phase 6: Privacy layer (NEXT MAJOR PHASE)**
+**Phase 6: Privacy layer (CLOSED)**
 - `adamant-privacy` — Cat A.
-- Halo 2 ZK circuits — **Posture Decision 1 pending** (C1/C2/C3 at Phase 6 plan-gate).
+- `adamant-halo2` fork (per §14.4 Decision 1 Path C2) — Cat A (replaces upstream `halo2_gadgets` + subset of `halo2_proofs`).
+- Halo 2 validity circuit, recursive accumulator-folding, value-commitments, view-key hierarchy — Cat A on Cat C bridge.
 - Privacy-circuit handlers (`GenerateProof` / `VerifyProof` / `RecursiveVerify` / `ReleaseSubViewKey`) — Cat C bridge.
-- Recursive proof generation — Cat C bridge.
 
-**Phase 7+: Consensus + networking**
-- DAG-BFT consensus — Cat A required.
-- Threshold-encrypted mempool — Cat A on Cat B primitives.
-- Time-lock VDF — Cat A required.
-- P2P networking — **Posture decision pending**: `libp2p` (bounded-ecosystem-equivalent for networking infrastructure) vs Adamant-native protocol stack. Decide at Phase 7 networking plan-gate.
-- Validator-set management — Cat A required.
+**Phase 7: Consensus + networking (CLOSED)**
+- DAG-BFT consensus core (Mysticeti-style anchor election + direct/indirect commit + halt detection) — Cat A.
+- Threshold-encrypted mempool + two-regime hysteresis — Cat A on Cat B primitives.
+- Wesolowski time-lock VDF (class-group arithmetic, deterministic setup, evaluate/prove/verify, envelope encryption) — Cat A.
+- BLS-aggregate consensus VRF — Cat A on Cat B `blst`.
+- `adamant-network`: libp2p integration (per §14.4 Decision 4 Option A) + anti-DoS + Kademlia DHT + priority-queue mempool — Cat A on Cat E networking.
+- Light-client tier signal + epoch-boundary tracking + slashing wiring — Cat A.
 
-**Pre-mainnet hardening**
+**Phase 8: (subsumed into Phase 7).**
+
+**Phase 9: Integration + binaries (CLOSED)**
+- `adamant-node` validator daemon — Cat A.
+- `adamant-cli` operator command-line tool — Cat A (consumes `hex` Cat E for operator-facing encoding).
+- `adamant-light` light-client daemon — Cat A.
+- Phase 9.3 recursive-proof verification wiring + Phase 9.3.1 §8.9 claim verification — Cat A cross-layer wiring.
+- Phase 9.4 end-to-end binary-tier integration tests — Cat A test infrastructure.
+
+**Phase 10: Testnets + audits + pre-mainnet hardening (NEXT — operational)**
+- Public testnets — operational.
+- Security audits — operational (external auditor coordination).
 - Object-storage RocksDB backend — **Posture Decision 2 pending**.
 - Per-instruction gas-cost calibration — Cat A.
 - Throughput-floor empirical validation — methodological work.
 - Trusted-setup procurement (KZG) — **Posture Decision 3 pending**.
 - AIP framework (`adamant-improvement-proposals` repo) — Cat A process design.
-- `halo2_gadgets` exact-pin tightening — small mechanical hardening.
+- §3.8.2 VDF `T`-parameter calibration on consensus-grade hardware.
+- §3.8.6 fundamental-discriminant calibration on the genesis seed.
+- §6.2.1.7 structural-limits values amendment.
+- §10/§11 genesis pool + validator-stake calibration.
+- T3 cross-validation real-world corpus collection.
 
 **Genesis + Mainnet (§10–11)**
 - Genesis pool mechanism — Cat A.
 - Burn-to-mint bridges — Cat A on the Adamant side; per-target-chain integration is bounded-ecosystem-equivalent for the target chain's interface.
 - Active-set selection (FCFS + Genesis NFT per §10.2) — Cat A.
-- Wallet + explorer + SDKs — Cat A (already in 14-repo allocation).
+- Wallet + explorer + SDKs — Cat A (in the 14-repo allocation).
 
 ### 14.6 When the discipline is hard
 

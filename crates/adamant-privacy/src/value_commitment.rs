@@ -118,7 +118,7 @@ impl ValueCommitment {
     pub fn to_point(&self) -> Option<pallas::Affine> {
         let opt = pallas::Affine::from_bytes(&self.0);
         if bool::from(opt.is_some()) {
-            Some(opt.unwrap())
+            Some(opt.expect("Adamant invariant: is_some() returned true on the previous line"))
         } else {
             None
         }
@@ -166,7 +166,9 @@ impl ValueCommitmentRandomness {
         use pasta_curves::group::ff::PrimeField;
         let opt = pallas::Scalar::from_repr(*bytes);
         if bool::from(opt.is_some()) {
-            Some(Self(opt.unwrap()))
+            Some(Self(opt.expect(
+                "Adamant invariant: is_some() returned true on the previous line",
+            )))
         } else {
             None
         }

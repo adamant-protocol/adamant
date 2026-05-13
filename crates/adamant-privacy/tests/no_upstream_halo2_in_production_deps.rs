@@ -42,39 +42,65 @@ use std::process::Command;
 /// `crates/adamant-halo2/PROVENANCE.md`.
 const FORBIDDEN_CRATES: &[&str] = &["halo2_proofs", "halo2_gadgets", "halo2_poseidon"];
 
-/// Crate name whose production dependency tree this test walks.
-const TARGET_CRATE: &str = "adamant-privacy";
+/// Adamant-authored production crates whose dependency graphs
+/// must not contain any upstream `halo2_*` crate. The fork crate
+/// `adamant-halo2` is itself excluded — it IS the Adamant-owned
+/// fork that replaces the upstream surface. Every other Adamant
+/// production crate (including the binary scaffolds) must keep
+/// upstream halo2_* out of its production graph.
+const TARGET_CRATES: &[&str] = &[
+    "adamant-account",
+    "adamant-bytecode-format",
+    "adamant-cli",
+    "adamant-consensus",
+    "adamant-crypto",
+    "adamant-crypto-blst-extra",
+    "adamant-light",
+    "adamant-network",
+    "adamant-node",
+    "adamant-privacy",
+    "adamant-state",
+    "adamant-types",
+    "adamant-vm",
+];
 
-/// Walk `cargo metadata`'s resolve graph starting from the
-/// `adamant-privacy` package's normal-kind dependency edges.
-/// Asserts no upstream `halo2_*` crate is reachable.
+/// Walk `cargo metadata`'s resolve graph starting from each
+/// Adamant production crate's normal-kind dependency edges.
+/// Asserts no upstream `halo2_*` crate is reachable from any.
 #[test]
-fn adamant_privacy_production_deps_contain_no_upstream_halo2_crates() {
+fn adamant_production_deps_contain_no_upstream_halo2_crates() {
     let metadata_json = run_cargo_metadata();
     let id_to_name = build_id_to_name_map(&metadata_json);
-    let target_id = id_to_name
-        .iter()
-        .find(|(_, name)| *name == TARGET_CRATE)
-        .map_or_else(
-            || panic!("`cargo metadata` did not surface `{TARGET_CRATE}` package"),
-            |(id, _)| id.clone(),
-        );
+    let mut all_violations: Vec<(String, Vec<String>)> = Vec::new();
 
-    let reachable = walk_normal_deps(&metadata_json, &target_id);
-    let forbidden: Vec<String> = reachable
-        .iter()
-        .filter_map(|id| id_to_name.get(id).cloned())
-        .filter(|name| FORBIDDEN_CRATES.contains(&name.as_str()))
-        .collect();
+    for target in TARGET_CRATES {
+        let target_id = id_to_name
+            .iter()
+            .find(|(_, name)| name == target)
+            .map_or_else(
+                || panic!("`cargo metadata` did not surface `{target}` package"),
+                |(id, _)| id.clone(),
+            );
+
+        let reachable = walk_normal_deps(&metadata_json, &target_id);
+        let forbidden: Vec<String> = reachable
+            .iter()
+            .filter_map(|id| id_to_name.get(id).cloned())
+            .filter(|name| FORBIDDEN_CRATES.contains(&name.as_str()))
+            .collect();
+        if !forbidden.is_empty() {
+            all_violations.push(((*target).to_string(), forbidden));
+        }
+    }
+
     assert!(
-        forbidden.is_empty(),
-        "`{TARGET_CRATE}` production dependency graph contains forbidden upstream Halo 2 \
-         crate(s) (CLAUDE.md §14.4 Decision 1 resistant-proof posture violated):\n  {forbidden:?}\n\
+        all_violations.is_empty(),
+        "Adamant production dependency graphs contain forbidden upstream Halo 2 crate(s) \
+         (CLAUDE.md §14.4 Decision 1 resistant-proof posture violated):\n{all_violations:#?}\n\
          Upstream Halo 2 ZK proving-system crates must appear only in [dev-dependencies] or \
          [build-dependencies], never in [dependencies]. Production-side Halo 2 surface flows \
          through `adamant-halo2` (Adamant's fork). See `crates/adamant-halo2/PROVENANCE.md` \
-         for the fork posture and the `FORBIDDEN_CRATES` list at the top of this file for the \
-         exact crate names blocked."
+         for the fork posture."
     );
 }
 

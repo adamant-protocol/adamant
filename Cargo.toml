@@ -106,15 +106,18 @@ hkdf = { version = "=0.12.4", default-features = false }
 # SECURITY.md as carrying upstream `unsafe`.
 blake3 = "=1.8.5"
 # Poseidon for use inside Halo 2 circuits (whitepaper 3.3.3, 3.7.1).
-halo2_gadgets = { version = "0.3", default-features = false }
+# The upstream `halo2_gadgets` was forked into `adamant-halo2` at
+# Phase 6.8b per CLAUDE.md §14.4 Decision 1 Path C2. Adamant's
+# production graph no longer references upstream halo2_gadgets; the
+# `tests/no_upstream_halo2_in_production_deps.rs` resistant-proof
+# guard enforces this mechanically.
 # Pasta curves (Pallas / Vesta) per whitepaper §3.9.1. Pulled in
 # directly so adamant-privacy can name `pallas::Base` field-element
 # types at its API boundary (Poseidon hash inputs/outputs per the
 # §3.3.3 amendment instance 31). The version matches the transitive
-# pin from halo2_gadgets 0.3 → halo2_poseidon 0.1 → pasta_curves
-# 0.5; no version skew. Bounded-ecosystem treatment per CLAUDE.md
-# §14.4 Decision 1 (interim C3; revisited at Phase 6.8 plan-gate).
-pasta_curves = { version = "0.5", default-features = false, features = ["alloc", "bits"] }
+# pin from halo2_poseidon 0.1 → pasta_curves 0.5; locked at 0.5.1
+# in Cargo.lock per the exact-pinning discipline.
+pasta_curves = { version = "=0.5.1", default-features = false, features = ["alloc", "bits"] }
 
 # Classical signatures (whitepaper 3.4.1)
 # ed25519-dalek: pinned exactly.
@@ -166,7 +169,8 @@ zeroize = { version = "=1.8.2", features = ["derive"] }
 subtle = "=2.6.1"
 # rand_core: workspace-level default has only the trait surface enabled.
 # Per-crate dev-deps enable `getrandom` when an OS RNG is needed in tests.
-rand_core = { version = "0.6", default-features = false }
+# Pinned at 0.6.4 per the exact-pinning discipline (Cargo.lock-resolved).
+rand_core = { version = "=0.6.4", default-features = false }
 
 # Canonical serialisation (whitepaper 5.1.8). BCS — Binary Canonical
 # Serialization — is the consensus-critical encoding for every value
@@ -241,8 +245,8 @@ arbitrary = { version = "1.1.7", features = ["derive", "derive_arbitrary"] }
 colored = "2.0.0"                                                     # NEW (§6.2.1.6 batch; transitive via move-command-line-common)
 datatest-stable = "0.1.1"                                             # NEW (§6.2.1.6 batch; move-regex-borrow-graph dev-dep)
 dirs-next = "2.0.0"                                                   # NEW (§6.2.1.6 batch; transitive via move-command-line-common)
-ethnum = "1.0.4"
-getrandom = "0.2.9"
+ethnum = "=1.5.3"                                                     # Cat E workspace utility per CLAUDE.md §14.1; exact-pinned (locked in Cargo.lock)
+getrandom = "=0.2.17"                                                 # Cat E workspace utility; exact-pinned (locked in Cargo.lock)
 indexmap = "2.8.0"
 insta = "1.42.0"
 itertools = "0.10.0"
@@ -261,7 +265,7 @@ num-bigint = { version = "=0.4.6", features = ["serde"] }
 num-integer = "=0.1.46"
 num-traits = "=0.2.19"
 packed_struct = "0.10.1"                                              # NEW (§6.2.1.6 batch; transitive via move-command-line-common)
-petgraph = "0.8.1"                                                    # NEW (§6.2.1.6 batch; direct dep of move-bytecode-verifier and move-regex-borrow-graph)
+petgraph = "=0.8.3"                                                   # Cat E workspace utility per CLAUDE.md §14.1; exact-pinned (locked in Cargo.lock); production dep of adamant-vm validator
 # libp2p — networking infrastructure tier per §14.1 + §14.4
 # Decision 4 (RESOLVED Option A). Spec-pinned subset per §9.2.2:
 # QUIC primary + TCP fallback, Noise XX security, Yamux
@@ -309,7 +313,7 @@ serde_with = "3.9.0"
 serde_yaml = "0.8.26"
 sha2 = "0.9.3"                                                        # NEW (§6.2.1.6 batch; transitive via move-command-line-common — non-consensus, used for source-file fingerprinting in dev tooling)
 syn = { version = "1.0.64", features = ["derive"] }
-thiserror = "1.0.24"
+thiserror = "=1.0.69"                                                 # Cat E workspace utility per CLAUDE.md §14.1; exact-pinned (locked in Cargo.lock)
 uint = "0.9.4"
 variant_count = "1.1.0"
 vfs = "0.10.0"                                                        # NEW (§6.2.1.6 batch; transitive via move-command-line-common)

@@ -13,9 +13,10 @@ python3 scripts/audit_patterns.py
 
 ## `audit_unwrap.py`
 
-Reports any non-test `.unwrap()` calls across the 7 Adamant-authored crates.
-CLAUDE.md §8 forbids `.unwrap()` outside tests; use `.expect("...")` with a
-descriptive message, or proper error handling, or `?`.
+Reports any non-test `.unwrap()` calls across the 13 in-scope Adamant-authored
+crates (the 14th, `adamant-halo2`, is excluded — see Scope below). CLAUDE.md
+§8 forbids `.unwrap()` outside tests; use `.expect("...")` with a descriptive
+message, or proper error handling, or `?`.
 
 ## `audit_patterns.py`
 
@@ -38,16 +39,31 @@ scripts; if its heuristics need refinement (e.g., to recognize
 
 ## Scope
 
-Adamant-authored crates only:
-- `adamant-vm`
+Adamant-authored crates in scope (13):
+- `adamant-account`
+- `adamant-bytecode-format`
+- `adamant-cli`
+- `adamant-consensus`
 - `adamant-crypto`
 - `adamant-crypto-blst-extra`
-- `adamant-types`
-- `adamant-account`
+- `adamant-light`
+- `adamant-network`
+- `adamant-node`
+- `adamant-privacy`
 - `adamant-state`
-- `adamant-bytecode-format`
+- `adamant-types`
+- `adamant-vm`
 
-Vendored Sui-Move crates under `vendor/` are intentionally excluded — they
-are upstream-byte-faithful per the resistant-proof posture (whitepaper
-§6.2.1.8) and ship only as test-time cross-validation references at
-Phase 5/5b.5 onward.
+Excluded:
+
+- **`adamant-halo2`** — forked Zcash codebase per CLAUDE.md §14.4 Decision 1
+  Path C2. Byte-faithful upstream preservation is the intentional posture;
+  inherited unwraps are vendored audit history (Zcash Orchard / Electric
+  Coin Co), not Adamant-authored risk. The forking-discipline audit anchor
+  is `crates/adamant-halo2/PROVENANCE.md`.
+
+- **Vendored Sui-Move crates** under `vendor/` — upstream-byte-faithful per
+  the resistant-proof posture (whitepaper §6.2.1.8). Test-time cross-
+  validation only since Phase 5/5b.5; never appear in the production
+  binary's dependency graph (enforced by
+  `crates/adamant-vm/tests/no_sui_in_production_deps.rs`).

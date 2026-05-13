@@ -297,6 +297,68 @@ This order is deliberate. Cryptography first because everything depends on it. T
 
 ## Section 10: Current status
 
+### Current state (pre-Phase-10 audit closure)
+
+**Phase**: **9 closed end-to-end; at Phase 10's doorstep.**
+
+Phases 1 through 9 are feature-complete on the code side. Phase 10 is **testnets + security audits + hardening** — operational work, not code implementation.
+
+**Implementation order status** (per Section 6):
+
+| Phase | Surface | Status |
+|---|---|---|
+| 1 | `adamant-crypto` | CLOSED |
+| 2 | `adamant-types` | CLOSED |
+| 3 | `adamant-account` | CLOSED |
+| 4 | `adamant-state` (skeleton + Phase 4 backfill: sparse Merkle tree + `StateView`/`StateMutator`) | CLOSED |
+| 5 | `adamant-vm` (Phase 5/5b verifier + Phase 5/6 AVM runtime) | CLOSED |
+| 6 | `adamant-privacy` (Halo 2 circuits, recursive proving, view keys, encrypted notes) | CLOSED |
+| 7 | `adamant-consensus` (DAG-BFT, threshold mempool, time-lock VDF) + `adamant-network` (libp2p, anti-DoS, mempool) | CLOSED |
+| 8 | (subsumed into Phase 7) | — |
+| 9 | `adamant-node`, `adamant-cli`, `adamant-light` (Phase 9.0/9.1/9.2/9.3/9.3.1/9.4 — scaffolds + cross-layer wiring + claim verification + end-to-end integration tests) | CLOSED |
+| 10 | Public testnets + security audits + pre-mainnet hardening | NEXT (operational) |
+
+**Workspace inventory** (post-audit):
+
+- **14 Adamant-authored crates** under `crates/`: `adamant-account`, `adamant-bytecode-format`, `adamant-cli`, `adamant-consensus`, `adamant-crypto`, `adamant-crypto-blst-extra`, `adamant-halo2`, `adamant-light`, `adamant-network`, `adamant-node`, `adamant-privacy`, `adamant-state`, `adamant-types`, `adamant-vm`.
+- **13 vendored Sui-Move crates** under `vendor/` at tag `mainnet-v1.66.2` — test-only dev-dependencies; never in production graph (enforced by `crates/adamant-vm/tests/no_sui_in_production_deps.rs`).
+- **~2,966 workspace lib tests + 26+ integration tests + 12 phase-7-pipeline tests**, all passing.
+- **100% doc coverage** across all 14 Adamant-authored crates per `tools/workspace-audit/audit.py --strict`.
+- **Zero non-test `.unwrap()`** across all 13 in-scope Adamant production crates (`adamant-halo2` excluded per byte-faithful forked-Zcash posture).
+- **Two resistant-proof guards** mechanically enforce the §13 + §14 architectural commitments across all 13 production crates:
+  - `crates/adamant-vm/tests/no_sui_in_production_deps.rs` — no `move-*` crate in any Adamant production dep graph.
+  - `crates/adamant-privacy/tests/no_upstream_halo2_in_production_deps.rs` — no upstream `halo2_*` crate in any Adamant production dep graph.
+
+**Pre-Phase-10 audit shipped (this state-bump)**:
+
+- Removed stale `tools/phase-7-5-0-debug/` one-shot harness.
+- Removed dead `halo2_gadgets` workspace.dependencies entry (superseded by Phase 6.8b C2 fork into `adamant-halo2`).
+- Converted 30 `.unwrap()` → `.expect("Adamant invariant: ...")` across `adamant-privacy` circuit code (zero production-path unwraps remaining).
+- Tightened caret pins to exact pins on the Cat E workspace utilities: `petgraph =0.8.3`, `ethnum =1.5.3`, `getrandom =0.2.17`, `thiserror =1.0.69`, `pasta_curves =0.5.1`, `rand_core =0.6.4`.
+- Updated `scripts/audit_unwrap.py` + `audit_patterns.py` + `scripts/README.md` ROOTS arrays to cover all 13 in-scope Adamant production crates.
+- Extended both resistant-proof guards from single-target (`adamant-vm` / `adamant-privacy`) to multi-target (all 13 in-scope Adamant production crates).
+- Admitted `hex` to §14 Cat E locked-set (used by `adamant-cli` for operator-facing hex encoding).
+
+**Pre-mainnet workstream items** (Phase 10 operational scope, not code):
+
+- §3.8.2 VDF `T`-parameter calibration against consensus-grade hardware
+- §3.8.6 fundamental-discriminant calibration on the genesis seed
+- §6.2.1.7 structural-limits values amendment proposal
+- §6.2.1.8 cross-pass eager-error precedence amendment proposal
+- §10 genesis pool calibration (pool size, partition ratio, cap schedule, time cap, conversion rates, validator reward sizing)
+- §11.5.4 validator stake calibration
+- KZG trusted-setup procurement source resolution (§14.4 Decision 3)
+- RocksDB backend selection (§14.4 Decision 2)
+- Per-instruction gas-cost calibration
+- T3 cross-validation real-world corpus collection
+- ~21–23 T3-deferred Sui StatusCode coverage expansion
+
+The genesis pool proposal text referenced in earlier state-bumps is no longer maintained as a separate file under `whitepaper/proposals/`; the canonical record now lives in the whitepaper §10 + §11 amendments themselves.
+
+---
+
+### Phase history (chronological, oldest-first; kept as the historical record)
+
 **Phase**: 6 — privacy layer (whitepaper §7). Phase 5/5 closed at commit `5e1bb0d` per the §6.2.1 spec architecture. Phase 5/6 (AVM runtime) ~93% complete on its own track; the privacy-layer workstream runs in parallel. Phase 6 sub-arcs through 6.8b.5 (proving-key infrastructure) closed at this state-bump:
 
 - **Phase 6.0–6.7** (Poseidon out-of-circuit primitives, encrypted-note format, ML-KEM-768 stealth addresses, GNCT skeleton, view keys, encrypted memos): closed.
@@ -1253,12 +1315,13 @@ Decision rule: **test-only dependencies are acceptable provided they appear only
 
 Production-side, non-consensus, ergonomic infrastructure. These are not cryptographic primitives and not protocol-defining; they are general-purpose Rust infrastructure that's mature, well-audited, and where reimplementation would be net-negative without strengthening the protocol.
 
-Locked set:
+Locked set (exact-pinned per the workspace `=X.Y.Z` discipline):
 
-- `petgraph 0.8.1` (graph algorithms; promoted to production at Phase 5/5b.2 for CFG / borrow-graph work).
-- `ethnum 1.0.4` (U256 helper; consensus-adjacent — pre-mainnet revisit candidate).
-- `getrandom 0.2.9` (RNG entropy abstraction; CSPRNG plumbing).
-- `thiserror 1.0.24` (error type derivation; macro-only).
+- `petgraph =0.8.3` (graph algorithms; promoted to production at Phase 5/5b.2 for CFG / borrow-graph work).
+- `ethnum =1.5.3` (U256 helper; consensus-adjacent — pre-mainnet revisit candidate).
+- `getrandom =0.2.17` (RNG entropy abstraction; CSPRNG plumbing).
+- `thiserror =1.0.69` (error type derivation; macro-only).
+- `hex 0.4.3` (hex encode/decode for operator-facing tooling; consumed by `adamant-cli` for the key-bundle hex round-trip per §3.4 widths — admitted to Cat E at the pre-Phase-10 audit closure; small crate with zero deps).
 
 **Networking-infrastructure tier** (admitted at the Phase 7.8 plan-gate per §14.4 Decision 4):
 

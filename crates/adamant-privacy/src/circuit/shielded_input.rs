@@ -279,13 +279,24 @@ impl<const DEPTH: usize> Circuit<pallas::Base> for ShieldedInputCircuit<DEPTH> {
             Constraints::with_selector(q, [("value == bit decomposition", value - acc)])
         });
 
-        let cond_swap = CondSwapChip::configure(meta, cs_advices.try_into().unwrap());
+        let cond_swap = CondSwapChip::configure(
+            meta,
+            cs_advices.try_into().expect(
+                "Adamant invariant: cs_advices was constructed at exactly the CondSwapChip arity",
+            ),
+        );
         let poseidon = Pow5Chip::configure::<P128Pow5T3>(
             meta,
-            poseidon_state.try_into().unwrap(),
+            poseidon_state.try_into().expect(
+                "Adamant invariant: poseidon_state was constructed as exactly 3 elements for P128Pow5T3",
+            ),
             partial_sbox,
-            rc_a.try_into().unwrap(),
-            rc_b.try_into().unwrap(),
+            rc_a.try_into().expect(
+                "Adamant invariant: rc_a was constructed as exactly 3 elements for P128Pow5T3",
+            ),
+            rc_b.try_into().expect(
+                "Adamant invariant: rc_b was constructed as exactly 3 elements for P128Pow5T3",
+            ),
         );
 
         let instance = meta.instance_column();

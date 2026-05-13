@@ -462,13 +462,24 @@ impl<const DEPTH: usize, const N_INPUTS: usize, const N_OUTPUTS: usize> Circuit<
             adamant_halo2_range_check_config(range_value_col, range_bits_col, q_bit, q_decompose);
 
         // Instantiate sub-chips.
-        let cond_swap = CondSwapChip::configure(meta, cs_advices.try_into().unwrap());
+        let cond_swap = CondSwapChip::configure(
+            meta,
+            cs_advices.try_into().expect(
+                "Adamant invariant: cs_advices was constructed at exactly the CondSwapChip arity",
+            ),
+        );
         let poseidon = Pow5Chip::configure::<P128Pow5T3>(
             meta,
-            poseidon_state.try_into().unwrap(),
+            poseidon_state.try_into().expect(
+                "Adamant invariant: poseidon_state was constructed as exactly 3 elements for P128Pow5T3",
+            ),
             partial_sbox,
-            rc_a.try_into().unwrap(),
-            rc_b.try_into().unwrap(),
+            rc_a.try_into().expect(
+                "Adamant invariant: rc_a was constructed as exactly 3 elements for P128Pow5T3",
+            ),
+            rc_b.try_into().expect(
+                "Adamant invariant: rc_b was constructed as exactly 3 elements for P128Pow5T3",
+            ),
         );
         let range_check_lookup = LookupRangeCheckConfig::configure(meta, advices[9], lookup_table);
         let ecc = EccChip::<AdamantFixedPoints>::configure(
@@ -547,8 +558,12 @@ impl<const DEPTH: usize, const N_INPUTS: usize, const N_OUTPUTS: usize> Circuit<
                         }
                         assigned.push(cell);
                     }
-                    let value_cell = value_cell_opt.unwrap();
-                    let array: [_; NOTE_COMMITMENT_INPUT_ARITY] = assigned.try_into().unwrap();
+                    let value_cell = value_cell_opt.expect(
+                        "Adamant invariant: NOTE_COMMITMENT_INPUT_ARITY >= 1 so the k==0 branch is always taken",
+                    );
+                    let array: [_; NOTE_COMMITMENT_INPUT_ARITY] = assigned.try_into().expect(
+                        "Adamant invariant: assigned was pushed to exactly NOTE_COMMITMENT_INPUT_ARITY times in the loop above",
+                    );
                     Ok((value_cell, array))
                 },
             )?;
@@ -776,8 +791,12 @@ impl<const DEPTH: usize, const N_INPUTS: usize, const N_OUTPUTS: usize> Circuit<
                         }
                         assigned.push(cell);
                     }
-                    let value_cell = value_cell_opt.unwrap();
-                    let array: [_; NOTE_COMMITMENT_INPUT_ARITY] = assigned.try_into().unwrap();
+                    let value_cell = value_cell_opt.expect(
+                        "Adamant invariant: NOTE_COMMITMENT_INPUT_ARITY >= 1 so the k==0 branch is always taken",
+                    );
+                    let array: [_; NOTE_COMMITMENT_INPUT_ARITY] = assigned.try_into().expect(
+                        "Adamant invariant: assigned was pushed to exactly NOTE_COMMITMENT_INPUT_ARITY times in the loop above",
+                    );
                     Ok((value_cell, array))
                 },
             )?;
