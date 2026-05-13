@@ -43,8 +43,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod merkle;
 pub mod rules;
 
+pub use merkle::{
+    empty_leaf_hash, empty_subtree_hashes, leaf_hash, node_hash, value_hash, verify_membership,
+    verify_non_membership, Hash, MerkleProof, SparseMerkleTree, StateKey, STATE_KEY_BYTES,
+    STATE_TREE_DEPTH,
+};
 pub use rules::{
     can_archive, can_destroy, can_freeze, can_modify_contents, can_restore, can_upgrade_rules,
     RuleViolation,

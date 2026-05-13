@@ -678,6 +678,33 @@ pub static CLASS_GROUP_ELEMENT_SEED: DomainTag =
 /// [`NetworkTransaction`]: crate
 pub static SUBMISSION_PROOF: DomainTag = DomainTag::new(b"ADAMANT-v1-submission-proof");
 
+/// Domain tag for the §8.5.1 sparse state-Merkle-tree empty-
+/// leaf hash. Per the tree construction (`adamant-state::merkle`):
+/// the empty-leaf hash is `sha3_256_tagged(STATE_MERKLE_EMPTY_LEAF, &[])`.
+///
+/// Per §3.3.1, adding/renaming domain tags is a hard fork.
+/// Registered at Phase 4 backfill as part of the state-
+/// commitment Merkle tree foundation.
+pub static STATE_MERKLE_EMPTY_LEAF: DomainTag =
+    DomainTag::new(b"ADAMANT-v1-state-merkle-empty-leaf");
+
+/// Domain tag for §8.5.1 state-Merkle-tree leaf hashes.
+/// `leaf = sha3_256_tagged(STATE_MERKLE_LEAF, key || value_hash)`.
+/// Registered at Phase 4 backfill.
+pub static STATE_MERKLE_LEAF: DomainTag = DomainTag::new(b"ADAMANT-v1-state-merkle-leaf");
+
+/// Domain tag for §8.5.1 state-Merkle-tree internal-node
+/// hashes. `node = sha3_256_tagged(STATE_MERKLE_NODE, left || right)`.
+/// Registered at Phase 4 backfill.
+pub static STATE_MERKLE_NODE: DomainTag = DomainTag::new(b"ADAMANT-v1-state-merkle-node");
+
+/// Domain tag for §8.5.1 state-Merkle-tree value hashing —
+/// produces a fixed 32-byte digest from a leaf's raw value
+/// bytes before incorporating it into the leaf hash. Keeps
+/// leaves fixed-width regardless of underlying value size.
+/// Registered at Phase 4 backfill.
+pub static STATE_MERKLE_VALUE: DomainTag = DomainTag::new(b"ADAMANT-v1-state-merkle-value");
+
 /// Test-only domain tags. These do not enter the consensus tag set; they
 /// exist only to exercise tagged-hash composition in unit tests and
 /// test-vector regressions.
