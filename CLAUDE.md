@@ -419,7 +419,8 @@ Workspace tests: 2,388 passing, 0 failed, 1 ignored. Clippy `-D warnings`: clean
 | 7.8 | §9 | networking + transaction propagation | pending |
 | **7.9** | §8.1.7, §8.9 | light-client observation layer (tier signal + epoch boundary) | **CLOSED** |
 | **7.10** | §8.1.5, §10 | slashing wiring (evidence + verification + apply) | **CLOSED** |
-| 7.11 | all | end-to-end integration | pending |
+| **7.11** | all | end-to-end Phase 7 integration tests | **CLOSED** |
+| **7** | §8, §9 | **consensus + networking — feature-complete end-to-end** | **CLOSED** |
 
 Phase 7.0 surface (per §8.1.1–8.1.9):
 
