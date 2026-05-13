@@ -56,6 +56,17 @@ use adamant_consensus::{
 };
 use adamant_network::libp2p_re::{Keypair as NetworkKeypair, Multiaddr, PeerId};
 use adamant_network::{NetworkConfig, NetworkError, NetworkNode};
+use adamant_privacy::epoch_recursion::{verify_envelope, EpochRecursionError};
+use adamant_privacy::recursive_proof::RecursiveProofEnvelope;
+
+/// Re-exports of the recursive-proof types light-client
+/// consumers most commonly need at the boundary.
+pub mod recursion_re {
+    pub use adamant_privacy::epoch_recursion::{verify_envelope, EpochRecursionError};
+    pub use adamant_privacy::recursive_proof::{
+        ProofCadence, RecursiveProof, RecursiveProofEnvelope, RecursiveProofPublicInputs,
+    };
+}
 
 /// Light-client node configuration.
 ///
@@ -125,6 +136,15 @@ pub enum LightNodeError {
     /// The light client rejected an advance attempt (monotonicity
     /// or gap violation per §8.9).
     LightClient(LightClientError),
+
+    /// The §8.5 recursive proof attached to an epoch
+    /// boundary failed verification. Phase 9.3 wiring: the
+    /// `adamant-privacy::epoch_recursion::verify_envelope`
+    /// primitive checks the accumulator identity; a failure
+    /// here means the supplied proof does not attest to a
+    /// valid epoch transition and the boundary MUST be
+    /// rejected.
+    RecursiveProof(EpochRecursionError),
 }
 
 impl core::fmt::Display for LightNodeError {
@@ -132,7 +152,16 @@ impl core::fmt::Display for LightNodeError {
         match self {
             Self::Network(e) => write!(f, "light node network error: {e}"),
             Self::LightClient(e) => write!(f, "light node state error: {e}"),
+            Self::RecursiveProof(e) => {
+                write!(f, "light node recursive-proof verification failed: {e}")
+            }
         }
+    }
+}
+
+impl From<EpochRecursionError> for LightNodeError {
+    fn from(e: EpochRecursionError) -> Self {
+        Self::RecursiveProof(e)
     }
 }
 
@@ -228,20 +257,55 @@ impl LightNodeRuntime {
         &mut self.network
     }
 
-    /// Advance the light client by one epoch boundary.
+    /// Advance the light client by one epoch boundary
+    /// **without** recursive-proof verification.
     ///
-    /// Phase 9.2 does NOT yet wire the recursive-proof
-    /// verification check; that lands at Phase 9.3+. Callers
-    /// receive [`EpochBoundary`] artifacts from the network
-    /// and push them here; the state updates trust the
-    /// boundary's claimed commitments without yet validating
-    /// the recursive proof against the previous accumulator.
+    /// Trusts the boundary's claimed commitments without
+    /// validating the §8.5 recursive proof. Suitable for
+    /// trusted-checkpoint advances (e.g., wallet bootstrap
+    /// from a known-good genesis pin) and tests; production
+    /// wallet code SHOULD use [`Self::verify_and_advance`]
+    /// to require cryptographic proof of validity per §8.9.
     ///
     /// # Errors
     ///
     /// Returns [`LightNodeError::LightClient`] for monotonicity
     /// or gap violations per §8.9.
     pub fn advance(&mut self, boundary: EpochBoundary) -> Result<(), LightNodeError> {
+        self.state.advance(boundary)?;
+        Ok(())
+    }
+
+    /// Advance the light client by one epoch boundary
+    /// **with** recursive-proof verification per §8.9.
+    ///
+    /// Phase 9.3 cross-layer wiring: invokes
+    /// [`adamant_privacy::epoch_recursion::verify_envelope`]
+    /// to cryptographically validate the supplied recursive-
+    /// proof envelope before advancing the light client
+    /// state. This is the §8.9 light-client-grade advance —
+    /// no trust in the boundary's claimed commitments; the
+    /// proof attests directly to the chain-state transition.
+    ///
+    /// Per §8.5.5 the verification is fast (~50–200ms on a
+    /// modern smartphone); this is what makes light clients
+    /// "phone-verifiable" per Principle III.
+    ///
+    /// # Errors
+    ///
+    /// - [`LightNodeError::RecursiveProof`] if the recursive
+    ///   proof fails verification.
+    /// - [`LightNodeError::LightClient`] if the epoch boundary
+    ///   itself fails monotonicity / no-gap checks.
+    pub fn verify_and_advance(
+        &mut self,
+        boundary: EpochBoundary,
+        proof: &RecursiveProofEnvelope,
+    ) -> Result<(), LightNodeError> {
+        // Verify the recursive proof first; reject the
+        // advance if it fails.
+        verify_envelope(proof)?;
+        // Recursive proof checks out; advance state.
         self.state.advance(boundary)?;
         Ok(())
     }
@@ -297,6 +361,12 @@ mod tests {
     fn light_node_error_implements_std_error() {
         fn assert_err<E: std::error::Error>() {}
         assert_err::<LightNodeError>();
+    }
+
+    #[test]
+    fn light_node_error_recursive_proof_variant() {
+        let err = LightNodeError::RecursiveProof(EpochRecursionError::AccumulatorRejected);
+        assert!(err.to_string().contains("recursive-proof"));
     }
 
     /// Smoke test: a light node can launch with no listen

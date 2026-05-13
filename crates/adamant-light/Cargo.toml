@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 adamant-consensus = { path = "../adamant-consensus" }
 adamant-network = { path = "../adamant-network" }
+adamant-privacy = { path = "../adamant-privacy" }
 serde = { workspace = true }
 bcs = { workspace = true }
 tokio = { workspace = true }
