@@ -116,6 +116,7 @@ dependencies = [
  "adamant-consensus",
  "adamant-network",
  "adamant-privacy",
+ "adamant-state",
  "bcs",
  "serde",
  "tokio",
