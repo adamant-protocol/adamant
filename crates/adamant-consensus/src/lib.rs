@@ -74,6 +74,7 @@ pub mod dag;
 pub mod epoch;
 pub mod genesis;
 pub mod identity;
+pub mod light_client;
 pub mod mempool;
 pub mod mempool_decryption;
 pub mod schedule;
@@ -98,6 +99,10 @@ pub use genesis::{GenesisCohortMarker, GENESIS_COHORT_MARKER_BYTES, GENESIS_COHO
 pub use identity::{
     ValidatorId, ValidatorPublicKeys, BLS_PUBLIC_KEY_BYTES, ED25519_PUBLIC_KEY_BYTES,
     ML_DSA_PUBLIC_KEY_BYTES, VALIDATOR_ID_BYTES, VALIDATOR_PUBLIC_KEYS_BYTES,
+};
+pub use light_client::{
+    EpochBoundary, LightClientError, LightClientState, ProofCommitment, StateCommitment,
+    TierSignal, PROOF_COMMITMENT_BYTES, STATE_COMMITMENT_BYTES,
 };
 pub use mempool::{
     MempoolEnvelope, Regime, RegimeState, ThresholdMempoolEnvelope, THRESHOLD_ACTIVATION_FLOOR,
