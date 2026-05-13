@@ -1,0 +1,21 @@
+[package]
+name = "adamant-cli"
+description = "Adamant operator CLI. Phase 9.1 deliverable: offline tools for validator-key generation + ValidatorId derivation + version reporting. The CLI is intentionally minimal — networking RPC subcommands (status queries, transaction submission) wait for Phase 9.2 when the node RPC surface lands."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+adamant-consensus = { path = "../adamant-consensus" }
+adamant-crypto = { path = "../adamant-crypto" }
+hex = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "adamant-cli"
+path = "src/main.rs"

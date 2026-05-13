@@ -15,6 +15,7 @@ resolver = "2"
 members = [
     "crates/adamant-account",
     "crates/adamant-bytecode-format",
+    "crates/adamant-cli",
     "crates/adamant-consensus",
     "crates/adamant-crypto",
     "crates/adamant-crypto-blst-extra",

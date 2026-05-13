@@ -27,6 +27,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "adamant-cli"
+version = "0.0.1"
+dependencies = [
+ "adamant-consensus",
+ "adamant-crypto",
+ "hex",
+]
+
+[[package]]
 name = "adamant-consensus"
 version = "0.0.1"
 dependencies = [
