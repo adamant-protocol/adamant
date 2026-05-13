@@ -418,7 +418,7 @@ Workspace tests: 2,388 passing, 0 failed, 1 ignored. Clippy `-D warnings`: clean
 | **7.7** | §8.3, §8.7 | **DAG-BFT consensus core — feature-complete end-to-end** | **CLOSED** |
 | 7.8 | §9 | networking + transaction propagation | pending |
 | **7.9** | §8.1.7, §8.9 | light-client observation layer (tier signal + epoch boundary) | **CLOSED** |
-| 7.10 | §8.1.5, §10 | slashing wiring + economics | pending |
+| **7.10** | §8.1.5, §10 | slashing wiring (evidence + verification + apply) | **CLOSED** |
 | 7.11 | all | end-to-end integration | pending |
 
 Phase 7.0 surface (per §8.1.1–8.1.9):
@@ -1078,7 +1078,28 @@ Phase 7.9 ships the **consumption-side data shapes** so downstream wallets + exp
 
 Phase 7.9 metrics: `cargo test -p adamant-consensus --lib` reports 312 passing (284 from prior + 28 new). adamant-consensus LOC 5,702 → 6,186 (+484); pub items 233 → 260 (+27: `StateCommitment` + `ProofCommitment` + `TierSignal` + `EpochBoundary` + `LightClientState` + `LightClientError` + 2 byte-width constants + accessor methods on each). Workspace lib tests 2,858 → 2,886 (+28). All 10 Adamant-authored crates at 100% doc coverage. All gates green: clippy + fmt + strict audit + both resistant-proof guards. No spec amendment; no new domain tags; no new workspace dependencies.
 
-**Next sub-arc — Phase 7.10**: slashing wiring + economics per §8.1.5 + §10. Extract equivocation evidence from `DagError::EquivocationDetected` (Phase 7.7a); produce `SlashOffence::Equivocation` transactions; wire the §10 tokenomics flow into the validator-stake state machine. The `SlashingPenalty` by offence type was pinned at Phase 7.0 (Equivocation=100%, InvalidProof=10%, IncorrectThresholdDecryption=5%, LivenessFailure=0.5%); Phase 7.10 wires the enforcement path.
+**Phase 7.10 closure (commit `24ba7c7`)** — slashing wiring per whitepaper §8.1.5. Wires the on-chain slashing-evidence handlers + actual stake reduction on top of the Phase 7.0 `SlashOffence` enum + `slashing_penalty_basis_points` table. Per §8.1.5 the machinery is permissionless ("any party can submit evidence") and mechanical (no governance review).
+
+Phase 7.10 surface (extended `adamant-consensus::slashing`):
+
+- **`SlashingEvidence`** closed enum (4 variants matching the §8.1.5 offences): `Equivocation { vertex_a, vertex_b }`; `LivenessFailure { slot_id, validator_id, last_participation_epoch, current_epoch }`; `IncorrectThresholdDecryption`; `InvalidProof`. `offence()` + `validator_id()` accessors.
+- **`SlashingError`** closed enum (7 variants) — `EquivocationAuthorMismatch` / `EquivocationRoundMismatch` / `EquivocationIdenticalVertices` / `UnknownAuthor` / `InvalidSignature` / `LivenessThresholdNotMet` / `LivenessSlotMismatch`. `Display` + `std::error::Error` + pairwise-distinct messages.
+- **`verify_equivocation_evidence(vertex_a, vertex_b, pubkeys_resolver) -> Result<SlashOffence, SlashingError>`** — full cryptographic verification: same author, same round, distinct VertexIds, both BLS signatures verify under the author's pubkey.
+- **`verify_liveness_failure_evidence(active_set, slot_id, validator_id, last_participation, current_epoch)`** — checks against `Slot::is_liveness_failed` (the consensus-layer ground truth).
+- **`SlashingOutcome { remaining_stake, burned_amount, triggers_active_set_removal }`** — pure-function output.
+- **`apply_slashing(stake, offence) -> SlashingOutcome`** — applies the §8.1.5 basis-points penalty. The `burned_amount` is **burned** (not redistributed) per §8.1.5.
+
+**Invariant pinned in tests**: `remaining + burned == original` across all 4 offences. Plus pinned worked-examples on a 1,000 ADM bond: Equivocation → 1,000 ADM burned (100%); InvalidProof → 100 ADM (10%); IncorrectThresholdDecryption → 50 ADM (5%); LivenessFailure → 5 ADM (0.5%) + active-set removal.
+
+**What 7.10 does NOT yet wire (deferred to Phase 7.11)**:
+- The closure-based verifiers for `IncorrectThresholdDecryption` + `InvalidProof` (those cross the §14 layering into `adamant-crypto::threshold` + `adamant-privacy::epoch_recursion`).
+- Production-side caller orchestration: detection (`DagError::EquivocationDetected` from Phase 7.7a surfaces equivocation; `ActiveSet::liveness_failed_at` surfaces liveness failures) → evidence construction → slashing-transaction submission → execution-layer state mutation.
+
+21 new unit tests covering: SlashingEvidence offence dispatch + BCS round-trip; verify_equivocation genuine + 5 rejection paths (author/round/identical/unknown/forged-sig); verify_liveness threshold-met / not-met / slot-mismatch; apply_slashing per-offence worked examples + remaining-plus-burned invariant + zero-stake yields zero; SlashingOutcome BCS round-trip; SlashingError display + std::error::Error.
+
+Phase 7.10 metrics: `cargo test -p adamant-consensus --lib` reports 333 passing (312 from prior + 21 new). adamant-consensus pub items 260 → 268 (+8: `SlashingEvidence` + `SlashingError` + `SlashingOutcome` + `verify_equivocation_evidence` + `verify_liveness_failure_evidence` + `apply_slashing`). Workspace lib tests 2,886 → 2,906 (+20). All gates green.
+
+**Next sub-arc — Phase 7.11**: end-to-end integration. The §9 → §6 cross-layer bridge for cryptographic verification before propagation (§9.5.4); the §8.5 recursive-proof verification wiring through to light clients (Phase 7.9 deferred surface); the slashing pipeline orchestration (detection → evidence → submission → execution); multi-validator regression suite spinning up the full pipeline. Genuine multi-session sub-arc when fully scoped — Phase 7.11 below ships the integration touchpoints reachable without crossing into Phase 4 backfill / Phase 5 finish work.
 
 **Phase 6 hygiene follow-up (commit `0cc2848`)** — `adamant-halo2` ECC chip tests gated behind `expensive-tests` feature. Four forked-upstream tests (`ecc::chip::constants::tests::lagrange_coeffs`, `zs_and_us`, `ecc::chip::mul_fixed::short::tests::invalid_magnitude_sign`, `ecc::tests::ecc_chip`) reconstruct full fixed-base Lagrange-coefficient tables and run MockProver at k=13 across the ECC chip surface; debug-mode runtime exceeds 60s each and was blocking workspace test runs at 20+ minutes after Phase 6.8b.3 vendored them in byte-faithfully. New `expensive-tests = []` feature on `adamant-halo2` (mirrors the `adamant-privacy` posture introduced at Phase 6.8b.5); each test carries `#[cfg_attr(not(feature = "expensive-tests"), ignore = "...")]`. Empirical result: `cargo test -p adamant-halo2 --lib` reports 58 passed + 4 ignored in 3.6s (down from 20+ min hang); full workspace `cargo test` completes cleanly. Tests still compile so the upstream byte-faithful posture and refactor-checking are preserved — only the runtime ignore flag flips. Test-time only; no production-binary impact. Resistant-proof guards continue to pass; workspace audit strict mode passes; doc coverage remains 100% across 9 Adamant-authored crates.
 
