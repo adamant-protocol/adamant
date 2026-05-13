@@ -854,7 +854,14 @@ mod tests {
         let v_b = signed_vertex_with_nonce(&[7u8; 32], validator, 5, 1);
         let resolver = |_: &ValidatorId| -> Option<ValidatorPublicKeys> { None };
         let err = verify_equivocation_evidence(&v_a, &v_b, resolver).expect_err("reject");
-        assert!(matches!(err, SlashingError::UnknownAuthor { .. }));
+        match err {
+            SlashingError::UnknownAuthor { author } => {
+                // The author resolves to v_a's author (same author
+                // as v_b since equivocation requires matching authors).
+                assert_eq!(author, v_a.body().author);
+            }
+            other => panic!("expected UnknownAuthor, got {other:?}"),
+        }
     }
 
     #[test]
@@ -927,7 +934,16 @@ mod tests {
             EpochNumber::new(3),
         )
         .expect_err("threshold not met");
-        assert!(matches!(err, SlashingError::LivenessThresholdNotMet { .. }));
+        match err {
+            SlashingError::LivenessThresholdNotMet {
+                last_participation,
+                current,
+            } => {
+                assert_eq!(last_participation, EpochNumber::new(0));
+                assert_eq!(current, EpochNumber::new(3));
+            }
+            other => panic!("expected LivenessThresholdNotMet(last=0, current=3), got {other:?}"),
+        }
     }
 
     #[test]
@@ -944,7 +960,12 @@ mod tests {
             EpochNumber::new(10),
         )
         .expect_err("slot mismatch");
-        assert!(matches!(err, SlashingError::LivenessSlotMismatch { .. }));
+        match err {
+            SlashingError::LivenessSlotMismatch { slot_id } => {
+                assert_eq!(slot_id, some_slot);
+            }
+            other => panic!("expected LivenessSlotMismatch, got {other:?}"),
+        }
     }
 
     // ---- apply_slashing ----

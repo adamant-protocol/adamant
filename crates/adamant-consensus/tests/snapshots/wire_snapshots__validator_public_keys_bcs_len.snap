@@ -1,0 +1,5 @@
+---
+source: crates/adamant-consensus/tests/wire_snapshots.rs
+expression: bytes.len().to_string()
+---
+2080

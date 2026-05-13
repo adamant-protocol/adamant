@@ -18,6 +18,13 @@ bcs = { workspace = true }
 [dev-dependencies]
 hex = { workspace = true }
 hex-literal = { workspace = true }
+# `insta` snapshot framework for pinning the BCS wire-format
+# byte layout of consensus-binding types. Test-time only;
+# production binary's dep graph never includes insta. Pre-
+# Phase-10 audit closure introduced these snapshots as
+# additional regression anchors atop the existing manual byte-
+# layout pins.
+insta = { workspace = true }
 num-bigint = { workspace = true }
 # `getrandom` enables `rand_core::OsRng` for the Phase 7.7d
 # mempool-decryption test fixtures (TrustedDealerShares generation

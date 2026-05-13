@@ -761,7 +761,14 @@ mod tests {
         let err = seq
             .record_decision(&dag, WaveIndex::ZERO, anchor, CommitDecision::Skipped)
             .expect_err("already resolved");
-        assert!(matches!(err, SequencerError::AlreadyResolved { .. }));
+        match err {
+            SequencerError::AlreadyResolved { wave } => {
+                assert_eq!(wave, WaveIndex::ZERO);
+            }
+            SequencerError::AnchorMismatch { .. } => {
+                panic!("expected AlreadyResolved, got AnchorMismatch");
+            }
+        }
     }
 
     // ---- Indirect commit rule ----
@@ -1159,6 +1166,13 @@ mod tests {
         let err = seq
             .record_decision(&dag, WaveIndex::ZERO, anchor, CommitDecision::Committed)
             .expect_err("double-record");
-        assert!(matches!(err, SequencerError::AlreadyResolved { .. }));
+        match err {
+            SequencerError::AlreadyResolved { wave } => {
+                assert_eq!(wave, WaveIndex::ZERO);
+            }
+            SequencerError::AnchorMismatch { .. } => {
+                panic!("expected AlreadyResolved, got AnchorMismatch");
+            }
+        }
     }
 }

@@ -725,3 +725,89 @@ pub(crate) mod test_tags {
     /// distinct tags produce distinct outputs for the same input.
     pub(crate) static TAG_B: DomainTag = DomainTag::new(b"ADAMANT-v1-test-tag-b");
 }
+
+#[cfg(test)]
+mod uniqueness_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// Enumerate every consensus-binding production domain tag.
+    /// When adding a new tag, also add it here. The uniqueness
+    /// + prefix tests below catch any drift.
+    fn all_production_tags() -> Vec<&'static DomainTag> {
+        vec![
+            &THRESHOLD_KDF,
+            &ACCOUNT_ADDRESS,
+            &OBJECT_ID,
+            &TX_HASH,
+            &NOTE_METADATA_HASH,
+            &NULLIFIER_HASH,
+            &NULLIFIER_KEY_DERIVATION,
+            &STEALTH_SHARED_SCALAR,
+            &NOTE_KEY,
+            &NOTE_NONCE,
+            &MEMO_KEY,
+            &MEMO_NONCE,
+            &MASTER_SPENDING_KEY,
+            &MASTER_VIEWING_KEY,
+            &SUBVIEW_DERIVE,
+            &STEALTH_VIEW_TAG,
+            &VALUE_COMMITMENT_BASE,
+            &VALUE_COMMITMENT_RANDOMNESS,
+            &VALIDATOR_ID,
+            &VERTEX_ID,
+            &VRF_OUTPUT,
+            &VRF_INPUT,
+            &TIME_LOCK_PARAMETERS,
+            &WESOLOWSKI_CHALLENGE,
+            &TIME_LOCK_SYMMETRIC_KEY,
+            &CLASS_GROUP_DISCRIMINANT,
+            &CLASS_GROUP_ELEMENT_SEED,
+            &SUBMISSION_PROOF,
+            &STATE_MERKLE_EMPTY_LEAF,
+            &STATE_MERKLE_LEAF,
+            &STATE_MERKLE_NODE,
+            &STATE_MERKLE_VALUE,
+        ]
+    }
+
+    /// Defense-in-depth pin: no two registered domain tags
+    /// share the same byte string. The BIP-340 tagged-hash
+    /// construction relies on byte-distinct tags for domain
+    /// separation across every protocol boundary. A future
+    /// copy-paste duplicate must fail this test before
+    /// reaching review.
+    ///
+    /// Test-only tags in `test_tags::` are intentionally
+    /// excluded — they may overlap with production tags only
+    /// by accident, and adding a guard for them here would
+    /// create a false promotion signal.
+    #[test]
+    fn all_production_tags_have_distinct_bytes() {
+        let mut seen: HashSet<&[u8]> = HashSet::new();
+        for tag in all_production_tags() {
+            let bytes = tag.as_bytes();
+            assert!(
+                seen.insert(bytes),
+                "domain tag byte collision: {bytes:?} appears at multiple \
+                 registry sites. Each consensus-binding domain tag must be \
+                 byte-distinct per the §3.3.1 tagged-hash discipline."
+            );
+        }
+    }
+
+    /// Every production tag starts with the consensus-pinned
+    /// `b"ADAMANT-v1-"` prefix per §3.3.1. Tags without this
+    /// prefix can collide with other ecosystems' tagged-hash
+    /// constructions and break domain separation.
+    #[test]
+    fn all_production_tags_share_adamant_v1_prefix() {
+        for tag in all_production_tags() {
+            assert!(
+                tag.as_bytes().starts_with(b"ADAMANT-v1-"),
+                "domain tag missing ADAMANT-v1- prefix: {:?}",
+                tag.as_bytes()
+            );
+        }
+    }
+}

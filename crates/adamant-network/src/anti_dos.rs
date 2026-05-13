@@ -295,18 +295,37 @@ pub struct RateLimitConfig {
     /// [`RateLimitDecision::Reject`] instead of `Throttle`.
     /// Higher values mean more grace before outright reject.
     pub reject_below_negative: u32,
+
+    /// Maximum number of distinct peers the limiter tracks
+    /// concurrently. When the limiter is full and a new peer
+    /// submits, [`RateLimiter::check`] returns
+    /// [`RateLimitDecision::Reject`] for that new peer
+    /// without modifying tracked state.
+    ///
+    /// Defense-in-depth against the **identity-rotation
+    /// flood**: an attacker who rotates through fresh
+    /// ed25519 keypairs (free; no proof of work required at
+    /// the libp2p layer) can otherwise grow
+    /// [`RateLimiter::peers`] unboundedly per the pre-Phase-10
+    /// security audit. Honest operators rarely see > 10,000
+    /// distinct peers in flight; the default cap of 100,000
+    /// gives 10x headroom while bounding memory at ~16 MiB
+    /// of `HashMap` state. Pre-Phase-10 audit closure.
+    pub max_tracked_peers: u32,
 }
 
 impl RateLimitConfig {
     /// Default config: 20-token capacity, 5 tokens/sec refill,
     /// reject at -20 (i.e., a sustained 20-token deficit
-    /// after capacity is exhausted). Tunable per node.
+    /// after capacity is exhausted), 100k max tracked peers.
+    /// Tunable per node.
     #[must_use]
     pub const fn launch_default() -> Self {
         Self {
             capacity: 20,
             refill_per_second: 5,
             reject_below_negative: 20,
+            max_tracked_peers: 100_000,
         }
     }
 }
@@ -389,10 +408,24 @@ impl RateLimiter {
     /// Check whether `peer` may submit at `now_micros`. Charges
     /// 1 token against the peer's bucket and returns the
     /// decision based on post-charge balance.
+    ///
+    /// When the limiter is already tracking
+    /// [`RateLimitConfig::max_tracked_peers`] distinct peers
+    /// and the supplied `peer` is new, the function returns
+    /// [`RateLimitDecision::Reject`] without inserting state.
+    /// This bounds memory against the identity-rotation flood
+    /// attack class identified in the pre-Phase-10 security
+    /// audit. Existing tracked peers continue to be served.
     pub fn check(&mut self, peer: PeerId, now_micros: u64) -> RateLimitDecision {
         let capacity = i64::from(self.config.capacity);
         let refill_per_sec = i64::from(self.config.refill_per_second);
         let reject_floor = -i64::from(self.config.reject_below_negative);
+        // Cap state growth: reject new peers when the limiter
+        // is already at capacity. Existing peers remain served.
+        let cap = self.config.max_tracked_peers as usize;
+        if !self.peers.contains_key(&peer) && self.peers.len() >= cap {
+            return RateLimitDecision::Reject;
+        }
         let bucket = self.peers.entry(peer).or_insert(PeerBucket {
             tokens: capacity,
             last_refill_micros: now_micros,
@@ -684,6 +717,7 @@ mod tests {
             capacity: 3,
             refill_per_second: 1,
             reject_below_negative: 5,
+            max_tracked_peers: 100_000,
         });
         let peer = PeerId::random();
         // 3 allows.
@@ -700,6 +734,7 @@ mod tests {
             capacity: 2,
             refill_per_second: 1,
             reject_below_negative: 3,
+            max_tracked_peers: 100_000,
         });
         let peer = PeerId::random();
         // 2 allows.
@@ -719,6 +754,7 @@ mod tests {
             capacity: 5,
             refill_per_second: 1,
             reject_below_negative: 10,
+            max_tracked_peers: 100_000,
         });
         let peer = PeerId::random();
         for _ in 0..5 {
@@ -739,6 +775,7 @@ mod tests {
             capacity: 3,
             refill_per_second: 1,
             reject_below_negative: 10,
+            max_tracked_peers: 100_000,
         });
         let peer = PeerId::random();
         rl.check(peer, 0); // -> 2 tokens
@@ -756,6 +793,7 @@ mod tests {
             capacity: 1,
             refill_per_second: 1,
             reject_below_negative: 5,
+            max_tracked_peers: 100_000,
         });
         let alice = PeerId::random();
         let bob = PeerId::random();
@@ -774,6 +812,35 @@ mod tests {
         assert!(rl.forget(&peer));
         assert_eq!(rl.tracked_peers(), 0);
         assert!(!rl.forget(&peer));
+    }
+
+    /// Pre-Phase-10 security hardening: the rate limiter must
+    /// cap its tracked-peer count to bound memory under the
+    /// identity-rotation flood attack.
+    #[test]
+    fn rate_limiter_caps_tracked_peers() {
+        let mut rl = RateLimiter::new(RateLimitConfig {
+            capacity: 1,
+            refill_per_second: 1,
+            reject_below_negative: 5,
+            max_tracked_peers: 3,
+        });
+        let peers: Vec<PeerId> = (0..5).map(|_| PeerId::random()).collect();
+        // First 3 distinct peers admitted (cap = 3).
+        for peer in &peers[..3] {
+            assert_eq!(rl.check(*peer, 0), RateLimitDecision::Allow);
+        }
+        assert_eq!(rl.tracked_peers(), 3);
+        // 4th + 5th distinct peers rejected — limiter at cap.
+        assert_eq!(rl.check(peers[3], 0), RateLimitDecision::Reject);
+        assert_eq!(rl.check(peers[4], 0), RateLimitDecision::Reject);
+        assert_eq!(
+            rl.tracked_peers(),
+            3,
+            "rejected new peers must not grow tracked state"
+        );
+        // Existing peers still served (already in the map).
+        assert_eq!(rl.check(peers[0], 0), RateLimitDecision::Throttle);
     }
 
     // ---- Orchestrator ----
@@ -803,7 +870,16 @@ mod tests {
         tx = tx.with_submission_proof(proof);
         let floor = FeeFloor::new(0);
         let err = validate_submission(&tx, &floor, 12).expect_err("must reject");
-        assert!(matches!(err, AntiDosError::InvalidSubmissionProof { .. }));
+        match err {
+            AntiDosError::InvalidSubmissionProof {
+                min_difficulty,
+                claimed_difficulty,
+            } => {
+                assert_eq!(min_difficulty, 12);
+                assert_eq!(claimed_difficulty, 4);
+            }
+            other => panic!("expected InvalidSubmissionProof(min=12, claimed=4), got {other:?}"),
+        }
     }
 
     #[test]
@@ -814,7 +890,19 @@ mod tests {
         tx = tx.with_submission_proof(proof);
         let floor = FeeFloor::new(100); // floor of 100 per byte
         let err = validate_submission(&tx, &floor, 4).expect_err("must reject");
-        assert!(matches!(err, AntiDosError::BelowFeeFloor { .. }));
+        match err {
+            AntiDosError::BelowFeeFloor { offered, required } => {
+                assert_eq!(offered, 0);
+                // FeeFloor::new(100) per byte against the tx
+                // size — exact required value depends on tx
+                // BCS size, so check it's strictly positive.
+                assert!(
+                    required > 0,
+                    "non-trivial fee floor must demand > 0 micro-ADM"
+                );
+            }
+            other => panic!("expected BelowFeeFloor(offered=0, required>0), got {other:?}"),
+        }
     }
 
     // ---- AntiDosError ----

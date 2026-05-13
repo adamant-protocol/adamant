@@ -97,6 +97,76 @@ fn adamant_production_deps_contain_no_sui_move_crates() {
     );
 }
 
+/// Third-tier resistant-proof guard: extends the `move-*`
+/// prefix check above to the broader Sui-ecosystem surface
+/// (`sui-*`, `narwhal-*`, `mysten-*`).
+///
+/// Rationale per CLAUDE.md §13 + §14: the architectural
+/// commitment is that Adamant runs fully independently of
+/// Sui's codebase governance, refresh cadence, and shutdown
+/// risk. The original guard catches a specific class
+/// (re-introducing the vendored bytecode-verifier crates).
+/// This guard catches the broader class: any Sui-ecosystem
+/// dependency, regardless of prefix.
+///
+/// None of these crates are currently in the workspace. The
+/// guard ensures they cannot be added accidentally —
+/// introducing one would fail this test and require explicit
+/// spec-author architectural ratification.
+///
+/// Examples of crates this guard would block:
+///
+/// - `sui-types` — Sui's transaction + object type definitions.
+/// - `sui-framework` — Sui's Move framework definitions.
+/// - `sui-protocol-config` — Sui's protocol parameters.
+/// - `narwhal-types` — DAG-Mempool framework Sui derives from.
+/// - `mysten-network` — Sui's networking helpers.
+/// - `mysten-metrics` — Sui's observability helpers.
+#[test]
+fn adamant_production_deps_contain_no_sui_ecosystem_crates() {
+    /// Sui-ecosystem crate-name prefixes forbidden in
+    /// production dep graphs. Each prefix corresponds to a
+    /// distinct Sui-ecosystem package family.
+    const FORBIDDEN_ECOSYSTEM_PREFIXES: &[&str] = &["sui-", "narwhal-", "mysten-"];
+
+    let metadata_json = run_cargo_metadata();
+    let id_to_name = build_id_to_name_map(&metadata_json);
+    let mut all_violations: Vec<(String, Vec<String>)> = Vec::new();
+
+    for target in TARGET_CRATES {
+        let target_id = id_to_name
+            .iter()
+            .find(|(_, name)| name == target)
+            .map_or_else(
+                || panic!("`cargo metadata` did not surface `{target}` package"),
+                |(id, _)| id.clone(),
+            );
+
+        let reachable = walk_normal_deps(&metadata_json, &target_id);
+        let forbidden: Vec<String> = reachable
+            .iter()
+            .filter_map(|id| id_to_name.get(id).cloned())
+            .filter(|name| {
+                FORBIDDEN_ECOSYSTEM_PREFIXES
+                    .iter()
+                    .any(|pfx| name.starts_with(pfx))
+            })
+            .collect();
+        if !forbidden.is_empty() {
+            all_violations.push(((*target).to_string(), forbidden));
+        }
+    }
+
+    assert!(
+        all_violations.is_empty(),
+        "Adamant production dependency graphs contain forbidden Sui-ecosystem crate(s) \
+         (CLAUDE.md §13 + §14 broader resistant-proof posture violated):\n{all_violations:#?}\n\
+         Sui-ecosystem crates (prefixes: {FORBIDDEN_ECOSYSTEM_PREFIXES:?}) must appear only \
+         in [dev-dependencies] or [build-dependencies], never in [dependencies]. Adding any \
+         requires explicit spec-author architectural ratification."
+    );
+}
+
 /// Run `cargo metadata --format-version 1` and return the JSON
 /// output as a string.
 fn run_cargo_metadata() -> String {

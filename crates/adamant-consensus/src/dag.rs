@@ -805,7 +805,21 @@ mod tests {
         ];
         let v = make_vertex(2, 2, bad_parents);
         let err = dag.insert(v, &active).expect_err("must reject");
-        assert!(matches!(err, DagError::ParentRoundMismatch { .. }));
+        match err {
+            DagError::ParentRoundMismatch {
+                parent_round,
+                expected,
+                ..
+            } => {
+                // vertex.round = 2 → expected parent_round = 1.
+                assert_eq!(expected, RoundNumber::new(1));
+                // The first bad parent is r0_parents[0] (round 0)
+                // which is checked before the valid r1_id, so
+                // the error surfaces parent_round = 0.
+                assert_eq!(parent_round, RoundNumber::new(0));
+            }
+            other => panic!("expected ParentRoundMismatch, got {other:?}"),
+        }
     }
 
     // ---- Equivocation detection ----
@@ -1025,7 +1039,13 @@ mod tests {
         // Build a vertex that will fail the quorum check.
         let v = make_vertex(1, 1, vec![]);
         let err = dag.insert(v.clone(), &active).expect_err("must reject");
-        assert!(matches!(err, DagError::InsufficientQuorum { .. }));
+        match err {
+            DagError::InsufficientQuorum { parents, required } => {
+                assert_eq!(parents, 0, "empty parent vec");
+                assert_eq!(required, 5, "n=7 → quorum = 5 per §8.3.1");
+            }
+            other => panic!("expected InsufficientQuorum, got {other:?}"),
+        }
 
         // DAG state is unchanged.
         assert_eq!(dag.len(), pre_len);

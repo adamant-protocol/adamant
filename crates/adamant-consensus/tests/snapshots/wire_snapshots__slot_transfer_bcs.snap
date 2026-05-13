@@ -1,0 +1,5 @@
+---
+source: crates/adamant-consensus/tests/wire_snapshots.rs
+expression: "hex::encode(&bytes)"
+---
+cdab5555555555555555555555555555555555555555555555555555555555555555aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaf0debc9a78563412

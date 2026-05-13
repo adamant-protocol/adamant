@@ -1,0 +1,5 @@
+---
+source: crates/adamant-consensus/tests/wire_snapshots.rs
+expression: "hex::encode(&bcs::to_bytes(&tl_env).expect(\"encode\")[..4])"
+---
+0008cdcd

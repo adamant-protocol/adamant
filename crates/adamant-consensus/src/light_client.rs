@@ -759,10 +759,26 @@ mod tests {
         let mut lc = LightClientState::from_genesis(fixture_boundary(5, 30));
         // Backwards epoch.
         let err = lc.advance(fixture_boundary(3, 30)).expect_err("backwards");
-        assert!(matches!(err, LightClientError::NonMonotonicEpoch { .. }));
+        match err {
+            LightClientError::NonMonotonicEpoch { latest, supplied } => {
+                assert_eq!(latest, EpochNumber::new(5));
+                assert_eq!(supplied, EpochNumber::new(3));
+            }
+            LightClientError::EpochGap { .. } => {
+                panic!("expected NonMonotonicEpoch, got EpochGap");
+            }
+        }
         // Same epoch.
         let err = lc.advance(fixture_boundary(5, 30)).expect_err("same");
-        assert!(matches!(err, LightClientError::NonMonotonicEpoch { .. }));
+        match err {
+            LightClientError::NonMonotonicEpoch { latest, supplied } => {
+                assert_eq!(latest, EpochNumber::new(5));
+                assert_eq!(supplied, EpochNumber::new(5));
+            }
+            LightClientError::EpochGap { .. } => {
+                panic!("expected NonMonotonicEpoch, got EpochGap");
+            }
+        }
     }
 
     #[test]

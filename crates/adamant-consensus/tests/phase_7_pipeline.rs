@@ -227,7 +227,16 @@ fn liveness_failure_threshold_not_met_when_within_grace() {
     )
     .expect_err("within grace period");
     // The specific error variant pins the §8.1.5 boundary.
-    assert!(matches!(err, SlashingError::LivenessThresholdNotMet { .. }));
+    match err {
+        SlashingError::LivenessThresholdNotMet {
+            last_participation,
+            current,
+        } => {
+            assert_eq!(last_participation, EpochNumber::new(0));
+            assert_eq!(current, EpochNumber::new(3));
+        }
+        other => panic!("expected LivenessThresholdNotMet(last=0, current=3), got {other:?}"),
+    }
 }
 
 // ===============================================================

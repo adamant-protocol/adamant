@@ -1,0 +1,5 @@
+---
+source: crates/adamant-consensus/tests/wire_snapshots.rs
+expression: "hex::encode(active)"
+---
+00

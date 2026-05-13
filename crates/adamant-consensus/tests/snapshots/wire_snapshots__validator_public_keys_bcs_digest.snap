@@ -1,0 +1,5 @@
+---
+source: crates/adamant-consensus/tests/wire_snapshots.rs
+expression: "hex::encode(digest)"
+---
+65713810bfa73134b2aa669c5c6717e959e67243d53e6c25e7395ca92ee90cc9
