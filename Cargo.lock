@@ -110,6 +110,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "adamant-light"
+version = "0.0.1"
+dependencies = [
+ "adamant-consensus",
+ "adamant-network",
+ "bcs",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "adamant-network"
 version = "0.0.1"
 dependencies = [

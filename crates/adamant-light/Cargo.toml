@@ -1,0 +1,23 @@
+[package]
+name = "adamant-light"
+description = "Adamant light client. Phase 9.2 deliverable: phone-verifiable light client per whitepaper §8.9. Tracks epoch boundaries via the Phase 7.9 LightClientState; surfaces tier signal + state commitment for consumer-side queries. The library is consumable by wallets + service nodes; the binary is the standalone light-client daemon. Phase 9.2 ships the integration scaffold; full claim verification (account balance, transaction inclusion, object existence per §8.9) crosses Phase 4 backfill (state-commitment Merkle tree)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+adamant-consensus = { path = "../adamant-consensus" }
+adamant-network = { path = "../adamant-network" }
+serde = { workspace = true }
+bcs = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "adamant-light"
+path = "src/main.rs"

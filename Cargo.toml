@@ -20,6 +20,7 @@ members = [
     "crates/adamant-crypto",
     "crates/adamant-crypto-blst-extra",
     "crates/adamant-halo2",
+    "crates/adamant-light",
     "crates/adamant-network",
     "crates/adamant-node",
     "crates/adamant-privacy",
