@@ -45,6 +45,7 @@
 
 pub mod merkle;
 pub mod rules;
+pub mod store;
 
 pub use merkle::{
     empty_leaf_hash, empty_subtree_hashes, leaf_hash, node_hash, value_hash, verify_membership,
@@ -55,6 +56,7 @@ pub use rules::{
     can_archive, can_destroy, can_freeze, can_modify_contents, can_restore, can_upgrade_rules,
     RuleViolation,
 };
+pub use store::{InMemoryStore, StateMutator, StateView};
 
 use adamant_crypto::{domain, hash::sha3_256_tagged};
 use adamant_types::{Address, ObjectId, TxHash};
