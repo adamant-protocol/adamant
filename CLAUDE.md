@@ -417,7 +417,7 @@ Workspace tests: 2,388 passing, 0 failed, 1 ignored. Clippy `-D warnings`: clean
 | **7.7e** | §8.3, §8.7 | end-to-end integration tests | **CLOSED** |
 | **7.7** | §8.3, §8.7 | **DAG-BFT consensus core — feature-complete end-to-end** | **CLOSED** |
 | 7.8 | §9 | networking + transaction propagation | pending |
-| 7.9 | §8.1.7, 8.9 | light client + tier signal | pending |
+| **7.9** | §8.1.7, §8.9 | light-client observation layer (tier signal + epoch boundary) | **CLOSED** |
 | 7.10 | §8.1.5, §10 | slashing wiring + economics | pending |
 | 7.11 | all | end-to-end integration | pending |
 
@@ -1055,7 +1055,30 @@ Spec-level commitments shipped at Phase 7.8 closure:
 - **7.10** — slashing wiring + economics per §8.1.5 + §10 (equivocation evidence from `DagError::EquivocationDetected`; slashing transactions; §10 tokenomics flow into validator-stake state machine).
 - **7.11** — end-to-end integration (all Phase 7 sub-systems wired together; multi-validator regression suite; §9.5.4 cryptographic-verification-before-propagation finally bridges §9 → §6).
 
-**Next sub-arc — Phase 7.9**: light client + tier signal per §8.1.7 + §8.9. Surface for a light client to: (a) verify the §8.5 recursive proof on consumer hardware (the §8.5.5 phone-verifiable property; ~50-200ms verification time per §8.5.4); (b) read the `SecurityTier` disclosure from chain state (Tier I/II/III per §8.1.7). The §8.9 light-client claims (account balance, transaction inclusion, object existence) via Merkle paths into the state commitment.
+**Phase 7.9 closure (commit `84863ad`)** — light-client observation layer per whitepaper §8.1.7 + §8.9. Ships the consensus-side surface a light client consumes to track chain state without holding the full state itself. Wraps existing `SecurityTier` (Phase 7.1) + `EpochNumber` (Phase 7.0) into observation-oriented APIs that wallets and explorers consume directly.
+
+Phase 7.9 surface (new `adamant-consensus::light_client` module):
+
+- **`STATE_COMMITMENT_BYTES` / `PROOF_COMMITMENT_BYTES = 32`** each (per §8.5.1 state commitment + §8.6 VRF input shape).
+- **`StateCommitment` / `ProofCommitment`** — opaque 32-byte newtypes. Concrete derivation pinned at Phase 4 backfill / Phase 6.9b respectively.
+- **`TierSignal { tier: Option<SecurityTier>, active_set_size, epoch }`** — the §8.1.7 tier disclosure wrapped with observation context. `tier` is `Option` so **dormant** (below-floor) is distinguishable from **Tier I** (weak but operational); per §8.7.1 wallets `SHOULD` display halt-state warnings on `is_dormant()`. Helper `meets_minimum(tier)` for the §8.1.7 "Use" pattern (applications gate features by minimum tier).
+- **`EpochBoundary { epoch, active_set_size, state_commitment, proof_commitment }`** — the per-epoch artifact the consensus layer emits at each boundary. BCS-serialisable; observation-stable wire shape (NOT consensus-binding — the underlying recursive proof + state commitment carry the consensus weight, this wrapper is just the wire shape §9 ships them in).
+- **`LightClientState`** — running state machine. `new` / `from_genesis` constructors; `advance(boundary)` consumes a new boundary with monotonic + no-gap checking; `tier_signal` / `state_commitment` / `proof_commitment` accessors expose the latest observation.
+- **`LightClientError`** closed enum (`NonMonotonicEpoch` / `EpochGap`) + `Display` + `std::error::Error` + BCS round-trip.
+
+Per §8.9 light clients observe EVERY epoch boundary; gaps are rejected (gap-boundary's recursive proof cannot be verified without intermediate proofs). Out-of-order observations are rejected. Two light clients receiving the same boundary sequence converge on identical state — the §8.9 convergence property pinned in tests.
+
+**What Phase 7.9 does NOT ship (deferred to Phase 7.11)**:
+- **Recursive-proof verification** against the previous boundary's accumulator. The verification primitive (`adamant_privacy::epoch_recursion::verify_envelope`) lives in `adamant-privacy`; wiring it through requires coupling `adamant-consensus` to the privacy crate, which crosses the §14 layering. Phase 7.11 end-to-end integration is the venue.
+- **Claim verification** (account balance / transaction inclusion / object existence per §8.9). Depends on the Phase 4 state-commitment Merkle tree which is skeleton.
+
+Phase 7.9 ships the **consumption-side data shapes** so downstream wallets + explorers + service nodes can consume the API surface now and verification wiring lands later without API churn.
+
+28 new unit tests covering: byte-width pins; `StateCommitment` + `ProofCommitment` round-trips + BCS; `TierSignal` dormant-below-floor + Tier I at 7 + Tier II at 15 + Tier III at 30 + `meets_minimum` correctness + dormant-meets-nothing invariant + BCS; `EpochBoundary` new + `tier_signal` derivation + BCS; `LightClientState` new-is-empty + default + `from_genesis` + advance-from-empty-accepts-any + monotonic-succeeds + gap-errors + non-monotonic-errors + tier-updates-on-advance + commitments-track-latest + **determinism-convergence** (§8.9 convergence property); `LightClientError` display distinctness + `std::error::Error` + BCS.
+
+Phase 7.9 metrics: `cargo test -p adamant-consensus --lib` reports 312 passing (284 from prior + 28 new). adamant-consensus LOC 5,702 → 6,186 (+484); pub items 233 → 260 (+27: `StateCommitment` + `ProofCommitment` + `TierSignal` + `EpochBoundary` + `LightClientState` + `LightClientError` + 2 byte-width constants + accessor methods on each). Workspace lib tests 2,858 → 2,886 (+28). All 10 Adamant-authored crates at 100% doc coverage. All gates green: clippy + fmt + strict audit + both resistant-proof guards. No spec amendment; no new domain tags; no new workspace dependencies.
+
+**Next sub-arc — Phase 7.10**: slashing wiring + economics per §8.1.5 + §10. Extract equivocation evidence from `DagError::EquivocationDetected` (Phase 7.7a); produce `SlashOffence::Equivocation` transactions; wire the §10 tokenomics flow into the validator-stake state machine. The `SlashingPenalty` by offence type was pinned at Phase 7.0 (Equivocation=100%, InvalidProof=10%, IncorrectThresholdDecryption=5%, LivenessFailure=0.5%); Phase 7.10 wires the enforcement path.
 
 **Phase 6 hygiene follow-up (commit `0cc2848`)** — `adamant-halo2` ECC chip tests gated behind `expensive-tests` feature. Four forked-upstream tests (`ecc::chip::constants::tests::lagrange_coeffs`, `zs_and_us`, `ecc::chip::mul_fixed::short::tests::invalid_magnitude_sign`, `ecc::tests::ecc_chip`) reconstruct full fixed-base Lagrange-coefficient tables and run MockProver at k=13 across the ECC chip surface; debug-mode runtime exceeds 60s each and was blocking workspace test runs at 20+ minutes after Phase 6.8b.3 vendored them in byte-faithfully. New `expensive-tests = []` feature on `adamant-halo2` (mirrors the `adamant-privacy` posture introduced at Phase 6.8b.5); each test carries `#[cfg_attr(not(feature = "expensive-tests"), ignore = "...")]`. Empirical result: `cargo test -p adamant-halo2 --lib` reports 58 passed + 4 ignored in 3.6s (down from 20+ min hang); full workspace `cargo test` completes cleanly. Tests still compile so the upstream byte-faithful posture and refactor-checking are preserved — only the runtime ignore flag flips. Test-time only; no production-binary impact. Resistant-proof guards continue to pass; workspace audit strict mode passes; doc coverage remains 100% across 9 Adamant-authored crates.
 
