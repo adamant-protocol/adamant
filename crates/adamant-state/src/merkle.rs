@@ -281,13 +281,24 @@ impl SparseMerkleTree {
         self.leaves.contains_key(key)
     }
 
-    /// Compute the root hash of the tree. `O(populated_leaves
-    /// × depth)` — for small trees this is fast; the
-    /// production storage layer caches intermediate node
-    /// hashes for incremental updates.
+    /// Compute the root hash of the tree.
+    ///
+    /// `O(populated_leaves × depth)` total — every populated
+    /// leaf is partitioned once per level into the left or
+    /// right subtree. Subtrees with zero populated leaves
+    /// return the cached empty-subtree hash without recursion.
+    ///
+    /// Production storage caches intermediate node hashes for
+    /// incremental updates; this implementation recomputes
+    /// from scratch on every call.
     #[must_use]
     pub fn root(&self) -> Hash {
-        self.compute_subtree(&[], STATE_TREE_DEPTH)
+        // Collect references to every populated entry once.
+        // The partitioning recursion below splits this slice
+        // by the level-th bit at each step (no per-call rescans
+        // of `self.leaves`).
+        let entries: Vec<(&StateKey, &Hash)> = self.leaves.iter().collect();
+        self.compute_subtree_partitioned(&entries, 0)
     }
 
     /// Produce an inclusion proof for `key`. Works whether
@@ -295,72 +306,95 @@ impl SparseMerkleTree {
     /// (non-membership proof: the leaf hash will be the
     /// empty-leaf hash). The returned proof always has
     /// `STATE_TREE_DEPTH` siblings.
+    ///
+    /// `O(populated_leaves × depth)` total — the partitioning
+    /// recursion descends along `key`'s path and computes each
+    /// sibling subtree's hash with the partitioned algorithm.
     #[must_use]
     pub fn prove(&self, key: &StateKey) -> MerkleProof {
         let mut siblings = Vec::with_capacity(STATE_TREE_DEPTH);
-        // Walk top-down from root, recording siblings.
-        // `prefix` is the path traversed so far (sequence of
-        // bits as `Vec<bool>`).
-        let mut prefix: Vec<bool> = Vec::with_capacity(STATE_TREE_DEPTH);
-        for level in 0..STATE_TREE_DEPTH {
-            let bit = key_bit(key, level);
-            // The sibling at this level lives at the
-            // alternative-bit prefix.
-            let mut sibling_prefix = prefix.clone();
-            sibling_prefix.push(!bit);
-            let sibling_hash = self.compute_subtree(&sibling_prefix, STATE_TREE_DEPTH - level - 1);
-            siblings.push(sibling_hash);
-            prefix.push(bit);
-        }
+        let entries: Vec<(&StateKey, &Hash)> = self.leaves.iter().collect();
+        self.prove_partitioned(key, &entries, 0, &mut siblings);
         MerkleProof { siblings }
     }
 
-    /// Compute the hash of the subtree rooted at the given
-    /// `prefix` path, at the given remaining depth. `depth`
-    /// here is "levels below this subtree's root, down to
-    /// the leaves" — so depth 0 means a leaf.
-    fn compute_subtree(&self, prefix: &[bool], depth: usize) -> Hash {
-        // Fast path: if no populated leaves match this prefix,
-        // it's an empty subtree → return cached hash.
-        let has_any = self.leaves.keys().any(|k| key_matches_prefix(k, prefix));
-        if !has_any {
-            return self.empty_subtrees[depth];
+    /// Compute the hash of a subtree whose populated entries
+    /// are exactly `entries` (a slice of `(&key, &value_hash)`).
+    /// `level` is the depth from the root: 0 at the root, and
+    /// `STATE_TREE_DEPTH` at a leaf.
+    ///
+    /// The recursion partitions `entries` by `key_bit(k,
+    /// level)` at each step, so the total work across the
+    /// whole tree is `O(populated_leaves × depth)` rather than
+    /// `O(populated_leaves² × depth)` under the previous
+    /// linear-scan-per-node implementation.
+    fn compute_subtree_partitioned(&self, entries: &[(&StateKey, &Hash)], level: usize) -> Hash {
+        // Fast path: empty subtree → return cached hash.
+        // `empty_subtrees` is indexed by "depth from leaf",
+        // so at level `l` the remaining depth-to-leaf is
+        // `STATE_TREE_DEPTH - l`.
+        if entries.is_empty() {
+            return self.empty_subtrees[STATE_TREE_DEPTH - level];
         }
-        if depth == 0 {
-            // Leaf level. There should be at most one leaf at
-            // a full-depth prefix (since prefix.len() ==
-            // STATE_TREE_DEPTH means we've descended to a
-            // unique key).
-            // Find the unique populated leaf at this prefix.
-            for (k, vh) in &self.leaves {
-                if key_matches_prefix(k, prefix) {
-                    return leaf_hash(k, vh);
-                }
+        // At leaf level, there is exactly one populated entry
+        // (each `StateKey` uniquely determines a leaf position).
+        if level == STATE_TREE_DEPTH {
+            let (k, vh) = entries[0];
+            return leaf_hash(k, vh);
+        }
+        // Partition `entries` by the `level`-th bit (MSB-first).
+        let mut left: Vec<(&StateKey, &Hash)> = Vec::new();
+        let mut right: Vec<(&StateKey, &Hash)> = Vec::new();
+        for &(k, vh) in entries {
+            if key_bit(k, level) {
+                right.push((k, vh));
+            } else {
+                left.push((k, vh));
             }
-            // No populated leaf → empty.
-            return self.empty_subtrees[0];
         }
-        // Recurse: left subtree (bit=0) + right subtree (bit=1).
-        let mut left_prefix = Vec::with_capacity(prefix.len() + 1);
-        left_prefix.extend_from_slice(prefix);
-        left_prefix.push(false);
-        let mut right_prefix = Vec::with_capacity(prefix.len() + 1);
-        right_prefix.extend_from_slice(prefix);
-        right_prefix.push(true);
-        let left = self.compute_subtree(&left_prefix, depth - 1);
-        let right = self.compute_subtree(&right_prefix, depth - 1);
-        node_hash(&left, &right)
+        let l = self.compute_subtree_partitioned(&left, level + 1);
+        let r = self.compute_subtree_partitioned(&right, level + 1);
+        node_hash(&l, &r)
     }
-}
 
-/// Whether `key`'s bit prefix matches `prefix` (MSB-first).
-fn key_matches_prefix(key: &StateKey, prefix: &[bool]) -> bool {
-    for (i, bit) in prefix.iter().enumerate() {
-        if key_bit(key, i) != *bit {
-            return false;
+    /// Walk top-down along `key`'s path, partitioning entries
+    /// at each level and recording the sibling subtree's hash.
+    /// Companion to [`Self::compute_subtree_partitioned`] for
+    /// proof generation.
+    fn prove_partitioned(
+        &self,
+        key: &StateKey,
+        entries: &[(&StateKey, &Hash)],
+        level: usize,
+        siblings: &mut Vec<Hash>,
+    ) {
+        if level == STATE_TREE_DEPTH {
+            return;
+        }
+        // Partition by the `level`-th bit.
+        let mut left: Vec<(&StateKey, &Hash)> = Vec::new();
+        let mut right: Vec<(&StateKey, &Hash)> = Vec::new();
+        for &(k, vh) in entries {
+            if key_bit(k, level) {
+                right.push((k, vh));
+            } else {
+                left.push((k, vh));
+            }
+        }
+        // `key`'s bit at this level chooses which partition we
+        // descend into; the other partition's subtree hash is
+        // the recorded sibling.
+        let bit = key_bit(key, level);
+        if bit {
+            // key descends right; sibling is the left subtree.
+            siblings.push(self.compute_subtree_partitioned(&left, level + 1));
+            self.prove_partitioned(key, &right, level + 1, siblings);
+        } else {
+            // key descends left; sibling is the right subtree.
+            siblings.push(self.compute_subtree_partitioned(&right, level + 1));
+            self.prove_partitioned(key, &left, level + 1, siblings);
         }
     }
-    true
 }
 
 #[cfg(test)]

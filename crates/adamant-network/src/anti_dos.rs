@@ -93,12 +93,42 @@ pub const MAX_DIFFICULTY_BITS: u8 = 64;
 /// Hash construction per the module docs:
 /// `sha3_256_tagged(SUBMISSION_PROOF, BCS(tx with submission_proof=None) || nonce_le_bytes)`.
 fn compute_pow_hash(tx: &NetworkTransaction, nonce: u64) -> [u8; 32] {
-    let mut body = tx.clone();
-    body.submission_proof = None;
-    let body_bytes =
-        bcs::to_bytes(&body).expect("NetworkTransaction is BCS-serialisable by construction");
+    let body_bytes = bcs_body_without_proof(tx);
+    compute_pow_hash_with_body(&body_bytes, nonce)
+}
+
+/// BCS-encode a [`NetworkTransaction`] with `submission_proof =
+/// None`. Hoisted out of [`compute_pow_hash`] so the
+/// [`compute_submission_proof`] grind loop can compute it once
+/// and reuse the bytes across every nonce trial (avoiding a
+/// per-iteration `tx.clone()` + BCS-encode of the full
+/// transaction body, which dominates the hash cost for large
+/// payloads).
+fn bcs_body_without_proof(tx: &NetworkTransaction) -> Vec<u8> {
+    // The closed-form construction without cloning the full tx:
+    // build a wire-shape-identical transient that borrows tx's
+    // payload + threads None into the submission_proof slot.
+    // BCS encodes structs field-by-field, so we serialise each
+    // field in declaration order. NetworkTransaction's field
+    // order is consensus-pinned (see `network_transaction_field_order_pin`
+    // test in lib.rs).
+    let body = NetworkTransaction {
+        version: tx.version,
+        encryption_mode: tx.encryption_mode,
+        payload: tx.payload.clone(), // small (payload is the cleartext or ciphertext body)
+        fee_tip: tx.fee_tip,
+        expiration_round: tx.expiration_round,
+        submission_proof: None,
+    };
+    bcs::to_bytes(&body).expect("NetworkTransaction is BCS-serialisable by construction")
+}
+
+/// Compute the `PoW` hash from already-encoded body bytes + a
+/// nonce. The hot-path entry: the grind loop encodes the body
+/// once, then calls this for every nonce trial.
+fn compute_pow_hash_with_body(body_bytes: &[u8], nonce: u64) -> [u8; 32] {
     let mut input = Vec::with_capacity(body_bytes.len() + 8);
-    input.extend_from_slice(&body_bytes);
+    input.extend_from_slice(body_bytes);
     input.extend_from_slice(&nonce.to_le_bytes());
     sha3_256_tagged(&domain::SUBMISSION_PROOF, &input)
 }
@@ -177,8 +207,12 @@ pub fn compute_submission_proof(
     if target_difficulty > MAX_DIFFICULTY_BITS {
         return None;
     }
+    // Encode the body once outside the loop. For a 1 KiB
+    // payload at 20-bit difficulty (~1M iterations), this saves
+    // ~1 GiB of allocation churn vs encoding per-iteration.
+    let body_bytes = bcs_body_without_proof(tx);
     for nonce in 0..max_iterations {
-        let hash = compute_pow_hash(tx, nonce);
+        let hash = compute_pow_hash_with_body(&body_bytes, nonce);
         if leading_zero_bits(&hash) >= u32::from(target_difficulty) {
             return Some(SubmissionProof {
                 nonce,

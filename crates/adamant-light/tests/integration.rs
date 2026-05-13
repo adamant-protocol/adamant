@@ -49,7 +49,7 @@ fn build_realistic_tree() -> TreeBuildOutput {
     (tree, root, pairs)
 }
 
-fn boundary(epoch_n: u64, active_size: usize, root: [u8; 32]) -> EpochBoundary {
+fn boundary(epoch_n: u64, active_size: u32, root: [u8; 32]) -> EpochBoundary {
     EpochBoundary::new(
         EpochNumber::new(epoch_n),
         active_size,

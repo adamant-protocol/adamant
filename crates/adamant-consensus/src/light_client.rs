@@ -193,7 +193,13 @@ pub struct TierSignal {
     /// The §8.1.7 tier, or `None` if the chain is dormant.
     pub tier: Option<SecurityTier>,
     /// Active-set size at the epoch the signal was observed.
-    pub active_set_size: usize,
+    /// Encoded as `u32` for cross-platform wire portability —
+    /// BCS encodes `usize` differently on 32-bit vs 64-bit
+    /// targets, which would split the consensus-observable
+    /// byte layout. `u32` is more than sufficient for the
+    /// §8.1.3 ceiling (75) and gives ~4 billion headroom for
+    /// any future ceiling expansion. Pre-Phase-10 audit closure.
+    pub active_set_size: u32,
     /// Epoch at which the signal was observed.
     pub epoch: EpochNumber,
 }
@@ -201,11 +207,7 @@ pub struct TierSignal {
 impl TierSignal {
     /// Construct from raw fields.
     #[must_use]
-    pub const fn new(
-        tier: Option<SecurityTier>,
-        active_set_size: usize,
-        epoch: EpochNumber,
-    ) -> Self {
+    pub const fn new(tier: Option<SecurityTier>, active_set_size: u32, epoch: EpochNumber) -> Self {
         Self {
             tier,
             active_set_size,
@@ -217,11 +219,26 @@ impl TierSignal {
     /// Convenience constructor — wraps
     /// [`SecurityTier::from_active_set_size`] with the
     /// observation context.
+    ///
+    /// # Panics
+    ///
+    /// Cannot panic in practice. The internal `expect` is a
+    /// contract assertion: `ActiveSet::active_size()` is bounded
+    /// by `ACTIVE_SET_LAUNCH_CEILING` (75) per §8.1.3, so the
+    /// `usize → u32` conversion is structurally non-truncating.
+    /// A panic here would indicate a defect in
+    /// [`ActiveSet::register`]'s ceiling enforcement, not a
+    /// runtime failure mode.
     #[must_use]
     pub fn from_active_set(active_set: &ActiveSet, epoch: EpochNumber) -> Self {
-        let n = active_set.active_size();
+        let n_usize = active_set.active_size();
+        // ActiveSet is bounded by ACTIVE_SET_LAUNCH_CEILING (75)
+        // per §8.1.3; the cast is provably non-truncating.
+        let n: u32 = u32::try_from(n_usize).expect(
+            "Adamant invariant: ActiveSet size is bounded by ACTIVE_SET_LAUNCH_CEILING per §8.1.3",
+        );
         Self {
-            tier: SecurityTier::from_active_set_size(n),
+            tier: SecurityTier::from_active_set_size(n_usize),
             active_set_size: n,
             epoch,
         }
@@ -276,7 +293,14 @@ pub struct EpochBoundary {
     /// §8.1.7 tier signal for the *next* epoch (tier
     /// transitions are automatic per §8.1.7: "as N crosses a
     /// tier boundary, the next epoch's tier signal updates").
-    pub active_set_size: usize,
+    ///
+    /// Encoded as `u32` for cross-platform wire portability —
+    /// BCS encodes `usize` differently on 32-bit vs 64-bit
+    /// targets, which would split the consensus-observable
+    /// byte layout. `u32` is more than sufficient for the
+    /// §8.1.3 ceiling (75) and gives ~4 billion headroom for
+    /// any future ceiling expansion. Pre-Phase-10 audit closure.
+    pub active_set_size: u32,
 
     /// 32-byte chain-state commitment per §8.5.1. Light
     /// clients store this commitment + the recursive proof;
@@ -296,7 +320,7 @@ impl EpochBoundary {
     #[must_use]
     pub const fn new(
         epoch: EpochNumber,
-        active_set_size: usize,
+        active_set_size: u32,
         state_commitment: StateCommitment,
         proof_commitment: ProofCommitment,
     ) -> Self {
@@ -316,7 +340,7 @@ impl EpochBoundary {
     #[must_use]
     pub fn tier_signal(&self) -> TierSignal {
         TierSignal {
-            tier: SecurityTier::from_active_set_size(self.active_set_size),
+            tier: SecurityTier::from_active_set_size(self.active_set_size as usize),
             active_set_size: self.active_set_size,
             epoch: self.epoch,
         }
@@ -525,7 +549,7 @@ mod tests {
         set
     }
 
-    fn fixture_boundary(epoch_n: u64, active_size: usize) -> EpochBoundary {
+    fn fixture_boundary(epoch_n: u64, active_size: u32) -> EpochBoundary {
         EpochBoundary::new(
             EpochNumber::new(epoch_n),
             active_size,
@@ -586,7 +610,10 @@ mod tests {
         let signal = TierSignal::from_active_set(&active, EpochNumber::new(0));
         assert!(signal.is_dormant());
         assert!(signal.tier.is_none());
-        assert_eq!(signal.active_set_size, ACTIVE_SET_FLOOR - 1);
+        assert_eq!(
+            signal.active_set_size,
+            u32::try_from(ACTIVE_SET_FLOOR - 1).expect("floor-1 fits in u32")
+        );
     }
 
     #[test]

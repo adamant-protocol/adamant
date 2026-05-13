@@ -1112,6 +1112,33 @@ mod tests {
         }
     }
 
+    /// Pin the BCS variant tag for each [`WaveOutcome`] variant.
+    /// Reordering the enum variants would change the leading
+    /// byte of the BCS encoding — a consensus-binding change
+    /// for any chain-state commitment that includes wave
+    /// outcomes. Reordering is a hard fork.
+    #[test]
+    fn wave_outcome_bcs_variant_tags_pinned() {
+        let anchor = VertexId::from_bytes([0u8; 32]);
+        // Committed = variant 0
+        let committed = WaveOutcome::Committed {
+            anchor,
+            ordered: vec![],
+        };
+        let bytes = bcs::to_bytes(&committed).expect("encode");
+        assert_eq!(bytes[0], 0x00, "WaveOutcome::Committed variant tag");
+
+        // Skipped = variant 1
+        let skipped = WaveOutcome::Skipped { anchor };
+        let bytes = bcs::to_bytes(&skipped).expect("encode");
+        assert_eq!(bytes[0], 0x01, "WaveOutcome::Skipped variant tag");
+
+        // Undecided = variant 2
+        let undecided = WaveOutcome::Undecided { anchor };
+        let bytes = bcs::to_bytes(&undecided).expect("encode");
+        assert_eq!(bytes[0], 0x02, "WaveOutcome::Undecided variant tag");
+    }
+
     // ---- Cross-pipeline integration ----
 
     #[test]

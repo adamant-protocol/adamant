@@ -416,7 +416,7 @@ mod tests {
     use adamant_consensus::{EpochNumber, SecurityTier};
     use adamant_network::libp2p_re::Keypair;
 
-    fn fixture_boundary(epoch_n: u64, active_size: usize) -> EpochBoundary {
+    fn fixture_boundary(epoch_n: u64, active_size: u32) -> EpochBoundary {
         EpochBoundary::new(
             EpochNumber::new(epoch_n),
             active_size,
@@ -536,7 +536,7 @@ mod tests {
         (tree, root, key_a, val_a)
     }
 
-    fn boundary_with_root(epoch_n: u64, active_size: usize, root: [u8; 32]) -> EpochBoundary {
+    fn boundary_with_root(epoch_n: u64, active_size: u32, root: [u8; 32]) -> EpochBoundary {
         EpochBoundary::new(
             EpochNumber::new(epoch_n),
             active_size,

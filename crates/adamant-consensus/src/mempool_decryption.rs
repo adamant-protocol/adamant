@@ -289,7 +289,13 @@ pub struct DecryptedTransaction {
     pub origin_vertex: VertexId,
     /// Position within `origin_vertex.transactions`. Together
     /// with `origin_vertex` uniquely identifies the source.
-    pub origin_index: usize,
+    ///
+    /// Encoded as `u32` for cross-platform wire portability —
+    /// BCS encodes `usize` differently on 32-bit vs 64-bit
+    /// targets. Per-vertex transaction counts are bounded by
+    /// the §9.5.x mempool admission caps; `u32` is more than
+    /// sufficient. Pre-Phase-10 audit closure.
+    pub origin_index: u32,
     /// Cleartext transaction bytes (BCS-encoded AVM
     /// `Transaction` at Phase 7.7e).
     pub plaintext: Vec<u8>,
@@ -439,6 +445,15 @@ pub fn extract_envelopes(
 ///   consensus-stable surface size; the variant carries source
 ///   vertex + index for traceability.
 ///
+/// # Panics
+///
+/// Cannot panic in practice. The internal `expect` on
+/// `u32::try_from(origin_index)` is a contract assertion:
+/// per-vertex transaction counts are bounded below `u32::MAX`
+/// by the §9.5 mempool admission caps. A panic here would
+/// indicate a defect in the vertex-admission layer, not a
+/// runtime failure mode.
+///
 /// [`vdf::envelope::verify_decryption`]: adamant_crypto::vdf::envelope::verify_decryption
 pub fn decrypt_time_lock(
     params: &TimeLockParameters,
@@ -453,9 +468,16 @@ pub fn decrypt_time_lock(
             index: origin_index,
         },
     )?;
+    // Convert internal usize to consensus-stable u32 at the
+    // wire-binding boundary. Per-vertex transaction counts are
+    // bounded by mempool admission limits; truncation is
+    // structurally impossible.
+    let origin_index_u32: u32 = u32::try_from(origin_index).expect(
+        "Adamant invariant: per-vertex transaction count is bounded below u32::MAX by §9.5 mempool admission caps",
+    );
     Ok(DecryptedTransaction {
         origin_vertex,
-        origin_index,
+        origin_index: origin_index_u32,
         plaintext,
     })
 }
@@ -773,7 +795,11 @@ impl ThresholdShareAccumulator {
         })?;
 
         let origin_vertex = pending.origin_vertex;
-        let origin_index = pending.origin_index;
+        // Convert internal usize to consensus-stable u32 at the
+        // wire-binding boundary.
+        let origin_index: u32 = u32::try_from(pending.origin_index).expect(
+            "Adamant invariant: per-vertex transaction count is bounded below u32::MAX by §9.5 mempool admission caps",
+        );
         // Consume the pending entry on success.
         self.pending.remove(identity);
         Ok(Some(DecryptedTransaction {

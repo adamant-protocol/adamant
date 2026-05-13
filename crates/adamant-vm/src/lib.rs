@@ -1,45 +1,42 @@
 //! Adamant Move virtual machine.
 //!
-//! This crate implements whitepaper section 6 — the smart-contract
-//! language, the virtual machine, parallel execution, and resource
-//! accounting. Phase 5's first deliverable was the canonical
-//! transaction format (whitepaper sections 6.0 and 6.0.7) and the
-//! `TxHash` derivation (whitepaper section 6.0.4); the second
-//! deliverable adds the bytecode-instruction types (section 6.2.1.4)
-//! atop the inherited Sui-Move bytecode (section 6.2.1.1).
+//! Implements whitepaper §6 — the smart-contract language, the
+//! virtual machine, parallel execution, and resource accounting.
+//! Phase 5 is **closed end-to-end** as of the Phase 5/5 cumulative
+//! closure: Adamant-native bytecode-format types (Phase 5/5b.1a/b
+//! fork in `adamant-bytecode-format`), Adamant-native verifier
+//! (Phase 5/5b — 11 module-level + 5 per-function passes + 7
+//! Adamant rules), Adamant-native AVM runtime + multi-dimensional
+//! gas accounting (Phase 5/6), and cross-validation infrastructure
+//! formalisation (Phase 5/5c) all shipped. The production
+//! dependency graph contains zero `move-*` crates per the §6.2.1.8
+//! resistant-proof posture, mechanically enforced by
+//! `crates/adamant-vm/tests/no_sui_in_production_deps.rs`.
 //!
-//! # Phase 5 surface so far
+//! # Public surface
 //!
 //! - [`Transaction`] and its sub-types ([`TxBody`], [`AuthEvidence`],
 //!   [`AccountRef`], [`CreatedObject`], [`GasBudget`], [`CallParams`],
-//!   [`Witness`]) — whitepaper sections 6.0.1, 6.0.2, 6.0.3.
+//!   [`Witness`]) — whitepaper §6.0.1, §6.0.2, §6.0.3.
 //! - [`Value`] and [`StructValue`] — Adamant Move value taxonomy
-//!   per whitepaper section 6.0.7.
-//! - [`derive_tx_hash`] — whitepaper section 6.0.4
+//!   per whitepaper §6.0.7.
+//! - [`derive_tx_hash`] — whitepaper §6.0.4
 //!   (`TxHash = sha3_256_tagged(TX_HASH, BCS(body))`).
 //! - [`AdamantBytecode`], [`AdamantOpcodeKind`],
 //!   [`BytecodeInstruction`], [`CircuitId`], [`GasDimension`] —
-//!   whitepaper section 6.2.1.4. Sui-Move's inherited
-//!   [`Bytecode`] enum and [`FunctionHandleIndex`] operand type
-//!   are re-exported from this crate so consumers don't reach
-//!   into the vendored Sui crate names directly.
+//!   whitepaper §6.2.1.4. The Adamant-owned [`Bytecode`] enum
+//!   and [`FunctionHandleIndex`] (sourced from
+//!   `adamant-bytecode-format`) are re-exported from this crate's
+//!   public API so downstream consumers never reach into the
+//!   bytecode-format crate directly.
 //! - [`validator::verify_module`], [`AdamantVerifierConfig`],
-//!   [`AdamantValidationError`] — whitepaper section 6.2.1.6.
-//!   The wrapper takes module bytes and returns a parsed
-//!   [`Bytecode`]-bearing `CompiledModule` on success, owning
-//!   the deserialize → verify → Adamant-rules pipeline as a
-//!   single deploy-time decision. Wave 3a coverage: Rules 1, 4,
-//!   5 (Rule 5 is enforced at the deserialize stage, where
-//!   Sui's deserializer rejects the 10 deprecated global-storage
-//!   bytecode variants when the locked-down config flag is set);
-//!   Rules 2, 3, 6, 7 land in subsequent waves.
-//!
-//! Subsequent commits in Phase 5 will add the bytecode wire
-//! encoding (extending Sui's serializer/deserializer to interleave
-//! Adamant extensions), the AVM runtime (section 6.2), the
-//! bytecode validator (section 6.2.1.6), multi-dimensional gas
-//! accounting (section 6.3), module deployment (section 6.4), and
-//! the parallel execution scheduler (section 6.2.3).
+//!   [`AdamantValidationError`] — whitepaper §6.2.1.6. The single
+//!   public entry point takes module bytes and returns a parsed
+//!   [`AdamantCompiledModule`] on success, owning the
+//!   deserialize → canonicality round-trip → 11 module-level
+//!   passes → 5 per-function passes → 6 Adamant rules pipeline as
+//!   the consensus-binding deploy-time decision per §6.2.1.8.
+//! - [`runtime`] — AVM execution surface per §6.3.
 //!
 //! # Module map
 //!
@@ -49,9 +46,24 @@
 //! | [`value`]        | 6.0.7               | [`Value`], [`StructValue`]                                                                                                  |
 //! | [`tx_hash`]      | 6.0.4               | [`derive_tx_hash`]                                                                                                          |
 //! | [`bytecode`]     | 6.2.1.4             | [`AdamantBytecode`], [`AdamantOpcodeKind`], [`BytecodeInstruction`], [`CircuitId`], [`GasDimension`]                        |
-//! | [`module`]       | 6.2.1.8             | [`AdamantCompiledModule`], [`AdamantFunctionDefinition`], [`AdamantCodeUnit`] (Phase 5/5a: types)                           |
-//! | [`module_wire`]  | 6.2.1.2, 6.2.1.8    | [`adamant_serialize`], [`AdamantSerializeError`] (Phase 5/5a step 2: serializer)                                            |
-//! | [`validator`]    | 6.2.1.6             | [`validator::verify_module`], [`AdamantVerifierConfig`], [`AdamantValidationError`] (Wave 3a: Rules 1, 4, 5)                |
+//! | [`module`]       | 6.2.1.8             | [`AdamantCompiledModule`], [`AdamantFunctionDefinition`], [`AdamantCodeUnit`]                                               |
+//! | [`module_wire`]  | 6.2.1.2, 6.2.1.8    | [`adamant_serialize`], [`adamant_deserialize`] + their typed errors                                                         |
+//! | [`bytecode_wire`]| 6.2.1.5             | per-instruction serialize/deserialize (Adamant + inherited)                                                                 |
+//! | [`validator`]    | 6.2.1.6, 6.2.1.8    | [`validator::verify_module`], [`AdamantVerifierConfig`], [`AdamantValidationError`] (full pipeline; all 6 active rules)     |
+//! | [`runtime`]      | 6.3                 | AVM interpreter + multi-dimensional gas accounting + module deployment                                                      |
+//!
+//! # Resistant-proof posture (§6.2.1.8)
+//!
+//! Per whitepaper §6.2.1 + §6.2.1.8: Adamant runs fully
+//! independently of Sui-Move's codebase at deploy-time and
+//! runtime. Vendored Sui-Move crates appear exclusively as
+//! `[dev-dependencies]` for cross-validation parity testing on
+//! the inherited Sui-base subset; the production binary's
+//! dependency graph contains zero `move-*` crates. The
+//! mechanical guardrail is the resistant-proof guard at
+//! `tests/no_sui_in_production_deps.rs`, which walks
+//! `cargo metadata`'s resolve tree and fails CI if any
+//! `move-*` crate appears in the normal-kind dep graph.
 //!
 //! # Discipline reference
 //!
@@ -60,8 +72,8 @@
 //! satisfy (registered tag, BCS canonical input, tagged-SHA3
 //! composition, KAT regression vector). [`derive_tx_hash`] follows
 //! the same pattern as `adamant-account::derive_address`
-//! (whitepaper section 4.2) and `adamant-state::derive_object_id`
-//! (whitepaper section 5.1.1) with a different domain tag
+//! (whitepaper §4.2) and `adamant-state::derive_object_id`
+//! (whitepaper §5.1.1) with a different domain tag
 //! ([`adamant_crypto::domain::TX_HASH`]) and a different input
 //! shape ([`TxBody`]).
 

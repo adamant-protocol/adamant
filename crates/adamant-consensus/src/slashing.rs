@@ -41,6 +41,7 @@
 //! - [`SlashingError`] — typed evidence-rejection paths.
 
 use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 
 use crate::active_set::ActiveSet;
 use crate::epoch::EpochNumber;
@@ -198,8 +199,16 @@ pub enum SlashingEvidence {
         /// The ciphertext identity the share was submitted
         /// for.
         identity: Vec<u8>,
-        /// The share's bytes (48-byte compressed G₁).
-        share_bytes: Vec<u8>,
+        /// The share's bytes — fixed-size 48-byte compressed
+        /// G₁ point per §3.4.3. Tightened from `Vec<u8>` to
+        /// `[u8; 48]` at the pre-Phase-10 audit closure: the
+        /// share width is consensus-pinned to 48 bytes, and a
+        /// `Vec<u8>` wire encoding admits malformed lengths
+        /// that are caught only downstream. The fixed-size
+        /// shape rejects wrong-length evidence at BCS-decode
+        /// time.
+        #[serde(with = "BigArray")]
+        share_bytes: [u8; 48],
         /// The 1-indexed validator share number.
         share_index: u32,
     },
@@ -320,6 +329,22 @@ pub enum SlashingError {
         /// The slot id in the evidence.
         slot_id: SlotId,
     },
+
+    /// The evidence supplier claimed a `last_participation_epoch`
+    /// value strictly earlier than what the active-set's on-chain
+    /// record shows. Either the supplier is operating against a
+    /// stale snapshot or submitting forged evidence; in either
+    /// case, the consensus-layer ground truth (the active-set's
+    /// `last_participation_epoch`) is authoritative and the
+    /// evidence is rejected. This prevents a misbehaving evidence
+    /// submitter from causing a false-positive slashing against a
+    /// validator who recently participated.
+    LivenessEvidenceStale {
+        /// The value the evidence supplied.
+        evidence_value: EpochNumber,
+        /// The active-set's authoritative on-chain value.
+        on_chain_value: EpochNumber,
+    },
 }
 
 impl core::fmt::Display for SlashingError {
@@ -354,6 +379,13 @@ impl core::fmt::Display for SlashingError {
             Self::LivenessSlotMismatch { slot_id } => write!(
                 f,
                 "liveness slot {slot_id:?} not in active set or validator mismatch"
+            ),
+            Self::LivenessEvidenceStale {
+                evidence_value,
+                on_chain_value,
+            } => write!(
+                f,
+                "liveness evidence is stale: evidence claimed last_participation={evidence_value:?} but chain shows {on_chain_value:?}"
             ),
         }
     }
@@ -464,13 +496,21 @@ pub fn verify_liveness_failure_evidence(
         .find(|s| s.id == slot_id && s.validator_id == validator_id)
         .ok_or(SlashingError::LivenessSlotMismatch { slot_id })?;
     // The active-set's recorded last_participation_epoch is
-    // the consensus-layer ground truth. The evidence may
-    // supply a stale value; we use the active-set's value to
-    // determine whether the threshold is met.
+    // the consensus-layer ground truth.
     let on_chain_last = slot.last_participation_epoch;
-    // We also accept the evidence-supplied value if it's the
-    // same; for a meaningful diagnostic we compare both.
-    let _ = last_participation_epoch;
+    // Alignment check: the evidence supplier must claim a
+    // last-participation value consistent with the chain
+    // state. If the evidence claims an earlier (more stale)
+    // value than the chain shows, the supplier is misrepresenting
+    // — either submitting forged evidence or operating against
+    // a stale snapshot. Either way, reject so the consensus-
+    // layer ground truth is the only basis for slashing.
+    if last_participation_epoch < on_chain_last {
+        return Err(SlashingError::LivenessEvidenceStale {
+            evidence_value: last_participation_epoch,
+            on_chain_value: on_chain_last,
+        });
+    }
     if !slot.is_liveness_failed(current_epoch) {
         return Err(SlashingError::LivenessThresholdNotMet {
             last_participation: on_chain_last,
@@ -710,7 +750,7 @@ mod tests {
         let e = SlashingEvidence::IncorrectThresholdDecryption {
             validator_id: validator_id(1),
             identity: vec![1, 2, 3],
-            share_bytes: vec![0u8; 48],
+            share_bytes: [0u8; 48],
             share_index: 7,
         };
         assert_eq!(e.offence(), SlashOffence::IncorrectThresholdDecryption);
